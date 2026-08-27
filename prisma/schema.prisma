@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EmailProviderName {
+  gmail
+  microsoft
+}
+
+enum ScanStatus {
+  pending
+  running
+  completed
+  failed
+  cancelled
+}
+
+enum CleanupJobStatus {
+  pending
+  running
+  completed
+  failed
+  cancelled
+  partial
+}
+
+enum EntitlementPlan {
+  free_scan
+  full_inbox_reset
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  emailHash           String?              @unique
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  providerConnections ProviderConnection[]
+  scans               Scan[]
+  purchases           Purchase[]
+}
+
+model ProviderConnection {
+  id                    String            @id @default(cuid())
+  userId                String
+  provider              EmailProviderName
+  mailboxExternalIdHash String?
+  encryptedAccountEmail  String?
+  encryptedAccessToken  String?
+  encryptedRefreshToken String?
+  tokenExpiresAt        DateTime?
+  scope                 String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  disconnectedAt        DateTime?
+  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scans                 Scan[]
+
+  @@index([userId, provider])
+}
+
+model Scan {
+  id                   String              @id @default(cuid())
+  userId               String
+  providerConnectionId String
+  provider             EmailProviderName
+  status               ScanStatus          @default(pending)
+  failureCode          String?
+  failureMessage       String?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerConnection   ProviderConnection  @relation(fields: [providerConnectionId], references: [id], onDelete: Cascade)
+  cleanupJobs          CleanupJob[]
+
+  @@index([userId, status])
+}
+
+model CleanupJob {
+  id             String           @id @default(cuid())
+  scanId         String
+  status         CleanupJobStatus @default(pending)
+  failureCode    String?
+  failureMessage String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  startedAt      DateTime?
+  completedAt    DateTime?
+  scan           Scan             @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId, status])
+}
+
+model Purchase {
+  id              String          @id @default(cuid())
+  userId          String
+  provider        EmailProviderName?
+  plan            EntitlementPlan
+  stripeReference String?         @unique
+  amountCents     Int
+  currency        String          @default("usd")
+  createdAt       DateTime        @default(now())
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

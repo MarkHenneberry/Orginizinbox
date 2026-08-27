@@ -1,0 +1,57 @@
+
+> organizinbox@0.1.0 dev
+> next dev -p 3000
+
+▲ Next.js 16.3.2 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.2.53:3000
+- Environments: .env.local, .env
+✓ Ready in 405ms
+✓ Running next.config.ts took 29ms
+Creating turbopack project { dir: 'C:\\dev\\Organizinbox', testMode: true }
+
+ GET / 200 in 511ms (next.js: 161ms, application-code: 351ms)
+ GET / 200 in 180ms (next.js: 4ms, application-code: 176ms)
+ GET /app/cleanup 307 in 171ms (next.js: 63ms, application-code: 109ms)
+ GET / 200 in 190ms (next.js: 5ms, application-code: 185ms)
+ GET /app/cleanup 307 in 458ms (next.js: 9ms, application-code: 449ms)
+ GET /app 200 in 270ms (next.js: 25ms, application-code: 245ms)
+ GET /icon?83f69febfae8a5c5 200 in 210ms (next.js: 56ms, application-code: 154ms)
+ GET / 200 in 186ms (next.js: 9ms, application-code: 177ms)
+ GET /app/cleanup 307 in 50ms (next.js: 8ms, application-code: 42ms)
+ GET / 200 in 1254ms (next.js: 30ms, application-code: 1224ms)
+ GET /app/scan 200 in 451ms (next.js: 190ms, application-code: 261ms)
+ POST /api/app/gmail-scan/start 200 in 964ms (next.js: 495ms, application-code: 469ms)
+ GET /api/app/gmail-scan/status 200 in 231ms (next.js: 192ms, application-code: 39ms)
+ GET /api/app/gmail-scan/status 200 in 13ms (next.js: 5ms, application-code: 8ms)
+ GET /api/app/gmail-scan/status 200 in 10ms (next.js: 3ms, application-code: 7ms)
+ GET /api/app/gmail-scan/status 200 in 14ms (next.js: 8ms, application-code: 5ms)
+ GET /api/app/gmail-scan/status 200 in 7ms (next.js: 2ms, application-code: 5ms)
+ GET /api/app/gmail-scan/status 200 in 29ms (next.js: 12ms, application-code: 17ms)
+ GET /api/app/gmail-scan/status 200 in 14ms (next.js: 7ms, application-code: 8ms)
+ GET /api/app/gmail-scan/status 200 in 22ms (next.js: 2ms, application-code: 19ms)
+ GET /api/app/gmail-scan/status 200 in 17ms (next.js: 11ms, application-code: 6ms)
+ GET /api/app/gmail-scan/status 200 in 13ms (next.js: 5ms, application-code: 8ms)
+ GET /app/report 200 in 245ms (next.js: 192ms, application-code: 53ms)
+ GET /app/cleanup 200 in 54ms (next.js: 9ms, application-code: 45ms)
+ POST /api/dev/gmail-cleanup/resolve 200 in 3.4s (next.js: 250ms, application-code: 3.1s)
+ POST /api/dev/gmail-cleanup/resolve 200 in 3.2s (next.js: 5ms, application-code: 3.2s)
+ GET /app/cleanup 200 in 382ms (next.js: 27ms, application-code: 355ms)
+ GET /app/cleanup 200 in 123ms (next.js: 10ms, application-code: 112ms)
+✓ Compiled in 102ms
+ GET /app/cleanup 200 in 152ms (next.js: 8ms, application-code: 144ms)
+✓ Compiled in 104ms
+ GET /app/cleanup 200 in 113ms (next.js: 10ms, application-code: 104ms)
+ GET /app/cleanup 200 in 144ms (next.js: 11ms, application-code: 133ms)
+ GET /app/cleanup 200 in 143ms (next.js: 10ms, application-code: 133ms)
+ GET /app/cleanup 200 in 147ms (next.js: 9ms, application-code: 138ms)
+ GET /app/cleanup 200 in 149ms (next.js: 10ms, application-code: 139ms)
+ GET /app/cleanup 200 in 124ms (next.js: 8ms, application-code: 116ms)
+✓ Compiled in 72ms
+ GET /app/cleanup 200 in 263ms (next.js: 7ms, application-code: 256ms)
+ GET /app/cleanup 200 in 357ms (next.js: 7ms, application-code: 350ms)
+ GET /app/cleanup 307 in 87ms (next.js: 4ms, application-code: 83ms)
+ GET /app 200 in 63ms (next.js: 6ms, application-code: 56ms)
+ GET /app/cleanup 200 in 554ms (next.js: 5ms, application-code: 549ms)
+ GET /icon?83f69febfae8a5c5 200 in 42ms (next.js: 5ms, application-code: 37ms)
+[?25h
