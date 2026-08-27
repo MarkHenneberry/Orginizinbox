@@ -61,7 +61,7 @@ describe("complete sender collection", () => {
     expect(html).toContain("157 of 157 sender groups");
     expect(html).toContain("Sender 156");
     expect(html).toContain("Search senders");
-    expect(html).toContain("Most ready");
+    expect(html).toContain("Most suggested");
     expect(html).toContain("Recommendation");
   });
 

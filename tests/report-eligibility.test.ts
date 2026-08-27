@@ -67,7 +67,7 @@ describe("final report eligibility buckets", () => {
 
   it("shows all three states for a mixed sender", () => {
     const html = renderSenders(buildReport(mixedSenderMessages()));
-    expect(html).toContain("Ready");
+    expect(html).toContain("Suggested");
     expect(html).toContain("Review");
     expect(html).toContain("Protected");
     expect(html).toContain("Review 5 emails");

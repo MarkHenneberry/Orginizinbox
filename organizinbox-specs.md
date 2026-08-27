@@ -333,24 +333,31 @@ Version 1 does NOT need:
 
 ## Never permanently delete email in MVP.
 
-For Gmail, scanning uses Gmail IMAP/XOAUTH2 because it is the preferred large-mailbox scan transport. Final cleanup candidate resolution uses the Gmail REST API so the cleanup engine receives native Gmail API message IDs directly before mutation. Approved Gmail cleanup mutation uses the Gmail REST API because Trash movement is explicit and auditable.
+For Gmail, scanning uses Gmail IMAP/XOAUTH2 because it is the preferred large-mailbox scan transport. The scalable path derives native Gmail API IDs from explicitly proven `X-GM-MSGID` values and performs an exact IMAP mutable-state recheck plus REST-only Personal/category protection immediately before mutation. Approved Gmail cleanup mutation uses the Gmail REST API because Trash movement is explicit and auditable. The controlled 100-message path retains its existing Gmail REST resolution and safety implementation until the scalable path is separately mutation-validated.
 
 Gmail cleanup flow:
 
-- scan mailbox metadata using IMAP/XOAUTH2
-- build the transient Inbox Report from IMAP metadata without persisting message-level data
-- when the user approves a sender cleanup group, resolve the exact final candidate set with Gmail REST `users.messages.list` using conservative query criteria based on the normalized sender address from the active report
-- inspect only minimal Gmail REST metadata for resolved candidates, including the allowlisted protection headers needed for the final safety recheck
-- use native Gmail API message IDs returned by Gmail REST directly for mutation
+- scan mailbox metadata using IMAP/XOAUTH2, explicitly retrieving Gmail `X-GM-MSGID` when the authenticated server advertises `X-GM-EXT-1`
+- build the transient Inbox Report and exact individually Suggested subset without persisting message-level data
+- convert the unsigned 64-bit decimal `X-GM-MSGID` to Gmail's hexadecimal API message ID with string/`BigInt`-safe code; never use JavaScript `Number`
+- retain those IDs only in short-lived server-side report/cleanup state and never serialize them to the browser, logs, analytics, URLs or Prisma
+- retain each Suggested message's All Mail UID and UIDVALIDITY with its native Gmail ID only in short-lived server-side state
+- immediately before each mutation chunk, reopen Gmail All Mail read-only, require unchanged UIDVALIDITY, fetch only the exact target UIDs and confirm each returned `X-GM-MSGID` still maps to its expected Gmail API ID
+- exclude missing or identity-mismatched messages and recheck Starred, Important, Trash/disappearance, Sent and Draft from exact IMAP flags/labels; never substitute another message
+- preserve Personal/category protection through a complete paginated REST `users.messages.list` using `labelIds=CATEGORY_PERSONAL`, intersected with the exact chunk IDs after the IMAP recheck
+- move only the exact IDs that survive the final safety recheck to Trash using Gmail REST `users.messages.batchModify` in logical chunks
+- capture a fresh mailbox history point before each mutation chunk, verify exact target-ID plus `TRASH` label additions through `users.history.list`, and reconcile only unresolved exceptions through `messages.list` and then bounded `messages.get`
 - move only approved messages to Trash using the Gmail API
 - prior tiny development validation may use Gmail `users.messages.trash` for explicit per-message Trash semantics
-- the controlled 100-message development validation uses exactly one Gmail `users.messages.batchModify` request with `addLabelIds: ["TRASH"]` and `removeLabelIds: []`, followed by separate per-message verification
+- the controlled 100-message development validation remains unchanged: it uses exactly one Gmail `users.messages.batchModify` request with `addLabelIds: ["TRASH"]` and `removeLabelIds: []`, followed by separate per-message verification
 - never implement `users.messages.delete`
 - never implement `users.messages.batchDelete`
 - never implement IMAP `EXPUNGE` as an Organizinbox cleanup action
 - never permanently delete mail
 
-Do not rely on converting ImapFlow `message.emailId`, Gmail `X-GM-MSGID`, or any IMAP object identifier into Gmail API message IDs for production cleanup. IMAP identifiers may be used transiently for scan internals where appropriate, but final cleanup mutation must operate on native Gmail API IDs resolved through Gmail REST.
+The scalable path may use ImapFlow's `message.emailId` only after runtime provenance is explicit: the session must advertise `X-GM-EXT-1`, must not select the RFC `OBJECTID` branch, and the installed ImapFlow implementation must be pinned/audited to issue `FETCH X-GM-MSGID` and map that exact response to `emailId`. If those conditions are absent, the bridge is unavailable and large cleanup must remain disabled. The development live proof checked 10 mailbox messages and produced 10 explicit values, 10 exact Gmail API ID matches, zero mismatches and zero unavailable values, with matching canonical sender and shared system-label evidence. The proof fetched no bodies, snippets or attachments and performed no Gmail mutation.
+
+The proven bridge replaces the previous scalable-cleanup rule that required Gmail REST to rediscover every candidate and issue `messages.get` for every message. It does not alter the current controlled 100-message implementation until the scalable worker path is separately enabled and validated.
 
 Google's current API documentation explicitly recommends `messages.trash` instead of permanent deletion, and Gmail label modification supports moving messages to Trash by adding the `TRASH` label.
 
@@ -619,7 +626,13 @@ Gmail IMAP label retrieval uses `X-GM-LABELS`, exposed by ImapFlow as the messag
 
 Do not request message bodies, HTML bodies, plain-text bodies, snippets, attachment bodies, full MIME payloads, or arbitrary headers not justified by classification and protection needs.
 
-For the current controlled Gmail cleanup limit, the full Gmail REST preview safety check must fetch Subject alongside the existing minimal metadata and reapply the same Subject protection rules. It must use `format=metadata`, request only the allowlisted headers, and never request snippet, body, or attachment data. Gmail REST message metadata also supplies `labelIds`, including category IDs where Gmail assigned them. The full preview may use those current REST label IDs as an additional safety gate, including Personal protection and Promotions evidence, even though the scan-time IMAP report has no category input. This provider-stage difference must remain explicit; REST-only category data must not be retroactively represented as scan-time classifier evidence. One REST metadata request per candidate is acceptable only for the current 100-message controlled limit. A very short-lived transient confirmation snapshot may then avoid downloading stable Subject and structural headers again, provided confirmation immediately rechecks every candidate against current mutable Gmail label protections as specified in the cleanup architecture. Before unrestricted or 1,000+ cleanup, design and validate a quota-efficient, deliberately paced strategy; do not assume the current per-candidate preview and post-mutation verification paths scale to large cleanup sets.
+For the current controlled Gmail cleanup limit, the full Gmail REST preview safety check must fetch Subject alongside the existing minimal metadata and reapply the same Subject protection rules. It must use `format=metadata`, request only the allowlisted headers, and never request snippet, body, or attachment data. Gmail REST message metadata also supplies `labelIds`, including category IDs where Gmail assigned them. The full preview may use those current REST label IDs as an additional safety gate, including Personal protection and Promotions evidence, even though the scan-time IMAP report has no category input. This provider-stage difference must remain explicit; REST-only category data must not be retroactively represented as scan-time classifier evidence. One REST metadata request per candidate is acceptable only for the unchanged controlled 100-message path.
+
+For the scalable path, stable message-level safety evidence comes from the same fresh IMAP scan that produced the individually Suggested message, its All Mail UID/UIDVALIDITY context and its proven native Gmail ID. Sender, age/internal date, Subject protection, list/automation headers and participation membership are not downloaded again. Immediately before each mutation chunk, mutable application state is revalidated locally and the exact target UIDs are fetched from read-only All Mail after UIDVALIDITY equality is confirmed. Every returned `X-GM-MSGID` must map to the expected API ID. Missing or mismatched messages are excluded. Current Starred, Important, Sent and Draft state is derived only from the exact returned flags and `X-GM-LABELS`; disappearance from All Mail is also an exclusion and covers messages that can no longer be safely addressed there, including Trash movement. Personal/category remains REST-only: fully paginate `messages.list` with `labelIds=CATEGORY_PERSONAL` and `includeSpamTrash=true`, then exclude exact target-ID intersections. If either exact IMAP or complete Personal reconciliation is unavailable, leave the affected chunk alone.
+
+The live non-mutating safety proof used a fresh 3,479-message scan with 2,761 Suggested IDs. Across 1,000 targets, an exact reconnect/recheck returned all 1,000 UIDs in 653 ms with unchanged UIDVALIDITY, zero missing messages and zero identity mismatches. A 20-message REST label comparison produced 20 shared-state matches, zero mismatches and zero unavailable. Sender-bounded REST safety required 7 pages/35 units for 100 targets and 8 pages/40 units for both 500 and 1,000 targets, disproving the earlier target-count page assumption. Complete mailbox protection searches required five pages/25 units on this mailbox; the required Personal/category subset was one page/5 units. These mailbox-specific measurements are evidence, not universal page guarantees.
+
+An entire sender cohort may use this fast path only when every included message was individually Suggested from strong stable evidence and the group has no Review or Protected transfer of evidence. Mixed groups are supported by retaining only their exact individually Suggested IDs. Group recommendation never makes all messages from that sender eligible.
 
 ---
 
@@ -694,17 +707,19 @@ Example:
 
 Only show storage figures when provider data makes them defensible.
 
-Report counts must expose three mutually exclusive final message states:
+Report counts must expose three mutually exclusive final message states. The internal domain/state name `Ready` remains stable, but every user-facing surface must label that bucket **Suggested** or **Suggested for cleanup**:
 
-- **Ready**: individually eligible for cleanup after the sender/group recommendation gate
+- **Suggested** (internal `Ready`): individually eligible for cleanup after the sender/group recommendation gate
 - **Review**: not hard-protected, but not recommended for cleanup
 - **Protected**: at least one hard protection reason applies
 
 The required invariant at report, category and sender/group level is:
 
 ```text
-Total = Ready + Review + Protected
+Total = Ready + Review + Protected // internal invariant
 ```
+
+User-facing summaries express the same invariant as `Total = Suggested + Review + Protected`. `Suggested` means Organizinbox recommends moving those messages to Trash; Protected and Review messages are left alone. Never describe Suggested messages as guaranteed safe to delete or safe to clean. Sender-level `Recommendation` remains a separate term and must not be renamed.
 
 `Review` is a count bucket as well as a recommendation label. Review-count messages are never cleanup candidates. Do not call them uncertain candidates.
 
@@ -718,7 +733,7 @@ This should be one of the primary views.
 
 Example:
 
-| Sender | Emails | Ready | Review | Protected | Oldest | Ready storage | Recommendation |
+| Sender | Emails | Suggested | Review | Protected | Oldest | Suggested storage | Recommendation |
 |---|---:|---:|---:|---:|---|---:|---|
 | LinkedIn | 2,481 | 2,103 | 260 | 118 | 2017 | 1.2 GB | Very High |
 | Amazon | 1,481 | 812 | 428 | 241 | 2015 | 460 MB | High |
@@ -751,7 +766,7 @@ Do not use browser-fixed positioning for sender detail and do not introduce comp
 
 On phone widths, the Senders view becomes a normal stacked experience: controls and the complete sender list remain in document flow, selecting a sender reveals or updates detail below, and the interface must not force a cramped two-column layout or a small nested scrolling box. Search, sort, sender rows and selected state remain keyboard accessible with visible focus styles at every breakpoint.
 
-Sender detail must show Total, Ready, Review and Protected counts that reconcile exactly. Show a cleanup CTA only when the sender/group recommendation is High or Very High and Ready is greater than zero. For Review, Keep or Ready zero, show a passive `Nothing recommended for cleanup` state. A qualifying mixed sender CTA must make clear that only the Ready subset enters cleanup review. Server-side cleanup eligibility remains authoritative.
+Sender detail must show Total, Suggested, Review and Protected counts that reconcile exactly. Show a cleanup CTA only when the sender/group recommendation is High or Very High and the internal Ready count is greater than zero. For Review, Keep or zero Suggested, show a passive `Nothing recommended for cleanup` state. A qualifying mixed sender CTA must make clear that only the Suggested subset enters cleanup review. Server-side cleanup eligibility remains authoritative.
 
 ---
 
@@ -977,9 +992,9 @@ Protected senders should never be selected by future cleanup recommendations.
 
 Review Cleanup follows one explicit staged flow: `SELECT -> REVIEW -> MUTATING / VERIFYING -> COMPLETE`. Only one stage is rendered at a time on desktop and mobile.
 
-`SELECT` is the initial editable sender-selection workspace derived from the active report. It contains the complete sender list, Search, Sort, selection controls, selected sender and Ready counts, the message-count selector, `Check N messages`, and the development-only safety benchmark. Every sender group remains discoverable regardless of sort. High and Very High groups with Ready messages are selectable; Review groups, Keep groups and groups with Ready zero remain visible but disabled with their non-eligible state explained in text. Search spans display name, visible sender identity and domain. Search and sort change only the visible order and never clear existing selection. Clicking `Check N messages` enters an immediate working state that disables controls and explains that the messages are being rechecked against Gmail before anything is moved.
+`SELECT` is the initial editable sender-selection workspace derived from the active report. It contains the complete sender list, Search, Sort, selection controls, selected sender and Suggested counts, the message-count selector, `Check N messages`, and the development-only safety benchmark. Every sender group remains discoverable regardless of sort. High and Very High groups with Suggested messages are selectable; Review groups, Keep groups and groups with zero Suggested remain visible but disabled with their non-eligible state explained in text. Search spans display name, visible sender identity and domain. Search and sort change only the visible order and never clear existing selection. Clicking `Check N messages` enters an immediate working state that disables controls and explains that the messages are being rechecked against Gmail before anything is moved.
 
-A successful check transitions to `REVIEW`; it removes the interactive selection workspace but retains the checked sender selection as frozen context. `REVIEW` is a read-only view of one exact transient candidate snapshot. Do not render Search, Sort, sender checkboxes, selection-changing actions, the message-count selector, `Check messages`, or `Run safety benchmark` in this stage. On desktop, preserve the established two-column layout: the left panel shows the checked sender groups as semantic read-only rows in the independently scrolling, viewport-bounded sender region, while the sticky right panel shows the cleanup summary and confirmation actions. The frozen panel summarizes selected sender groups, Ready capacity at check time and contributing groups without implying that every selected group contributed. Reuse the existing sender-row visual language and useful Sender, Recommendation, Ready, Review and Protected fields, but do not use disabled checkboxes as decoration or otherwise make the rows appear interactive.
+A successful check transitions to `REVIEW`; it removes the interactive selection workspace but retains the checked sender selection as frozen context. `REVIEW` is a read-only view of one exact transient candidate snapshot. Do not render Search, Sort, sender checkboxes, selection-changing actions, the message-count selector, `Check messages`, or `Run safety benchmark` in this stage. On desktop, preserve the established two-column layout: the left panel shows the checked sender groups as semantic read-only rows in the independently scrolling, viewport-bounded sender region, while the sticky right panel shows the cleanup summary and confirmation actions. The frozen panel summarizes selected sender groups, Suggested capacity at check time and contributing groups without implying that every selected group contributed. Reuse the existing sender-row visual language and useful Sender, Recommendation, Suggested, Review and Protected fields, but do not use disabled checkboxes as decoration or otherwise make the rows appear interactive.
 
 The `REVIEW` summary shows the requested and resolved messages, contributing sender groups, final safety exclusions or safely skipped groups where useful, and that Protected and Review messages were left alone. Development diagnostics may remain visible but read-only. The primary action is `Move N to Trash`; the only selection-related secondary action is `Start over`. On mobile, render the cleanup summary and actions before sender context. Put the frozen rows in a collapsed read-only `Checked sender groups` disclosure so users do not have to pass the full sender list before reaching the primary action. Do not force the desktop columns or bounded nested scrolling onto mobile.
 
@@ -991,15 +1006,15 @@ The final Trash confirmation belongs to `REVIEW`. Cancel returns to the same fro
 
 Transitions into `REVIEW` must be announced with `aria-live`. The Review heading may receive logical focus without trapping focus or causing an unexpected jump. `Start over`, Trash confirmation and all other actions remain keyboard accessible.
 
-When Review Cleanup opens without explicit selection state, select every eligible sender group in the complete report by default. Eligible means High or Very High with Ready greater than zero. Never auto-select Review, Keep, protected-sender or Ready-zero groups. Make the default scope prominent with selected eligible-sender and Ready totals plus an obvious `Clear selection` action. After clearing, offer `Select all eligible` for the complete eligible collection.
+When Review Cleanup opens without explicit selection state, select every eligible sender group in the complete report by default. Eligible means High or Very High with internal Ready greater than zero. Never auto-select Review, Keep, protected-sender or zero-Suggested groups. Make the default scope prominent with selected eligible-sender and Suggested totals plus an obvious `Clear selection` action. After clearing, offer `Select all eligible` for the complete eligible collection.
 
-Users may select one or multiple eligible sender groups. With an active search, `Select all eligible results` changes only eligible groups in the current filtered result and does not clear eligible selections hidden by the filter. Without a search, `Select all eligible` restores the complete eligible selection. Never label either action as selecting all senders. Search and sort never change selection on their own. The selection summary must separately show selected sender groups, selected Ready messages, Review messages left alone and Protected messages left alone.
+Users may select one or multiple eligible sender groups. With an active search, `Select all eligible results` changes only eligible groups in the current filtered result and does not clear eligible selections hidden by the filter. Without a search, `Select all eligible` restores the complete eligible selection. Never label either action as selecting all senders. Search and sort never change selection on their own. The selection summary must separately show selected sender groups, selected Suggested messages, Review messages left alone and Protected messages left alone.
 
-Review, Keep and Ready-zero rows remain fully discoverable but intentionally non-selectable. Use disabled checkbox semantics, muted but readable styling, an explicit state badge and concise reason text without classifier internals. Review explains that evidence is insufficient for automatic cleanup. Keep explains that no messages are currently Ready or that current messages appear protected when that distinction is accurately available. Ready-zero rows explicitly show `0 Ready` and `Nothing available to clean automatically.` Do not rely on opacity or color alone.
+Review, Keep and zero-Suggested rows remain fully discoverable but intentionally non-selectable. Use disabled checkbox semantics, muted but readable styling, an explicit state badge and concise reason text without classifier internals. Review explains that evidence is insufficient for automatic cleanup. Keep explains that no messages are currently Suggested or that current messages appear protected when that distinction is accurately available. Zero-Suggested rows explicitly show `0 suggested` and `Nothing available to clean automatically.` Do not rely on opacity or color alone.
 
 On desktop, sender rows use one viewport-bounded independently scrollable region with search, sort and selection counts outside that scroll region in `SELECT`, and with the frozen checked-selection summary outside that scroll region in `REVIEW`. The cleanup action remains in the sticky right panel. On mobile, use normal document scrolling rather than a nested small scroll box. Interactive SELECT checkbox semantics and visible labels must communicate selectable and disabled states without relying on color; REVIEW rows are plain semantic content with no checkbox controls.
 
-A requested cleanup count applies across the union of individually Ready messages from all selected eligible groups. The server revalidates every selected group against the current report and never accepts client-provided eligibility or counts. A cleanup batch may therefore contain Ready messages from multiple sender groups, but Review messages, Protected messages, Review groups and Keep groups never enter candidate resolution or mutation.
+A requested cleanup count applies across the union of individually Suggested messages from all selected eligible groups. The server revalidates every selected group against the current report and never accepts client-provided eligibility or counts. A cleanup batch may therefore contain Suggested messages from multiple sender groups, but Review messages, Protected messages, Review groups and Keep groups never enter candidate resolution or mutation.
 
 Cross-sender resolution is deterministic. Order selected groups by recommendation (`Very High` before `High`), then Ready volume descending, then original report index as a stable tie-break. Allocate the requested count in a capacity-aware round-robin across that order so one large sender does not accidentally monopolize a multi-sender request. Resolve each allocation using that sender's independently authoritative message-level evidence.
 
@@ -1013,7 +1028,7 @@ Development cleanup diagnostics must distinguish selected, attempted, successful
 
 Before executing:
 
-> ### Ready to clean 12,481 emails
+> ### Suggested cleanup: 12,481 emails
 >
 > 7,421 promotions  
 > 2,801 social notifications  
@@ -1096,6 +1111,36 @@ Offer Undo only when every attempted message was verified in Trash and the one-s
 Development-only cleanup diagnostics may show eligible groups available, selected and contributing sender-group counts, combined selected Ready capacity, safe aggregate distribution ranges, requested and resolved counts, aggregate exclusion reasons, mutation/verification/Undo accounting, safe enum operation states, duplicate-submission counts, stage timings, request counts, retry and concurrency measures, p50/p95 request durations, estimated Gmail quota units, report staleness, Undo availability/expiry and static safety-audit statements. Sender-group outcomes must separate successfully resolved groups with candidates, successfully resolved groups with zero safe candidates and failed groups. Zero-safe groups are not failure reasons. Undo diagnostics separately report untrash requests, exceptional fallback verification reads, retries, observed and expected Undo units, cleanup units and full observed lifecycle units. Show `6,000 units/user/minute` only as a reference budget; do not claim knowledge of Google's current quota-window state. Diagnostics must not render in production and must never include Gmail IDs, conversation identifiers, cleanup job IDs, raw Subjects or headers, credentials or authorization codes, Gmail search queries or provider response bodies.
 
 The optimized non-mutating 100-message safety path is validated for one and multiple contributing senders. Keep the hard maximum at 100. Even with response-based Undo verification, immediate repeated 100-message cleanup operations can exceed the per-user minute budget. Before repeated, 1,000-message or unrestricted cleanup, implement and validate deliberate quota-aware pacing. Do not remove the proven per-message post-batch Trash verification in the controlled 100-message path.
+
+### Scalable Gmail cleanup architecture
+
+The scalable path is designed but not yet mutation-validated or enabled. Its production gate requires the proven `X-GM-MSGID` bridge, exact transient Suggested subsets, final mutable-state rechecks, history verification with bounded fallback, quota pacing, defined interruption semantics and a separately understood Undo path. Do not raise the current 100-message maximum merely because these components exist.
+
+Use logical chunks of 250 exact message IDs. Gmail permits up to 1,000 IDs in one `batchModify`, but 250 gives useful progress, bounded history/retry scope and recovery boundaries without making mutation request count the bottleneck. Deduplicate before chunking and reject ambiguous/duplicate input. For each chunk:
+
+1. revalidate active report/session, protected-sender policy and participation-state availability
+2. run the exact All Mail UID/UIDVALIDITY/X-GM-MSGID mutable-state recheck and exclude missing, mismatched, Starred, Important, Trash/disappeared, Sent or Draft targets
+3. completely paginate the REST Personal/category label set and exclude exact target-ID intersections
+4. call `users.getProfile` and keep its starting `historyId` transiently
+5. call one `users.messages.batchModify` with `addLabelIds: ["TRASH"]`
+6. page `users.history.list` from that starting point with `historyTypes=labelAdded`; count only exact target-ID records whose `labelsAdded.labelIds` contains `TRASH`
+7. ignore unrelated mailbox history and duplicate records
+8. if exact targets remain unresolved after bounded visibility retries, reconcile those IDs through paginated `messages.list` with `labelIds=TRASH` and `includeSpamTrash=true`
+9. use minimal `messages.get` label reads only for a configured, bounded unresolved exception set; larger unresolved sets remain Uncertain and pause the job
+
+History 404, missing records, exhausted pagination, delayed visibility and transient failures never imply success. Maintain `Attempted = Verified + Failed + Uncertain` per chunk and job. Announce progress only from actual verified accounting. A failed or uncertain chunk stops later mutation until recovery policy resolves it; previously verified chunks remain represented honestly and must not be repeated blindly.
+
+The history verifier is implemented only as a disabled development shadow. `GMAIL_HISTORY_SHADOW_PROOF_ENABLED` defaults to false, is rejected in production and accepts exactly 25 unique targets. When explicitly enabled for a separately approved controlled cleanup, it captures `getProfile.historyId` immediately before the existing batch mutation and runs after the current per-message verifier against the same exact target set. It completely paginates label-added history, uses bounded visibility polling, treats history 404 as unavailable, then completely paginates Trash and performs at most ten exceptional label-only `messages.get` reads. More than ten unresolved targets remain Uncertain. Its output is aggregate-only: primary verified, history verified, Trash-list verified, GET fallback required, unresolved, mismatch and request/page counts. Shadow success or failure must never change mutation status, authoritative verification accounting, Undo availability or control flow. Promotion requires a separately approved 25-message Trash-and-current-Undo test with zero mismatch; no such mutation has been run.
+
+Current official quota-cost configuration is `getProfile=1`, `history.list=2`, `messages.list=5`, `messages.get=20`, `messages.batchModify=50`, `messages.untrash=5`, with a reference per-user-per-minute project limit of 6,000 units. Keep these values in one audited configuration boundary. The previous 222-unit estimate for 1,000 is retired because it inferred REST pages from target count. With 250-message chunks, one measured Personal/category page, one profile read and one still-unproven history page per chunk, the updated representative estimates are 58 units for 100, 116 for 500, 232 for 1,000 and 1,160 for 5,000 before Undo. Run the complete Personal/category search immediately before every chunk for race protection. These remain planning estimates: larger Personal sets, history pagination/delay, retries and fallback increase cost, and history pages per chunk remain unmeasured until the controlled shadow test.
+
+Use a conservative 4,500-unit working budget per rolling-minute planning window and retain 1,500 units as safety/fallback reserve. Every attempted request and retry consumes budget before dispatch. Throttling, provider retry guidance and observed response headers may require slower pacing; never infer Google's exact rolling state. Prefer a truthful `Still cleaning safely...` state over exhausting the quota. The cleanup estimate fits one planning window even at 5,000 under the representative assumptions, but latency, retry and worker-lifetime constraints still require chunk pacing.
+
+Current proven Undo remains individual `users.messages.untrash`, paced in 250-message operational chunks and verified primarily from each response. Its baseline is 500 units for 100, 5,000 for 1,000 and 25,000 for 5,000 before retries/fallback. Under the 4,500-unit working budget this requires at least 1, 2 and 6 planning windows respectively, and cleanup must not consume Undo's planned capacity without showing that restoration may take time. Gmail documentation says `TRASH` is manually applicable and `batchModify` accepts `removeLabelIds`, but bulk removal of `TRASH` is not adopted until a separately approved tiny live mutation/verification proof succeeds. No such proof occurs in the architecture pass.
+
+A development-only bulk Undo proof route is prepared but disabled by default through `GMAIL_BULK_UNDO_PROOF_ENABLED`. It is rejected in production, requires explicit request approval and accepts only an existing completed cleanup job whose exact five attempted candidates were all authoritatively verified in Trash with zero failed or uncertain outcomes. Gmail IDs are resolved from the short-lived server job and are never accepted from the request body. The proof performs one `messages.batchModify` containing only `removeLabelIds: ["TRASH"]`, then verifies all five exact messages with minimal label reads. Any remaining `TRASH`, identity ambiguity or read failure produces Failed or Uncertain accounting and permanently blocks adoption until separately investigated. It never calls permanent-delete APIs. This route must not be invoked until a separate five-message test is explicitly approved; individual response-verified `messages.untrash` remains the product Undo.
+
+A 5,000-message job must not depend on one browser request or one Next.js process lifetime. The recommended production shape is a dedicated worker plus an encrypted short-lived job store containing the minimum transient IDs, chunk ledger, idempotency keys, history cursors and expiry. Prisma may persist only non-mailbox job shell data such as opaque job identity, aggregate status/counts and timestamps; Gmail IDs and mailbox metadata never enter Prisma. Browser navigation must not cancel accepted work, and the client polls or subscribes to aggregate verified progress. Expiry destroys transient mailbox state and requires a fresh scan rather than reconstructing IDs from long-term storage.
 
 Example:
 

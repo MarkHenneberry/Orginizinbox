@@ -74,6 +74,9 @@ export type GmailStateVerificationResult = {
   failedCount: number;
   uncertainCount: number;
   durationMs: number;
+  verifiedIds: string[];
+  failedIds: string[];
+  uncertainIds: string[];
 };
 
 export type GmailUndoVerificationResult = GmailStateVerificationResult & {
@@ -366,6 +369,9 @@ export class GmailTrashClient {
       failedCount: outcomes.filter((outcome) => outcome === "failed").length,
       uncertainCount: outcomes.filter((outcome) => outcome === "uncertain").length,
       durationMs: Math.round(performance.now() - startedAt),
+      verifiedIds: ids.filter((_, index) => outcomes[index] === "verified"),
+      failedIds: ids.filter((_, index) => outcomes[index] === "failed"),
+      uncertainIds: ids.filter((_, index) => outcomes[index] === "uncertain"),
       untrashMs,
       fallbackVerificationCount: fallbackIndices.length,
       fallbackVerificationMs
@@ -413,7 +419,10 @@ export class GmailTrashClient {
       verifiedCount: outcomes.filter((outcome) => outcome === "verified").length,
       failedCount: outcomes.filter((outcome) => outcome === "failed").length,
       uncertainCount: outcomes.filter((outcome) => outcome === "uncertain").length,
-      durationMs: Math.round(performance.now() - startedAt)
+      durationMs: Math.round(performance.now() - startedAt),
+      verifiedIds: ids.filter((_, index) => outcomes[index] === "verified"),
+      failedIds: ids.filter((_, index) => outcomes[index] === "failed"),
+      uncertainIds: ids.filter((_, index) => outcomes[index] === "uncertain")
     };
     assertTrashAccounting(result);
     return result;

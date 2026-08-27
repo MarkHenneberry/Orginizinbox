@@ -16,7 +16,7 @@ export default async function CleanupPage() {
         <p className="eyebrow">Cleanup</p>
         <h1 className="m-0 mt-2 text-4xl font-extrabold text-[var(--navy)]">Review cleanup</h1>
         <p className="muted max-w-3xl">
-          Select one or more eligible sender groups, check the combined Ready messages, and move only the email you approve to Trash.
+          Select one or more eligible sender groups, check the combined Suggested messages, and move only the email you approve to Trash.
         </p>
         <GmailCleanupClient
           cleanupEnabled={runtimeConfig.gmailCleanupEnabled}

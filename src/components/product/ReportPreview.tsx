@@ -23,7 +23,7 @@ export function ReportPreview({ report }: { report: InboxReport }) {
             <div>
               <p className="m-0 font-bold">{sender.displayName}</p>
               <p className="muted m-0 text-sm">
-                {sender.cleanupCandidateCount.toLocaleString()} ready - {sender.reviewMessages.toLocaleString()} review - {sender.protectedMessages.toLocaleString()} protected
+                {sender.cleanupCandidateCount.toLocaleString()} suggested - {sender.reviewMessages.toLocaleString()} review - {sender.protectedMessages.toLocaleString()} protected
               </p>
             </div>
             <p className="m-0 font-extrabold text-[var(--navy)]">{sender.totalMessages.toLocaleString()}</p>

@@ -202,6 +202,7 @@ export function serializeGmailCleanupJob(job: GmailCleanupJob): GmailCleanupJobV
     totalUndoMs: job.totalUndoMs,
     operationStates: { ...job.operationStates },
     duplicateSubmissionsBlocked: { ...job.duplicateSubmissionsBlocked },
+    shadowVerification: job.shadowVerification ? { ...job.shadowVerification } : undefined,
     undoAvailable,
     confirmationExpiresAt: job.confirmationExpiresAt,
     error: job.error,

@@ -317,7 +317,7 @@ describe("cleanup group eligibility", () => {
     expect(ui).toMatch(/type="checkbox"/);
     expect(ui).toMatch(/disabled=\{!group\.eligible \|\| busy\}/);
     expect(ui).toContain("eligible senders selected");
-    expect(ui).toContain("Ready emails available");
+    expect(ui).toContain("Suggested emails");
     expect(ui).toContain("Clear selection");
     expect(ui).toContain("Select all eligible");
     expect(ui).toContain("Select all eligible results");

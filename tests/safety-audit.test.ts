@@ -211,7 +211,7 @@ describe("development classifier diagnostics", () => {
       })
     );
     expect(html).toContain("Classifier inspection (development)");
-    expect(html).toContain("Ready without a strong signal");
+    expect(html).toContain("Suggested without a strong signal");
     expect(html).not.toContain("ready-1");
     expect(html).not.toContain("thread-1");
     expect(html).not.toContain("offers.example");

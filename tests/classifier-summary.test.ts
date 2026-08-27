@@ -164,11 +164,11 @@ describe("copyable classifier text", () => {
 
     expect(summary).toContain("ORGANIZINBOX DEV CLASSIFIER SUMMARY");
     expect(summary).toContain("Total: 3");
-    expect(summary).toContain("Ready: 2");
+    expect(summary).toContain("Suggested: 2");
     expect(summary).toContain("Protected: 1");
     expect(summary).toContain("Participated conversations indexed: 1");
-    expect(summary).toContain("Ready with hard protection: 0");
-    expect(summary).toContain("Ready without strong per-message bulk evidence: 0");
+    expect(summary).toContain("Suggested with hard protection: 0");
+    expect(summary).toContain("Suggested without strong per-message bulk evidence: 0");
     expect(summary).toContain("Metadata fetch: 34 ms");
     expect(summary).toContain("Transactional subject: 0");
     expect(summary).toContain("Security/account subject: 0");
@@ -185,8 +185,8 @@ describe("copyable classifier text", () => {
     expect(summary).toContain("Sender: Runway");
     expect(summary).toContain("Domain: comms.runwayml.com");
     expect(summary).toContain("Recommendation: High");
-    expect(summary).toContain("Ready-message strong evidence");
-    expect(summary).toContain("Ready without strong signal: 0");
+    expect(summary).toContain("Suggested-message strong evidence");
+    expect(summary).toContain("Suggested without strong signal: 0");
   });
 
   it("excludes message-level data, raw content, credentials, and full sender addresses", () => {

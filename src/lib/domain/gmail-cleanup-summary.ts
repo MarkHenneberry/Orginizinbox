@@ -53,6 +53,19 @@ export type GmailCleanupDuplicateSubmissionCounts = {
   scan: number;
 };
 
+export type GmailCleanupShadowVerification = {
+  status: "complete" | "unavailable";
+  primaryVerified: number;
+  historyVerified: number;
+  trashListVerified: number;
+  getFallbackRequired: number;
+  shadowUnresolved: number;
+  mismatchWithPrimary: number;
+  historyPages: number;
+  trashListPages: number;
+  getFallbackRequests: number;
+};
+
 export type GmailCleanupJobView = {
   id: string;
   status: GmailCleanupJobStatus;
@@ -134,6 +147,7 @@ export type GmailCleanupJobView = {
   totalUndoMs: number;
   operationStates: GmailCleanupOperationStates;
   duplicateSubmissionsBlocked: GmailCleanupDuplicateSubmissionCounts;
+  shadowVerification?: GmailCleanupShadowVerification;
   undoAvailable: boolean;
   confirmationExpiresAt?: number;
   error?: string;
@@ -181,7 +195,7 @@ export function formatDevelopmentCleanupSummary(job: GmailCleanupJobView, now = 
     line("Selected sender groups", job.selectedSenderGroupCount),
     line("Eligible selected sender groups", job.eligibleSelectedSenderGroupCount),
     line("Contributing sender groups", job.contributingSenderGroupCount),
-    line("Selected Ready", job.selectedReadyCount),
+    line("Selected Suggested", job.selectedReadyCount),
     line("Review excluded", job.selectedReviewExcludedCount),
     line("Protected excluded", job.selectedProtectedExcludedCount),
     line("Largest sender contribution", job.largestContribution),
@@ -230,7 +244,7 @@ export function formatDevelopmentCleanupSummary(job: GmailCleanupJobView, now = 
     "",
     "Validation",
     line("Requested", job.requestedCount),
-    line("Report Ready", job.reportReadyCount),
+    line("Report Suggested", job.reportReadyCount),
     line("Resolved now", job.resolvedCount),
     line("Excluded during safety checks", job.excludedMessageCount),
     "",
@@ -372,6 +386,24 @@ export function formatDevelopmentCleanupSummary(job: GmailCleanupJobView, now = 
       line("Undo units", job.undoRequestProfile.estimatedQuotaUnits),
       line("Total observed units", job.requestProfile.estimatedQuotaUnits),
       "Quota budget reference: 6,000 units/user/minute"
+    );
+  }
+
+  if (job.shadowVerification) {
+    const shadow = job.shadowVerification;
+    lines.push(
+      "",
+      "History shadow verification",
+      `Status: ${shadow.status}`,
+      line("Primary verified", shadow.primaryVerified),
+      line("History verified", shadow.historyVerified),
+      line("Trash-list verified", shadow.trashListVerified),
+      line("Get fallback required", shadow.getFallbackRequired),
+      line("Shadow unresolved", shadow.shadowUnresolved),
+      line("Mismatch with primary", shadow.mismatchWithPrimary),
+      line("History pages", shadow.historyPages),
+      line("Trash-list pages", shadow.trashListPages),
+      line("Get fallback requests", shadow.getFallbackRequests)
     );
   }
 

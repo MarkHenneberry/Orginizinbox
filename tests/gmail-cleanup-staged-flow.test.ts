@@ -43,7 +43,7 @@ describe("cleanup stage UI contracts", () => {
     expect(client).toMatch(/useState\(false\)[\s\S]+reviewStarted/);
     expect(client).toMatch(/!benchmarkOnly && body\.job\.status === "ready"[\s\S]+setReviewStarted\(true\)/);
     expect(client).toMatch(/!reviewStarted \? <div className="panel overflow-hidden">/);
-    expect(reviewStage).toContain("Ready to clean");
+    expect(reviewStage).toContain("Suggested cleanup");
     expect(reviewStage).toContain('aria-live="polite"');
     expect(reviewStage).toContain("reviewHeadingRef");
   });

@@ -8,6 +8,8 @@ const envSchema = z.object({
   GMAIL_CLEANUP_ENABLED: z.enum(["true", "false"]).default("false"),
   GMAIL_CLEANUP_MAX_MESSAGES: z.coerce.number().int().min(1).max(100).default(5),
   GMAIL_CLEANUP_RECHECK_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(8),
+  GMAIL_BULK_UNDO_PROOF_ENABLED: z.enum(["true", "false"]).default("false"),
+  GMAIL_HISTORY_SHADOW_PROOF_ENABLED: z.enum(["true", "false"]).default("false"),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().optional(),
@@ -51,6 +53,8 @@ export const runtimeConfig = {
   gmailCleanupEnabled: env.GMAIL_CLEANUP_ENABLED === "true",
   gmailCleanupMaxMessages: Math.min(env.GMAIL_CLEANUP_MAX_MESSAGES, 100),
   gmailCleanupRecheckConcurrency: env.GMAIL_CLEANUP_RECHECK_CONCURRENCY,
+  gmailBulkUndoProofEnabled: env.GMAIL_BULK_UNDO_PROOF_ENABLED === "true",
+  gmailHistoryShadowProofEnabled: env.GMAIL_HISTORY_SHADOW_PROOF_ENABLED === "true",
   microsoftOAuthDevEnabled: env.MICROSOFT_OAUTH_DEV_ENABLED === "true"
 };
 

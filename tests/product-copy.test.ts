@@ -59,10 +59,22 @@ describe("product copy and contextual navigation", () => {
     expect(report).toMatch(/Emails you may want to clean/);
     expect(report).toMatch(/Several independent bulk-mail signals agree/);
     expect(report).toMatch(/Recurring old mail has strong bulk-mail evidence/);
-    expect(report).toMatch(/Review only\. No messages in this group are ready to clean/);
+    expect(report).toMatch(/Review only\. No messages in this group are suggested for cleanup/);
     expect(report).toMatch(/We found signs these messages may be important/);
     expect(report).toMatch(/When we&apos;re unsure, we leave them alone/);
     expect(report).not.toMatch(/confidence percentage|cleanup candidates/i);
+  });
+
+  it("uses Suggested for the cleanup bucket while preserving internal Ready and Recommendation", () => {
+    const report = read("src/components/product/InboxReportView.tsx");
+    const cleanup = read("src/components/product/GmailCleanupClient.tsx");
+    const preview = read("src/components/product/ReportPreview.tsx");
+    const internal = read("src/lib/domain/streaming-aggregator.ts");
+
+    expect(`${report}\n${cleanup}\n${preview}`).not.toMatch(/[">]Ready(?: emails| storage| in selection|<)/);
+    expect(`${report}\n${cleanup}\n${preview}`).toMatch(/Suggested/);
+    expect(report).toMatch(/Recommendation/);
+    expect(internal).toMatch(/Ready and Protected exceed Total/);
   });
 
   it("uses Trash language for the real cleanup mutation and keeps accounting secondary", () => {

@@ -132,7 +132,7 @@ describe("development cleanup summary", () => {
     expect(output).toContain("Contributing sender groups: 3");
     expect(output).toContain("Sender-group outcomes");
     expect(output).toContain("Resolved successfully: 4");
-    expect(output).toContain("Report Ready: 184");
+    expect(output).toContain("Report Suggested: 184");
     expect(output).toContain("Resolved now: 100");
     expect(output).toContain("Protected subject: 2");
     expect(output).toContain("Method: batchModify");

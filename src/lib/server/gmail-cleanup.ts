@@ -25,6 +25,11 @@ import {
   type GmailSenderGroupResolutionResult
 } from "@/lib/providers/gmail/group-resolution";
 import { createGmailRequestCounts, estimateGmailCleanupQuota } from "@/lib/providers/gmail/quota";
+import {
+  GmailShadowVerifier,
+  assertGmailShadowProofInput,
+  type GmailShadowVerificationResult
+} from "@/lib/providers/gmail/shadow-verifier";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
 import {
   createGmailCleanupJob,
@@ -97,11 +102,11 @@ async function createGmailCleanupPreviewOperation(
   const publicGroups = buildCleanupSenderGroups(report.senders);
   const selectedGroups = groupIndices.map((index) => publicGroups[index]);
   if (selectedGroups.some((group) => !group?.eligible)) {
-    throw new GmailCleanupError("Select only Ready High or Very High groups from the active Inbox Report.", 400);
+    throw new GmailCleanupError("Select only Suggested High or Very High groups from the active Inbox Report.", 400);
   }
   const selectedReadyCount = selectedGroups.reduce((total, group) => total + group.cleanupCandidateCount, 0);
   if (selectedReadyCount < input.requestedCount) {
-    throw new GmailCleanupError("The selected senders do not have enough combined Ready messages for that count.", 400);
+    throw new GmailCleanupError("The selected senders do not have enough combined Suggested messages for that count.", 400);
   }
 
   const allocations = allocateCleanupCountAcrossGroups(selectedGroups, input.requestedCount);
@@ -378,6 +383,7 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
     attemptedCount: eligibleCandidates.length
   });
   const eligibleIds = eligibleCandidates.map((candidate) => candidate.apiMessageId);
+  const shadow = await prepareHistoryShadow(context.connection.accessToken, eligibleIds);
   const batchStartedAt = performance.now();
   let batchApiResult: "success" | "failed" = "success";
   try {
@@ -403,6 +409,7 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
     verification = await trashClient.verifyMessagesInTrash(eligibleIds);
   } catch {
     const confirmationProfile = trashClient.getRequestProfile();
+    const shadowVerification = await completeHistoryShadow(shadow, eligibleIds, new Set());
     const uncertain = updateGmailCleanupJob(running, {
       status: "partial",
       diagnosticResult: "VERIFICATION_PARTIAL",
@@ -414,6 +421,7 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
       reportMarkedStale: true,
       confirmationRequestProfile: confirmationProfile,
       requestProfile: mergeRequestProfiles(job.previewRequestProfile, confirmationProfile),
+      shadowVerification,
       operationStates: { ...running.operationStates, trashVerification: "partial" },
       completedAt: Date.now(),
       error: "Gmail Trash verification was not fully successful. Rescan before continuing."
@@ -435,6 +443,7 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
           : "VERIFICATION_PARTIAL";
   const confirmationProfile = trashClient.getRequestProfile();
   const requestProfile = mergeRequestProfiles(job.previewRequestProfile, confirmationProfile);
+  const shadowVerification = await completeHistoryShadow(shadow, eligibleIds, new Set(verification.verifiedIds));
 
   running = updateGmailCleanupJob(running, {
     status: fullyVerified ? "completed" : completelyFailed ? "failed" : "partial",
@@ -452,6 +461,7 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
       job.totalCleanupMs + recheck.finalSafetyRecheckMs + batchMutationMs + verification.durationMs,
     confirmationRequestProfile: confirmationProfile,
     requestProfile,
+    shadowVerification,
     estimatedThousandMessageSafetyMs: estimateThousandSafetyMs(
       job.previewSafetyCheckMs,
       recheck.finalSafetyRecheckMs,
@@ -465,6 +475,69 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
     error: fullyVerified ? undefined : "Gmail Trash verification was not fully successful. Rescan before continuing."
   });
   return serializeGmailCleanupJob(running);
+}
+
+type PreparedHistoryShadow = { verifier: GmailShadowVerifier; startHistoryId: string } | undefined;
+
+async function prepareHistoryShadow(accessToken: string, targetIds: readonly string[]): Promise<PreparedHistoryShadow> {
+  if (!runtimeConfig.gmailHistoryShadowProofEnabled || process.env.NODE_ENV === "production") return undefined;
+  try {
+    assertGmailShadowProofInput({
+      enabled: runtimeConfig.gmailHistoryShadowProofEnabled,
+      nodeEnv: process.env.NODE_ENV,
+      targetIds
+    });
+    const verifier = new GmailShadowVerifier(accessToken);
+    return { verifier, startHistoryId: await verifier.captureStartHistoryId() };
+  } catch {
+    return undefined;
+  }
+}
+
+async function completeHistoryShadow(
+  shadow: PreparedHistoryShadow,
+  targetIds: readonly string[],
+  primaryVerifiedIds: ReadonlySet<string>
+) {
+  if (!shadow) return undefined;
+  try {
+    return toShadowSummary(
+      primaryVerifiedIds.size,
+      await shadow.verifier.verifyTrashShadow({
+        targetIds,
+        startHistoryId: shadow.startHistoryId,
+        primaryVerifiedIds
+      })
+    );
+  } catch {
+    return {
+      status: "unavailable" as const,
+      primaryVerified: primaryVerifiedIds.size,
+      historyVerified: 0,
+      trashListVerified: 0,
+      getFallbackRequired: 0,
+      shadowUnresolved: targetIds.length,
+      mismatchWithPrimary: primaryVerifiedIds.size,
+      historyPages: 0,
+      trashListPages: 0,
+      getFallbackRequests: 0
+    };
+  }
+}
+
+function toShadowSummary(primaryVerified: number, result: GmailShadowVerificationResult) {
+  return {
+    status: "complete" as const,
+    primaryVerified,
+    historyVerified: result.verifiedByHistory,
+    trashListVerified: result.verifiedByTrashList,
+    getFallbackRequired: result.getFallbackRequired,
+    shadowUnresolved: result.unresolvedCount,
+    mismatchWithPrimary: result.mismatchWithPrimaryCount,
+    historyPages: result.metrics.historyPages,
+    trashListPages: result.metrics.trashListPages,
+    getFallbackRequests: result.metrics.getFallbackRequests
+  };
 }
 
 export async function undoGmailCleanup(input: { jobId: string }) {

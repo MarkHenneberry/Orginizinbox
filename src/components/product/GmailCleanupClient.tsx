@@ -305,7 +305,7 @@ export function GmailCleanupClient({
             <strong className="block text-lg text-[var(--navy)]">
               {selectedGroupIndices.size.toLocaleString()} eligible senders selected
             </strong>
-            <span className="muted block text-sm">{selectedReadyCount.toLocaleString()} Ready emails available</span>
+            <span className="muted block text-sm">{selectedReadyCount.toLocaleString()} Suggested emails</span>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_190px]">
             <label className="grid gap-1 text-xs font-bold text-[var(--navy)]" htmlFor="cleanup-search">Search
@@ -327,7 +327,7 @@ export function GmailCleanupClient({
                 onChange={(event) => setSortKey(event.target.value as CleanupSortKey)}
                 value={sortKey}
               >
-                <option value="ready">Most Ready</option>
+                <option value="ready">Most suggested</option>
                 <option value="emails">Most emails</option>
                 <option value="unread">Most unread</option>
                 <option value="oldest">Oldest</option>
@@ -362,7 +362,7 @@ export function GmailCleanupClient({
 
         <div aria-label="Sender groups" className="focus-ring lg:max-h-[calc(100vh-18rem)] lg:min-h-[360px] lg:overflow-y-auto" tabIndex={0}>
           <div className="hidden grid-cols-[minmax(180px,1fr)_minmax(150px,190px)_repeat(4,70px)] gap-3 border-b border-[var(--line)] bg-[var(--surface-subtle)] px-5 py-2 text-xs font-bold text-[var(--navy)] md:grid">
-            <span>Sender</span><span>Recommendation</span><span className="text-right">Total</span><span className="text-right">Ready</span><span className="text-right">Review</span><span className="text-right">Protected</span>
+            <span>Sender</span><span>Recommendation</span><span className="text-right">Total</span><span className="text-right">Suggested</span><span className="text-right">Review</span><span className="text-right">Protected</span>
           </div>
           {visibleGroups.length ? (
             visibleGroups.map((group) => (
@@ -394,7 +394,7 @@ export function GmailCleanupClient({
                   {!group.eligible ? <span className="mt-1 block text-xs">{ineligibleExplanation(group)}</span> : null}
                 </span>
                 <Metric label="Total" value={group.totalMessages} />
-                <Metric label="Ready" value={group.cleanupCandidateCount} strong={group.eligible} />
+                <Metric label="Suggested" value={group.cleanupCandidateCount} strong={group.eligible} />
                 <Metric label="Review" value={group.reviewMessages} />
                 <Metric label="Protected" value={group.protectedMessages} />
               </label>
@@ -411,7 +411,7 @@ export function GmailCleanupClient({
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Check messages</h2>
             <dl className="mt-4 grid gap-2 text-sm">
               <Row label="Selected senders" value={selectedGroupIndices.size.toLocaleString()} />
-              <Row label="Combined Ready" value={selectedReadyCount.toLocaleString()} />
+              <Row label="Suggested for cleanup" value={selectedReadyCount.toLocaleString()} />
               <Row label="Review excluded" value={selectedReviewCount.toLocaleString()} />
               <Row label="Protected excluded" value={selectedProtectedCount.toLocaleString()} />
             </dl>
@@ -430,7 +430,7 @@ export function GmailCleanupClient({
               {countOptions.map((count) => <option key={count} value={count}>{count} messages</option>)}
             </select>
 
-            {requestedCount > selectedReadyCount ? <Notice text="Select enough eligible senders to reach this Ready total." /> : null}
+            {requestedCount > selectedReadyCount ? <Notice text="Select enough eligible senders to reach this suggested total." /> : null}
             {!cleanupEnabled ? <Notice text="Cleanup is not available right now." /> : null}
             {fixtureMode ? <Notice text="Connect Gmail and run a scan before cleanup." /> : null}
             {reportStale ? <Notice text="Your inbox has changed. Rescan before cleaning more email." /> : null}
@@ -479,7 +479,7 @@ export function GmailCleanupClient({
                 ? "This cleanup check has expired."
                 : job.status === "completed" || job.status === "undone"
                   ? "Cleanup complete"
-                  : "Ready to clean"}
+                  : "Suggested cleanup"}
             </h2>
 
             {activeOperation ? (
@@ -560,7 +560,7 @@ function FrozenSenderContext({ groups, job }: { groups: CleanupSenderGroup[]; jo
         <div className="grid grid-cols-[minmax(180px,1fr)_minmax(150px,190px)_repeat(3,70px)] gap-3 border-b border-[var(--line)] bg-[var(--surface-subtle)] px-5 py-2 text-xs font-bold text-[var(--navy)]">
           <span>Sender</span>
           <span>Recommendation</span>
-          <span className="text-right">Ready</span>
+          <span className="text-right">Suggested</span>
           <span className="text-right">Review</span>
           <span className="text-right">Protected</span>
         </div>
@@ -588,7 +588,7 @@ function FrozenSenderSummary({ job, compact = false }: { job: GmailCleanupJobVie
         <strong className="block text-[var(--navy)]">
           {job.selectedSenderGroupCount.toLocaleString()} sender groups selected
         </strong>
-        <span className="muted block">{job.selectedReadyCount.toLocaleString()} Ready emails were available</span>
+        <span className="muted block">{job.selectedReadyCount.toLocaleString()} Suggested emails were available</span>
         <span className="muted block">
           {job.contributingSenderGroupCount.toLocaleString()} sender groups contributed to this {job.requestedCount.toLocaleString()}-message check
         </span>
@@ -618,7 +618,7 @@ function FrozenSenderRows({ groups, bounded = false }: { groups: CleanupSenderGr
               {recommendationLabel(group)}
             </span>
           </span>
-          <FrozenMetric label="Ready" value={group.cleanupCandidateCount} strong />
+          <FrozenMetric label="Suggested" value={group.cleanupCandidateCount} strong />
           <FrozenMetric label="Review" value={group.reviewMessages} />
           <FrozenMetric label="Protected" value={group.protectedMessages} />
         </li>
@@ -647,13 +647,13 @@ function ineligibleLabel(group: CleanupSenderGroup) {
   if (group.ineligibleReason === "REVIEW_GROUP") return "Not selectable: needs review";
   if (group.ineligibleReason === "KEEP_GROUP") return "Not selectable: Keep";
   if (group.ineligibleReason === "PROTECTED_SENDER") return "Not selectable: protected sender";
-  return "0 Ready";
+  return "0 suggested";
 }
 
 function ineligibleExplanation(group: CleanupSenderGroup) {
   if (group.ineligibleReason === "REVIEW_GROUP") return "Not enough evidence to clean automatically.";
   if (group.ineligibleReason === "PROTECTED_SENDER") return "These messages look important or protected.";
-  if (group.ineligibleReason === "KEEP_GROUP") return "No emails from this sender are currently ready to clean.";
+  if (group.ineligibleReason === "KEEP_GROUP") return "No emails from this sender are currently suggested for cleanup.";
   return "Nothing available to clean automatically.";
 }
 
@@ -668,7 +668,7 @@ function Metric({ label, value, strong = false }: { label: string; value: number
 }
 
 function PreviewAccounting({ job }: { job: GmailCleanupJobView }) {
-  return <dl className="mt-3 grid gap-2 text-sm"><Row label="Ready in selection" value={job.reportReadyCount.toLocaleString()} /><Row label="Rechecked now" value={job.resolvedCount.toLocaleString()} /><Row label="Excluded during safety checks" value={job.excludedMessageCount.toLocaleString()} /></dl>;
+  return <dl className="mt-3 grid gap-2 text-sm"><Row label="Suggested in selection" value={job.reportReadyCount.toLocaleString()} /><Row label="Rechecked now" value={job.resolvedCount.toLocaleString()} /><Row label="Excluded during safety checks" value={job.excludedMessageCount.toLocaleString()} /></dl>;
 }
 
 function SenderGroupFailureNotice({ job }: { job: GmailCleanupJobView }) {

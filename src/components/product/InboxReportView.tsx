@@ -39,7 +39,7 @@ const viewLinks: Array<{ view: ReportView; label: string }> = [
 
 const senderSortOptions: Array<{ value: SenderSortKey; label: string }> = [
   { value: "emails", label: "Most emails" },
-  { value: "ready", label: "Most ready" },
+  { value: "ready", label: "Most suggested" },
   { value: "unread", label: "Most unread" },
   { value: "oldest", label: "Oldest" },
   { value: "storage", label: "Storage" },
@@ -240,11 +240,11 @@ function SendersView({ report }: { report: InboxReport }) {
               <tr>
                 <th className="p-4">Sender</th>
                 <th className="p-4 text-right">Emails</th>
-                <th className="p-4 text-right">Ready</th>
+                <th className="p-4 text-right">Suggested</th>
                 <th className="p-4 text-right">Review</th>
                 <th className="p-4 text-right">Protected</th>
                 <th className="p-4">Oldest</th>
-                <th className="p-4 text-right">Ready storage</th>
+                <th className="p-4 text-right">Suggested storage</th>
                 <th className="p-4">Recommendation</th>
               </tr>
             </thead>
@@ -338,7 +338,7 @@ function SenderMobileRow({
       </span>
       <span className="grid grid-cols-4 gap-2 text-center text-xs">
         <CompactMetric label="Total" value={sender.totalMessages} />
-        <CompactMetric label="Ready" value={sender.cleanupCandidateCount} />
+        <CompactMetric label="Suggested" value={sender.cleanupCandidateCount} />
         <CompactMetric label="Review" value={sender.reviewMessages} />
         <CompactMetric label="Protected" value={sender.protectedMessages} />
       </span>
@@ -406,7 +406,7 @@ function CategoryCard({ category }: { category: CategoryAggregate }) {
           <dd className="m-0 font-bold">{category.oldMessages.toLocaleString()}</dd>
         </div>
         <div className="flex justify-between gap-4">
-          <dt className="muted">Ready</dt>
+          <dt className="muted">Suggested</dt>
           <dd className="m-0 font-bold">{category.cleanupCandidateCount.toLocaleString()}</dd>
         </div>
         <div className="flex justify-between gap-4">
@@ -456,7 +456,7 @@ function SenderDetail({
       </p>
       <dl className="mt-4 grid grid-cols-2 gap-3 text-center text-sm">
         <SenderMetric label="Total" value={sender.totalMessages} />
-        <SenderMetric label="Ready" value={sender.cleanupCandidateCount} />
+        <SenderMetric label="Suggested" value={sender.cleanupCandidateCount} />
         <SenderMetric label="Review" value={sender.reviewMessages} />
         <SenderMetric label="Protected" value={sender.protectedMessages} />
       </dl>
@@ -535,7 +535,7 @@ function DevelopmentClassifierInspection({
       <h4 className="mb-2 mt-4 font-extrabold text-[var(--navy)]">Final states</h4>
       <dl className="grid gap-2">
         <DiagnosticRow label="Total" value={diagnostics.totalMessages} />
-        <DiagnosticRow label="Ready" value={diagnostics.readyMessages} />
+        <DiagnosticRow label="Suggested" value={diagnostics.readyMessages} />
         <DiagnosticRow label="Review" value={diagnostics.reviewMessages} />
         <DiagnosticRow label="Protected" value={diagnostics.protectedMessages} />
       </dl>
@@ -559,14 +559,14 @@ function DevelopmentClassifierInspection({
         <DiagnosticRow label="Social" value={signals.socialMessages} />
         <DiagnosticRow label="Auto-Submitted" value={signals.autoSubmittedMessages} />
       </dl>
-      <h4 className="mb-2 mt-4 font-extrabold text-[var(--navy)]">Strong signals on Ready messages</h4>
+      <h4 className="mb-2 mt-4 font-extrabold text-[var(--navy)]">Strong signals on Suggested messages</h4>
       <dl className="grid gap-2">
         <DiagnosticRow label="List-Id" value={readySignals.listIdMessages} />
         <DiagnosticRow label="List-Unsubscribe" value={readySignals.listUnsubscribeMessages} />
         <DiagnosticRow label="Precedence bulk / list" value={readySignals.precedenceBulkOrListMessages} />
         <DiagnosticRow label="Promotions" value={readySignals.promotionsMessages} />
-        <DiagnosticRow label="Ready with hard protection" value={readySignals.withHardProtectionMessages ?? 0} />
-        <DiagnosticRow label="Ready without a strong signal" value={readySignals.withoutStrongSignalMessages} />
+        <DiagnosticRow label="Suggested with hard protection" value={readySignals.withHardProtectionMessages ?? 0} />
+        <DiagnosticRow label="Suggested without a strong signal" value={readySignals.withoutStrongSignalMessages} />
       </dl>
     </details>
   );
@@ -643,7 +643,7 @@ function recommendationDescription(recommendation: SenderAggregate["cleanupConfi
   return {
     very_high: "Several independent bulk-mail signals agree.",
     high: "Recurring old mail has strong bulk-mail evidence.",
-    review: "Review only. No messages in this group are ready to clean.",
+    review: "Review only. No messages in this group are suggested for cleanup.",
     keep: "We found signs these messages may be important."
   }[recommendation];
 }

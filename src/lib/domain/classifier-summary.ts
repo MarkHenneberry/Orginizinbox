@@ -70,7 +70,7 @@ export function formatMailboxClassifierSummary(
     "",
     "Mailbox",
     line("Total", report.totals.messages),
-    line("Ready", report.totals.cleanupCandidates),
+    line("Suggested", report.totals.cleanupCandidates),
     line("Review", report.totals.reviewMessages),
     line("Protected", report.totals.protectedMessages),
     "",
@@ -112,8 +112,8 @@ export function formatMailboxClassifierSummary(
     line("Messages protected by participation", signals.participatedConversationMessages),
     "",
     "Safety checks",
-    line("Ready with hard protection", safety.readyWithHardProtection),
-    line("Ready without strong per-message bulk evidence", safety.readyWithoutStrongSignal),
+    line("Suggested with hard protection", safety.readyWithHardProtection),
+    line("Suggested without strong per-message bulk evidence", safety.readyWithoutStrongSignal),
     line("Count invariant violations", safety.countInvariantViolations),
     "",
     "Reason counts can overlap. Mailbox state counts do not overlap."
@@ -139,7 +139,7 @@ export function formatSenderClassifierSummary(sender: SenderAggregate): string {
     "",
     "Counts",
     line("Total", diagnostics.totalMessages),
-    line("Ready", diagnostics.readyMessages),
+    line("Suggested", diagnostics.readyMessages),
     line("Review", diagnostics.reviewMessages),
     line("Protected", diagnostics.protectedMessages),
     "",
@@ -158,7 +158,7 @@ export function formatSenderClassifierSummary(sender: SenderAggregate): string {
       (signals.transactionalSubjectMessages ?? 0) + (signals.securityAccountSubjectMessages ?? 0)
     ),
     "",
-    "Ready-message strong evidence",
+    "Suggested-message strong evidence",
     line("List-Id", readySignals.listIdMessages),
     line("List-Unsubscribe", readySignals.listUnsubscribeMessages),
     line("Precedence bulk/list", readySignals.precedenceBulkOrListMessages),
@@ -174,8 +174,8 @@ export function formatSenderClassifierSummary(sender: SenderAggregate): string {
     `Recurring sender: ${sender.recurring ? "yes" : "no"}`,
     "",
     "Safety",
-    line("Ready with hard protection", readySignals.withHardProtectionMessages),
-    line("Ready without strong signal", readySignals.withoutStrongSignalMessages),
+    line("Suggested with hard protection", readySignals.withHardProtectionMessages),
+    line("Suggested without strong signal", readySignals.withoutStrongSignalMessages),
     "",
     "Reason counts can overlap. Final state counts do not overlap."
   ].join("\n");
