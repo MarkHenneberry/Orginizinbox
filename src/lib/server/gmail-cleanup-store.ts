@@ -126,6 +126,14 @@ export function incrementGmailCleanupDuplicateSubmission(
   });
 }
 
+export function incrementGmailBulkUndoProofDuplicateSubmission(jobId: string) {
+  const job = gmailCleanupJobs.get(jobId);
+  if (!job) return;
+  updateGmailCleanupJob(job, {
+    bulkUndoProofDuplicateSubmissions: (job.bulkUndoProofDuplicateSubmissions ?? 0) + 1
+  });
+}
+
 export function clearGmailCleanupJobsForUser(userId: string) {
   for (const [jobId, job] of gmailCleanupJobs.entries()) {
     if (job.userId === userId) gmailCleanupJobs.delete(jobId);
@@ -203,6 +211,12 @@ export function serializeGmailCleanupJob(job: GmailCleanupJob): GmailCleanupJobV
     operationStates: { ...job.operationStates },
     duplicateSubmissionsBlocked: { ...job.duplicateSubmissionsBlocked },
     shadowVerification: job.shadowVerification ? { ...job.shadowVerification } : undefined,
+    suggestedDeltas: (job.suggestedDeltas ?? []).map((delta) => ({ ...delta })),
+    bulkUndoProof: job.bulkUndoProof ? {
+      ...job.bulkUndoProof,
+      projectedUndoQuota: job.bulkUndoProof.projectedUndoQuota.map((projection) => ({ ...projection }))
+    } : undefined,
+    bulkUndoProofDuplicateSubmissions: job.bulkUndoProofDuplicateSubmissions ?? 0,
     undoAvailable,
     confirmationExpiresAt: job.confirmationExpiresAt,
     error: job.error,

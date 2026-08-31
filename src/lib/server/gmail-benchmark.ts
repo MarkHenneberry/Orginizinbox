@@ -2,6 +2,12 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { GmailProvider } from "@/lib/providers/gmail/provider";
 import { StreamingReportAggregator } from "@/lib/domain/streaming-aggregator";
+import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
+import {
+  toGmailScalableEligibleIdentity,
+  type GmailScalableEligibleIdentity,
+  type GmailScalableScanIdentity
+} from "@/lib/providers/gmail/scalable-targets";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
 import { createProgress, nextExpiry, setLiveScan, type BenchmarkLimit, type BenchmarkProgress } from "@/lib/server/live-scan-store";
 
@@ -90,11 +96,21 @@ async function runGmailBenchmark(input: {
     });
     input.progress.conversationIndexMs = Math.round(performance.now() - conversationIndexStarted);
     input.progress.peakParticipatedConversationCount = participatedConversationIds.size;
+    const identitiesByProviderMessageId = new Map<string, GmailScalableScanIdentity>();
+    const eligibleIdentities: GmailScalableEligibleIdentity[] = [];
     const aggregator = new StreamingReportAggregator({
       participatedConversationIds,
-      includeDiagnostics: process.env.NODE_ENV !== "production"
+      includeDiagnostics: process.env.NODE_ENV !== "production",
+      onClassified(classified) {
+        const identity = identitiesByProviderMessageId.get(classified.providerMessageId);
+        if (!identity) return;
+        const eligible = toGmailScalableEligibleIdentity(identity, classified);
+        if (eligible) eligibleIdentities.push(eligible);
+      }
     });
     let connectedAt: number | undefined;
+    let gmailUidValidity: string | undefined;
+    let scalableIdentityBridgeAvailable = false;
     const numericLimit = input.limit === "full" ? "full" : input.limit;
     const scanConnectionStarted = performance.now();
 
@@ -102,13 +118,18 @@ async function runGmailBenchmark(input: {
       batchSize: input.batchSize,
       limit: numericLimit,
       signal: input.signal,
-      onConnected: ({ mailboxPath, mailboxExists }) => {
+      onConnected: ({ mailboxPath, mailboxExists, uidValidity, scalableIdentityBridgeAvailable: bridgeAvailable }) => {
         connectedAt = performance.now();
         input.progress.connectionMs = Math.round(connectedAt - scanConnectionStarted);
         input.progress.mailboxPath = mailboxPath;
         input.progress.mailboxExists = mailboxExists;
+        gmailUidValidity = uidValidity;
+        scalableIdentityBridgeAvailable = bridgeAvailable === true;
       }
     })) {
+      for (const identity of batch.gmailScalableIdentities ?? []) {
+        identitiesByProviderMessageId.set(identity.providerMessageId, identity);
+      }
       const timing = aggregator.processBatch(batch.records);
       protectionClassificationMs += timing.protectionClassificationMs;
       aggregationMs += timing.aggregationMs;
@@ -148,10 +169,16 @@ async function runGmailBenchmark(input: {
     input.progress.messagesPerSecond = throughput(input.progress.processed, input.progress.durationMs);
     input.progress.messagesPerMinute = Math.round((input.progress.messagesPerSecond ?? 0) * 60);
 
+    const report = aggregator.snapshot("gmail", false);
     setLiveScan(input.userId, {
       progress: input.progress,
-      report: aggregator.snapshot("gmail", false),
+      report,
       participatedConversationIds,
+      gmailUidValidity,
+      scalableCleanupTargets:
+        scalableIdentityBridgeAvailable && gmailUidValidity
+          ? buildScalableCleanupTargets(report.senders, eligibleIdentities)
+          : undefined,
       cancel: new AbortController(),
       expiresAt: nextExpiry()
     });
@@ -166,6 +193,29 @@ async function runGmailBenchmark(input: {
     input.progress.status = "failed";
     input.progress.errors.push(safeErrorMessage(error));
   }
+}
+
+function buildScalableCleanupTargets(
+  senders: ReturnType<StreamingReportAggregator["snapshot"]>["senders"],
+  identities: readonly GmailScalableEligibleIdentity[]
+) {
+  const groups = buildCleanupSenderGroups(senders);
+  const groupIndexBySender = new Map(
+    senders.map((sender, index) => [sender.senderKey.toLocaleLowerCase("en-US"), groups[index].eligible ? index : undefined])
+  );
+  return [...identities]
+    .sort((left, right) => left.scanOrdinal - right.scanOrdinal)
+    .flatMap((identity) => {
+      const groupIndex = groupIndexBySender.get(identity.senderKey);
+      return groupIndex === undefined
+        ? []
+        : [{
+            uid: identity.uid,
+            apiMessageId: identity.apiMessageId,
+            groupIndex,
+            immutableEvidence: identity.immutableEvidence
+          }];
+    });
 }
 
 function throughput(processed: number, durationMs?: number) {

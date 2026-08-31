@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   clearGmailCleanupJobsForUser: vi.fn(),
+  clearGmailScalableCleanupJobsForUser: vi.fn(),
+  clearDurableGmailScalableCleanupStateForUser: vi.fn(),
   clearLiveScan: vi.fn(),
   clearOAuthStateCookie: vi.fn(),
   clearSessionCookie: vi.fn(),
@@ -9,15 +11,25 @@ const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
   getSession: vi.fn(),
   revokeGoogleToken: vi.fn(),
-  update: vi.fn()
+  update: vi.fn(),
+  updateManyCleanupJobs: vi.fn()
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/server/crypto", () => ({ decryptSecret: mocks.decryptSecret }));
 vi.mock("@/lib/server/db", () => ({
-  prisma: { providerConnection: { findFirst: mocks.findFirst, update: mocks.update } }
+  prisma: {
+    providerConnection: { findFirst: mocks.findFirst, update: mocks.update },
+    cleanupJob: { updateMany: mocks.updateManyCleanupJobs }
+  }
 }));
 vi.mock("@/lib/server/gmail-cleanup-store", () => ({ clearGmailCleanupJobsForUser: mocks.clearGmailCleanupJobsForUser }));
+vi.mock("@/lib/server/gmail-scalable-cleanup-store", () => ({
+  clearGmailScalableCleanupJobsForUser: mocks.clearGmailScalableCleanupJobsForUser
+}));
+vi.mock("@/lib/server/gmail-scalable-cleanup-durable-store", () => ({
+  clearDurableGmailScalableCleanupStateForUser: mocks.clearDurableGmailScalableCleanupStateForUser
+}));
 vi.mock("@/lib/server/google-oauth", () => ({ revokeGoogleToken: mocks.revokeGoogleToken }));
 vi.mock("@/lib/server/live-scan-store", () => ({ clearLiveScan: mocks.clearLiveScan }));
 vi.mock("@/lib/server/session", () => ({
@@ -49,6 +61,8 @@ describe("Gmail disconnect lifecycle", () => {
       encryptedAccessToken: "encrypted-access-token"
     });
     mocks.update.mockResolvedValue({});
+    mocks.updateManyCleanupJobs.mockResolvedValue({ count: 0 });
+    mocks.clearDurableGmailScalableCleanupStateForUser.mockResolvedValue(0);
     mocks.revokeGoogleToken.mockResolvedValue({ succeeded: true, status: 200 });
   });
 
@@ -72,6 +86,20 @@ describe("Gmail disconnect lifecycle", () => {
     expect(mocks.clearOAuthStateCookie).toHaveBeenCalledOnce();
     expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1");
     expect(mocks.clearGmailCleanupJobsForUser).toHaveBeenCalledWith("user-1");
+    expect(mocks.clearGmailScalableCleanupJobsForUser).toHaveBeenCalledWith("user-1");
+    expect(mocks.clearDurableGmailScalableCleanupStateForUser).toHaveBeenCalledWith("user-1");
+    expect(mocks.updateManyCleanupJobs).toHaveBeenNthCalledWith(1, {
+      where: { scan: { userId: "user-1" }, status: { in: ["pending", "running"] } },
+      data: { status: "cancelled", completedAt: expect.any(Date) }
+    });
+    expect(mocks.updateManyCleanupJobs).toHaveBeenNthCalledWith(2, {
+      where: { scan: { userId: "user-1" } },
+      data: {
+        terminalState: null,
+        terminalSnapshot: expect.anything(),
+        terminalSnapshotVersion: 0
+      }
+    });
     expect(mocks.clearSessionCookie).toHaveBeenCalledOnce();
   });
 

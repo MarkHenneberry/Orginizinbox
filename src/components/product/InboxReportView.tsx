@@ -26,6 +26,7 @@ import type {
   ReportSource,
   SenderAggregate
 } from "@/lib/domain/types";
+import type { ReportRecentCleanupAction } from "@/lib/domain/report-recent-action";
 import { formatBytes, formatDate } from "@/lib/format";
 
 export type ReportView = "overview" | "senders" | "categories" | "old-mail";
@@ -51,6 +52,7 @@ const developmentDiagnosticsEnabled = process.env.NODE_ENV !== "production";
 export function InboxReportView({
   report,
   reportStale,
+  recentCleanupAction,
   source,
   view,
   backHref,
@@ -58,6 +60,7 @@ export function InboxReportView({
 }: {
   report: InboxReport;
   reportStale: boolean;
+  recentCleanupAction?: ReportRecentCleanupAction;
   source: ReportSource;
   view: ReportView;
   backHref: string;
@@ -86,7 +89,9 @@ export function InboxReportView({
           )}
         </div>
 
-        {reportStale ? (
+        {recentCleanupAction ? (
+          <PostUndoReportNotice action={recentCleanupAction} />
+        ) : reportStale ? (
           <section className="mb-6 rounded-md border border-amber-300 bg-amber-50 p-4">
             <h2 className="m-0 text-lg font-extrabold text-[var(--navy)]">Inbox changed since this report was generated</h2>
             <p className="muted m-0 mt-1">Scan again before choosing more email to clean.</p>
@@ -126,6 +131,32 @@ export function InboxReportView({
         ) : null}
       </div>
     </main>
+  );
+}
+
+function PostUndoReportNotice({ action }: { action: ReportRecentCleanupAction }) {
+  const fullUndo = action.outcome === "undo_complete";
+  const afterReport = action.reportRelation === "report_after_cleanup";
+  return (
+    <section className="mb-6 rounded-md border border-emerald-300 bg-emerald-50 p-4">
+      <h2 className="m-0 text-lg font-extrabold text-[var(--navy)]">
+        {fullUndo
+          ? afterReport ? "Cleanup was undone after this report was generated" : "Cleanup undone"
+          : "Cleanup restore completed with unresolved messages"}
+      </h2>
+      <p className="muted m-0 mt-1">
+        {action.verifiedRestoredCount.toLocaleString()} messages were restored
+        {!fullUndo
+          ? `; ${action.failedRestoreCount.toLocaleString()} failed and ${action.uncertainRestoreCount.toLocaleString()} remain uncertain.`
+          : "."}
+      </p>
+      <p className="muted m-0 mt-1">
+        {afterReport
+          ? "Rescan to include the restoration and any other inbox changes."
+          : "This report is based on your earlier scan. Rescan to include any other inbox changes."}
+      </p>
+      <Link href="/app/scan" className="btn btn-secondary focus-ring mt-3">Rescan inbox</Link>
+    </section>
   );
 }
 

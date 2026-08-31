@@ -15,6 +15,7 @@ export default async function ReportPage({ searchParams }: { searchParams?: Prom
       backHref={activeReport.backHref}
       report={activeReport.report}
       reportStale={activeReport.reportStale}
+      recentCleanupAction={activeReport.recentCleanupAction}
       scanPerformance={activeReport.scanPerformance}
       source={activeReport.source}
       view={view}

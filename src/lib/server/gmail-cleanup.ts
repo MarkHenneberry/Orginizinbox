@@ -1,5 +1,10 @@
 import "server-only";
 import { runtimeConfig } from "@/lib/config";
+import {
+  getGmailCleanupRequestMode,
+  gmailLegacyCleanupHardMaximum
+} from "@/lib/domain/gmail-cleanup-request-mode";
+import { mergeCleanupSuggestedDeltas } from "@/lib/domain/cleanup-session-adjustments";
 import type { SenderAggregate } from "@/lib/domain/types";
 import { createGmailProviderErrorCounts } from "@/lib/providers/gmail/api-error-classification";
 import {
@@ -32,6 +37,10 @@ import {
 } from "@/lib/providers/gmail/shadow-verifier";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
 import {
+  countVerifiedCandidatesByGroup,
+  createBulkUndoRecoveryPlan
+} from "@/lib/server/gmail-cleanup-adjustments";
+import {
   createGmailCleanupJob,
   getGmailCleanupJob,
   incrementGmailCleanupDuplicateSubmission,
@@ -46,7 +55,7 @@ import { getLiveScan, markLiveReportStale } from "@/lib/server/live-scan-store";
 import { getSession } from "@/lib/server/session";
 
 export const gmailCleanupConfirmation = "MOVE_TO_TRASH";
-export const gmailCleanupHardMaximum = 100;
+export const gmailCleanupHardMaximum = gmailLegacyCleanupHardMaximum;
 
 export class GmailCleanupError extends Error {
   constructor(
@@ -444,6 +453,11 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
   const confirmationProfile = trashClient.getRequestProfile();
   const requestProfile = mergeRequestProfiles(job.previewRequestProfile, confirmationProfile);
   const shadowVerification = await completeHistoryShadow(shadow, eligibleIds, new Set(verification.verifiedIds));
+  const suggestedDeltas = mergeCleanupSuggestedDeltas(
+    job.suggestedDeltas ?? [],
+    countVerifiedCandidatesByGroup(eligibleCandidates, verification.verifiedIds),
+    "moved"
+  );
 
   running = updateGmailCleanupJob(running, {
     status: fullyVerified ? "completed" : completelyFailed ? "failed" : "partial",
@@ -462,6 +476,7 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
     confirmationRequestProfile: confirmationProfile,
     requestProfile,
     shadowVerification,
+    suggestedDeltas,
     estimatedThousandMessageSafetyMs: estimateThousandSafetyMs(
       job.previewSafetyCheckMs,
       recheck.finalSafetyRecheckMs,
@@ -567,6 +582,9 @@ export async function undoGmailCleanup(input: { jobId: string }) {
   ) {
     throw new GmailCleanupError("Only fully verified cleanup jobs can be undone.", 409);
   }
+  if (job.bulkUndoProof?.state === "running") {
+    throw new GmailCleanupError("The bulk Undo proof is still running.", 409);
+  }
 
   const operation = runOrJoinGmailCleanupOperation(
     `undo:${job.id}`,
@@ -596,6 +614,9 @@ async function performGmailCleanupUndo(job: GmailCleanupJob, userId: string) {
   }
   const trashClient = createTrashClient(context.connection.accessToken);
   const undoStartedAt = performance.now();
+  if (job.bulkUndoProof?.state === "failed") {
+    return performFailedBulkUndoProofRecovery(job, undoing, trashClient, apiMessageIds, undoStartedAt);
+  }
   let verification: Awaited<ReturnType<GmailTrashClient["untrashAndVerifyMessages"]>>;
   try {
     verification = await trashClient.untrashAndVerifyMessages(apiMessageIds);
@@ -623,6 +644,11 @@ async function performGmailCleanupUndo(job: GmailCleanupJob, userId: string) {
     verification.failedCount === 0 &&
     verification.uncertainCount === 0;
   const completelyFailed = verification.failedCount === verification.attemptedCount;
+  const suggestedDeltas = mergeCleanupSuggestedDeltas(
+    job.suggestedDeltas ?? [],
+    countVerifiedCandidatesByGroup(job.apiCandidates, verification.verifiedIds),
+    "restored"
+  );
 
   undoing = updateGmailCleanupJob(undoing, {
     status: fullyRestored ? "undone" : completelyFailed ? "undo_failed" : "undo_partial",
@@ -637,6 +663,7 @@ async function performGmailCleanupUndo(job: GmailCleanupJob, userId: string) {
     totalUndoMs: Math.round(performance.now() - undoStartedAt),
     undoRequestProfile,
     requestProfile: mergeRequestProfiles(job.requestProfile, undoRequestProfile),
+    suggestedDeltas,
     operationStates: {
       ...undoing.operationStates,
       undo: fullyRestored ? "completed" : completelyFailed ? "failed" : "partial"
@@ -647,12 +674,109 @@ async function performGmailCleanupUndo(job: GmailCleanupJob, userId: string) {
   return serializeGmailCleanupJob(undoing);
 }
 
+async function performFailedBulkUndoProofRecovery(
+  job: GmailCleanupJob,
+  undoing: GmailCleanupJob,
+  trashClient: GmailTrashClient,
+  apiMessageIds: string[],
+  undoStartedAt: number
+) {
+  let currentState: Awaited<ReturnType<GmailTrashClient["verifyMessagesInTrash"]>>;
+  try {
+    currentState = await trashClient.verifyMessagesInTrash(apiMessageIds);
+  } catch {
+    const undoRequestProfile = trashClient.getRequestProfile();
+    return serializeGmailCleanupJob(updateGmailCleanupJob(undoing, {
+      status: "undo_partial",
+      diagnosticResult: "UNDO_PARTIAL",
+      undoAttemptedCount: 0,
+      undoVerifiedCount: 0,
+      undoFailedCount: 0,
+      undoUncertainCount: apiMessageIds.length,
+      totalUndoMs: Math.round(performance.now() - undoStartedAt),
+      undoRequestProfile,
+      requestProfile: mergeRequestProfiles(job.requestProfile, undoRequestProfile),
+      operationStates: { ...undoing.operationStates, undo: "partial" },
+      completedAt: Date.now(),
+      error: "Gmail restore verification was not fully successful. Check Gmail Trash manually."
+    }));
+  }
+
+  const recoveryPlan = createBulkUndoRecoveryPlan(currentState);
+  const recoveryIds = recoveryPlan.recoveryIds;
+  let recovery: Awaited<ReturnType<GmailTrashClient["untrashAndVerifyMessages"]>> = {
+    attemptedCount: 0,
+    verifiedCount: 0,
+    failedCount: 0,
+    uncertainCount: 0,
+    durationMs: 0,
+    verifiedIds: [],
+    failedIds: [],
+    uncertainIds: [],
+    untrashMs: 0,
+    fallbackVerificationCount: 0,
+    fallbackVerificationMs: 0
+  };
+  try {
+    if (recoveryIds.length > 0) recovery = await trashClient.untrashAndVerifyMessages(recoveryIds);
+  } catch {
+    recovery = {
+      ...recovery,
+      attemptedCount: recoveryIds.length,
+      uncertainCount: recoveryIds.length,
+      uncertainIds: [...recoveryIds]
+    };
+  }
+
+  const fullyRestored =
+    recoveryPlan.uncertainCount === 0 &&
+    recovery.failedCount === 0 &&
+    recovery.uncertainCount === 0 &&
+    recoveryPlan.alreadyRestoredIds.length + recovery.verifiedCount === apiMessageIds.length;
+  const completelyFailed =
+    recovery.attemptedCount > 0 &&
+    recovery.failedCount === recovery.attemptedCount &&
+    recoveryPlan.alreadyRestoredIds.length === 0;
+  const restoredIds = [...recoveryPlan.alreadyRestoredIds, ...recovery.verifiedIds];
+  const suggestedDeltas = mergeCleanupSuggestedDeltas(
+    job.suggestedDeltas ?? [],
+    countVerifiedCandidatesByGroup(job.apiCandidates, restoredIds),
+    "restored"
+  );
+  const undoRequestProfile = trashClient.getRequestProfile();
+  return serializeGmailCleanupJob(updateGmailCleanupJob(undoing, {
+    status: fullyRestored ? "undone" : completelyFailed ? "undo_failed" : "undo_partial",
+    diagnosticResult: fullyRestored ? "UNDO_SUCCESS" : completelyFailed ? "UNDO_FAILED" : "UNDO_PARTIAL",
+    undoAttemptedCount: apiMessageIds.length,
+    undoVerifiedCount: restoredIds.length,
+    undoFailedCount: recovery.failedCount,
+    undoUncertainCount: recoveryPlan.uncertainCount + recovery.uncertainCount,
+    undoFallbackVerificationCount: recovery.fallbackVerificationCount,
+    untrashMs: recovery.untrashMs,
+    undoVerificationMs: currentState.durationMs + recovery.fallbackVerificationMs,
+    totalUndoMs: Math.round(performance.now() - undoStartedAt),
+    undoRequestProfile,
+    requestProfile: mergeRequestProfiles(job.requestProfile, undoRequestProfile),
+    suggestedDeltas,
+    operationStates: {
+      ...undoing.operationStates,
+      undo: fullyRestored ? "completed" : completelyFailed ? "failed" : "partial"
+    },
+    completedAt: Date.now(),
+    error: fullyRestored ? undefined : "Gmail restore verification was not fully successful. Check Gmail Trash manually."
+  }));
+}
+
 export function parseCleanupCount(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new GmailCleanupError("Cleanup count must be a positive integer.", 400);
   }
-  if (parsed > runtimeConfig.gmailCleanupMaxMessages || parsed > gmailCleanupHardMaximum) {
+  if (getGmailCleanupRequestMode({
+    requestedCount: parsed,
+    legacyMaximum: runtimeConfig.gmailCleanupMaxMessages,
+    scalableEnabled: false
+  }) !== "legacy") {
     throw new GmailCleanupError(
       `Cleanup count exceeds the development limit of ${Math.min(runtimeConfig.gmailCleanupMaxMessages, gmailCleanupHardMaximum)}.`,
       400
@@ -782,6 +906,8 @@ function baseJobFields(input: {
   | "untrashMs"
   | "undoVerificationMs"
   | "totalUndoMs"
+  | "suggestedDeltas"
+  | "bulkUndoProofDuplicateSubmissions"
 > {
   return {
     groupDisplayName: input.selectedGroups.length === 1 ? input.selectedGroups[0].displayName : `${input.selectedGroups.length} senders`,
@@ -818,7 +944,9 @@ function baseJobFields(input: {
     undoFallbackVerificationCount: 0,
     untrashMs: 0,
     undoVerificationMs: 0,
-    totalUndoMs: 0
+    totalUndoMs: 0,
+    suggestedDeltas: [],
+    bulkUndoProofDuplicateSubmissions: 0
   };
 }
 

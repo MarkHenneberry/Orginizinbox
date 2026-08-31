@@ -1,5 +1,6 @@
 import "server-only";
 import type { InboxReport } from "@/lib/domain/types";
+import type { GmailScalableCleanupTarget } from "@/lib/providers/gmail/scalable-targets";
 
 export type BenchmarkLimit = 5000 | 10000 | 25000 | 50000 | 100000 | "full";
 export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
@@ -38,6 +39,8 @@ export type LiveScanSession = {
   cancel: AbortController;
   expiresAt: number;
   reportStale?: boolean;
+  gmailUidValidity?: string;
+  scalableCleanupTargets?: GmailScalableCleanupTarget[];
 };
 
 const globalStore = globalThis as unknown as {

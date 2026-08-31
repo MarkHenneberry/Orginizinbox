@@ -42,6 +42,7 @@ model User {
   providerConnections ProviderConnection[]
   scans               Scan[]
   purchases           Purchase[]
+  cleanupJobStates    CleanupJobState[]
 }
 
 model ProviderConnection {
@@ -88,13 +89,34 @@ model CleanupJob {
   status         CleanupJobStatus @default(pending)
   failureCode    String?
   failureMessage String?
+  terminalState  String?
+  terminalSnapshot Json?
+  terminalSnapshotVersion Int @default(0)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   startedAt      DateTime?
   completedAt    DateTime?
   scan           Scan             @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  transientState CleanupJobState?
 
   @@index([scanId, status])
+}
+
+model CleanupJobState {
+  jobId            String   @id
+  userId           String
+  encryptedPayload String   @db.Text
+  version          Int      @default(1)
+  lockOwner        String?
+  lockExpiresAt    DateTime?
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  job              CleanupJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
 }
 
 model Purchase {

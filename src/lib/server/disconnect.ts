@@ -1,7 +1,10 @@
 import "server-only";
+import { Prisma } from "@prisma/client";
 import { decryptSecret } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
 import { clearGmailCleanupJobsForUser } from "@/lib/server/gmail-cleanup-store";
+import { clearGmailScalableCleanupJobsForUser } from "@/lib/server/gmail-scalable-cleanup-store";
+import { clearDurableGmailScalableCleanupStateForUser } from "@/lib/server/gmail-scalable-cleanup-durable-store";
 import { revokeGoogleToken } from "@/lib/server/google-oauth";
 import { clearLiveScan } from "@/lib/server/live-scan-store";
 import { clearOAuthStateCookie, clearSessionCookie, getSession } from "@/lib/server/session";
@@ -66,9 +69,30 @@ async function disconnectCurrentGmailSessionWithMode(mode: DisconnectMode) {
   }
 
   clearLiveScan(session.userId);
-  clearGmailCleanupJobsForUser(session.userId);
+  await clearGmailCleanupStateAfterDisconnect(session.userId);
   await clearSessionCookie();
   return disconnectResult(mode, revocationAttempted, revocationSucceeded, revocationStatus);
+}
+
+export async function clearGmailCleanupStateAfterDisconnect(userId: string) {
+  clearGmailCleanupJobsForUser(userId);
+  clearGmailScalableCleanupJobsForUser(userId);
+  await prisma.cleanupJob.updateMany({
+    where: {
+      scan: { userId },
+      status: { in: ["pending", "running"] }
+    },
+    data: { status: "cancelled", completedAt: new Date() }
+  });
+  await prisma.cleanupJob.updateMany({
+    where: { scan: { userId } },
+    data: {
+      terminalState: null,
+      terminalSnapshot: Prisma.DbNull,
+      terminalSnapshotVersion: 0
+    }
+  });
+  await clearDurableGmailScalableCleanupStateForUser(userId);
 }
 
 function disconnectResult(mode: DisconnectMode, revocationAttempted: boolean, revocationSucceeded: boolean, revocationStatus: number | null) {

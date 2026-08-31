@@ -3,9 +3,11 @@ import { redirect } from "next/navigation";
 import { runtimeConfig } from "@/lib/config";
 import { sanitizeReportForClient } from "@/lib/domain/report-sanitizer";
 import type { ClassifierScanPerformance, InboxReport, ReportSource } from "@/lib/domain/types";
+import type { ReportRecentCleanupAction } from "@/lib/domain/report-recent-action";
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getLiveScan } from "@/lib/server/live-scan-store";
 import { getSession } from "@/lib/server/session";
+import { getLatestGmailScalableUndoReportContext } from "@/lib/server/gmail-scalable-terminal-report";
 
 export type ActiveReportState = {
   report: InboxReport;
@@ -13,6 +15,7 @@ export type ActiveReportState = {
   scanId: string;
   backHref: string;
   reportStale: boolean;
+  recentCleanupAction?: ReportRecentCleanupAction;
   scanPerformance?: ClassifierScanPerformance;
 };
 
@@ -45,6 +48,11 @@ export async function getActiveReportStateOrRedirect(): Promise<ActiveReportStat
     scanId: liveScan.progress.scanId,
     backHref: "/app",
     reportStale: liveScan.reportStale === true,
+    recentCleanupAction: await getLatestGmailScalableUndoReportContext({
+      userId: session.userId,
+      activeScanId: liveScan.progress.scanId,
+      activeScanCompletedAt: liveScan.progress.completedAt
+    }),
     scanPerformance:
       process.env.NODE_ENV !== "production"
         ? {

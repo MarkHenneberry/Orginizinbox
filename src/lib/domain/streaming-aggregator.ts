@@ -61,6 +61,7 @@ type SenderBucket = {
 
 type StreamingReportAggregatorContext = AssessmentContext & {
   includeDiagnostics?: boolean;
+  onClassified?: (message: ClassifiedMessage) => void;
 };
 
 const confidenceRank: Record<CleanupRecommendation, number> = {
@@ -81,6 +82,7 @@ export class StreamingReportAggregator {
   private readonly assessmentContext: AssessmentContext;
   private readonly includeDiagnostics: boolean;
   private readonly participatedConversationsIndexed: number;
+  private readonly onClassified?: (message: ClassifiedMessage) => void;
   private processedMessages = 0;
   private unreadOlderThanOneYear = 0;
   private protectedMessages = 0;
@@ -92,6 +94,7 @@ export class StreamingReportAggregator {
     this.assessmentContext = { ...context, now: this.now };
     this.includeDiagnostics = context.includeDiagnostics === true;
     this.participatedConversationsIndexed = context.participatedConversationIds?.size ?? 0;
+    this.onClassified = context.onClassified;
   }
 
   process(record: NormalizedMailboxRecord): AggregationTiming {
@@ -106,6 +109,7 @@ export class StreamingReportAggregator {
       const classificationStarted = performance.now();
       const classified = assessMessage(record, this.assessmentContext);
       protectionClassificationMs += performance.now() - classificationStarted;
+      this.onClassified?.(classified);
 
       const aggregationStarted = performance.now();
       this.processClassified(classified);

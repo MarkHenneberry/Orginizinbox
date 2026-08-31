@@ -74,9 +74,9 @@ describe("cleanup stage UI contracts", () => {
   it("keeps the exact checked sender groups as semantic read-only REVIEW context", () => {
     expect(client).toMatch(/const groupIndices = \[\.\.\.selectedGroupIndices\]/);
     expect(client).toMatch(/body\.job\.status === "ready"[\s\S]+setCheckedGroupIndices\(groupIndices\)/);
-    expect(client).toMatch(/groups\.filter\(\(group\) => checkedGroupIndexSet\.has\(group\.index\)\)/);
-    expect(reviewStage).toContain("FrozenSenderContext groups={checkedGroups} job={job}");
-    expect(frozenContext).toContain('aria-label="Checked sender groups"');
+    expect(client).toMatch(/checkedGroupIndices\.flatMap\(\(index\)[\s\S]+groupsByIndex\.get\(index\)/);
+    expect(reviewStage).toContain("<FrozenSenderContext");
+    expect(frozenContext).toContain('aria-label={sessionAdjusted ? "Updated sender context" : "Frozen sender context"}');
     expect(frozenContext).toContain("group.displayName");
     expect(frozenContext).toContain("recommendationLabel(group)");
     expect(frozenContext).not.toContain('type="checkbox"');
@@ -87,8 +87,8 @@ describe("cleanup stage UI contracts", () => {
   });
 
   it("keeps frozen desktop context bounded beside a sticky REVIEW summary", () => {
-    expect(client).toMatch(/showFrozenReviewContext[\s\S]+lg:grid-cols-\[minmax\(0,1\.35fr\)_minmax\(320px,0\.65fr\)\]/);
-    expect(client).toMatch(/showFrozenReviewContext \? "order-1 lg:order-2 lg:sticky lg:top-24"/);
+    expect(client).toMatch(/showFrozenSenderContext[\s\S]+lg:grid-cols-\[minmax\(0,1\.35fr\)_minmax\(320px,0\.65fr\)\]/);
+    expect(client).toMatch(/showFrozenSenderContext \? "order-1 lg:order-2 lg:sticky lg:top-24"/);
     expect(frozenContext).toContain('className="order-2 lg:order-1"');
     expect(frozenContext).toContain("lg:max-h-[calc(100vh-18rem)]");
     expect(frozenContext).toContain("lg:min-h-[360px]");
@@ -100,10 +100,10 @@ describe("cleanup stage UI contracts", () => {
 
   it("keeps summary and actions ahead of collapsed sender context on mobile", () => {
     expect(client.indexOf("<aside className={`panel p-5")).toBeLessThan(
-      client.indexOf("<FrozenSenderContext groups={checkedGroups} job={job}")
+      client.indexOf("<FrozenSenderContext")
     );
     expect(frozenContext).toContain('className="panel overflow-hidden lg:hidden"');
-    expect(frozenContext).toMatch(/<details[\s\S]+<summary[\s\S]+Checked sender groups/);
+    expect(frozenContext).toMatch(/<details[\s\S]+<summary[\s\S]+Updated sender groups[\s\S]+Checked sender groups/);
     expect(frozenContext).toContain('className="panel hidden overflow-hidden lg:block"');
   });
 
@@ -115,6 +115,49 @@ describe("cleanup stage UI contracts", () => {
     expect(reviewStage).toContain("UndoResult");
     expect(client).toContain("Rescan inbox");
     expect(reviewStage).not.toContain("Check ${requestedCount");
+  });
+
+  it("restores read-only frozen sender context for COMPLETE and Undo results", () => {
+    expect(client).toMatch(/const showFrozenSenderContext = workspaceState\.showFrozenSenderContext && Boolean\(job\)/);
+    expect(client).toMatch(/sessionAdjusted=\{workspaceState\.sessionAdjusted\}/);
+    expect(reviewStage).toContain("CompletedResult");
+    expect(reviewStage).toContain("UndoResult");
+    expect(frozenContext).toContain("Suggested emails remaining");
+    expect(frozenContext).toContain("Updated from the messages Organizinbox just handled. Rescan to refresh the whole inbox.");
+    expect(frozenContext).not.toContain('type="checkbox"');
+    expect(frozenContext).not.toContain("setSortKey");
+  });
+
+  it("keeps the two-column workspace mounted while Trash verification and Undo are active", () => {
+    expect(client).toMatch(/getCleanupWorkspaceState\(\{[\s\S]+activeOperation[\s\S]+jobStatus: job\?\.status/);
+    expect(client).toMatch(/showFrozenSenderContext[\s\S]+lg:grid-cols-\[minmax\(0,1\.35fr\)_minmax\(320px,0\.65fr\)\]/);
+    expect(client).toMatch(/primaryWorkspaceOperationActive \? null : snapshotExpired/);
+    expect(client).toMatch(/<CleanupOperationStatus[\s\S]+<FrozenSenderContext/);
+    expect(client).not.toContain("!mutationOrVerificationActive");
+  });
+
+  it("keeps operation status in the right pane and sender context collapsed below it on mobile", () => {
+    const mobileContext = frozenContext.slice(
+      frozenContext.indexOf('<details className="panel overflow-hidden lg:hidden">'),
+      frozenContext.indexOf("</details>")
+    );
+    expect(client.indexOf("<CleanupOperationStatus")).toBeLessThan(client.indexOf("<FrozenSenderContext"));
+    expect(mobileContext).toMatch(/<details className="panel overflow-hidden lg:hidden">/);
+    expect(mobileContext).toMatch(/<summary[\s\S]+Checked sender groups/);
+    expect(mobileContext).not.toContain("max-h-[calc(100vh");
+  });
+
+  it("adds no provider request, IMAP work, scan, or focus transition to workspace composition", () => {
+    const workspaceState = readFileSync("src/lib/domain/cleanup-workspace-state.ts", "utf8");
+    expect(workspaceState).not.toMatch(/fetch\(|ImapFlow|\/api\//i);
+    expect(client).toMatch(/useEffect\(\(\) => \{[\s\S]+if \(!reviewStarted\) return;[\s\S]+reviewHeadingRef\.current\?\.focus\(\)[\s\S]+\}, \[reviewStarted\]\)/);
+  });
+
+  it("keeps COMPLETE rows in the frozen checked order and preserves zero-count rows", () => {
+    expect(client).toMatch(/checkedGroupIndices\.flatMap/);
+    expect(frozenContext).toMatch(/groups\.map\(\(group\) => \([\s\S]+key=\{group\.index\}/);
+    expect(frozenContext).toMatch(/getSessionAdjustedSuggestedCount\(group\.cleanupCandidateCount/);
+    expect(frozenContext).not.toMatch(/filter\([^)]*cleanupCandidateCount/);
   });
 });
 
@@ -173,20 +216,21 @@ describe("cleanup snapshot invalidation", () => {
   it("keeps frozen context through expiry while removing Trash actions", () => {
     const client = readFileSync("src/components/product/GmailCleanupClient.tsx", "utf8");
     const contextGuard = client.slice(
-      client.indexOf("const showFrozenReviewContext"),
+      client.indexOf("const showFrozenSenderContext"),
       client.indexOf("const eligibleIndices")
     );
     const expiredBranch = client.slice(
-      client.indexOf("{snapshotExpired ? ("),
+      client.indexOf("primaryWorkspaceOperationActive ? null : snapshotExpired ? ("),
       client.indexOf(') : job.status === "ready" ? (')
     );
 
-    expect(contextGuard).toContain("reviewStarted");
-    expect(contextGuard).not.toContain("snapshotExpired");
+    const workspaceState = readFileSync("src/lib/domain/cleanup-workspace-state.ts", "utf8");
+    expect(contextGuard).toContain("workspaceState.showFrozenSenderContext");
+    expect(workspaceState).toMatch(/snapshotExpired[\s\S]+workspaceState\("expired", false\)/);
     expect(client).toMatch(/snapshotExpired[\s\S]+This cleanup check has expired\./);
     expect(expiredBranch).toContain("Start over");
     expect(expiredBranch).not.toContain("Move ");
-    expect(client).toMatch(/activeOperation === "trash"[\s\S]+mutationOrVerificationActive/);
-    expect(client).toMatch(/cleanupComplete[\s\S]+showFrozenReviewContext/);
+    expect(client).toMatch(/snapshotExpired[\s\S]+getCleanupWorkspaceState/);
+    expect(client).toMatch(/workspaceState\.showFrozenSenderContext[\s\S]+showFrozenSenderContext/);
   });
 });

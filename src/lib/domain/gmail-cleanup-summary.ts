@@ -5,6 +5,8 @@ import {
   type GmailProviderErrorReason
 } from "@/lib/providers/gmail/api-error-classification";
 import type { GmailRequestProfile } from "@/lib/providers/gmail/gmail-api-client";
+import type { CleanupSuggestedDelta } from "@/lib/domain/cleanup-session-adjustments";
+import type { GmailBulkUndoProofSummary } from "@/lib/domain/gmail-bulk-undo-proof-summary";
 import type {
   GmailSenderGroupFailureCounts,
   GmailSenderGroupFailureReason
@@ -148,6 +150,9 @@ export type GmailCleanupJobView = {
   operationStates: GmailCleanupOperationStates;
   duplicateSubmissionsBlocked: GmailCleanupDuplicateSubmissionCounts;
   shadowVerification?: GmailCleanupShadowVerification;
+  suggestedDeltas: CleanupSuggestedDelta[];
+  bulkUndoProof?: GmailBulkUndoProofSummary;
+  bulkUndoProofDuplicateSubmissions: number;
   undoAvailable: boolean;
   confirmationExpiresAt?: number;
   error?: string;
@@ -164,6 +169,8 @@ export function formatDevelopmentCleanupSummary(job: GmailCleanupJobView, now = 
     undoFallbackVerificationCount: job.undoFallbackVerificationCount
   });
   const requests = job.requestProfile.requests;
+  const suggestedMoved = (job.suggestedDeltas ?? []).reduce((total, delta) => total + delta.verifiedMovedCount, 0);
+  const suggestedRestored = (job.suggestedDeltas ?? []).reduce((total, delta) => total + delta.verifiedRestoredCount, 0);
   const groupResolution = job.senderGroupResolution;
   const groupFailures = groupResolution.failureReasonCounts;
   const providerFailures = {
@@ -200,6 +207,12 @@ export function formatDevelopmentCleanupSummary(job: GmailCleanupJobView, now = 
     line("Protected excluded", job.selectedProtectedExcludedCount),
     line("Largest sender contribution", job.largestContribution),
     line("Smallest sender contribution", job.smallestContribution),
+    "",
+    "Session Suggested adjustments",
+    line("Groups adjusted", (job.suggestedDeltas ?? []).length),
+    line("Verified moved", suggestedMoved),
+    line("Verified restored", suggestedRestored),
+    line("Net removed", Math.max(0, suggestedMoved - suggestedRestored)),
     "",
     "Sender-group outcomes",
     line("Selected", groupResolution.selectedCount),

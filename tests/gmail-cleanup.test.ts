@@ -110,10 +110,12 @@ describe("gmail native id resolution", () => {
 
   it("keeps the development cap enforced server-side", () => {
     const cleanup = readFileSync("src/lib/server/gmail-cleanup.ts", "utf8");
+    const requestMode = readFileSync("src/lib/domain/gmail-cleanup-request-mode.ts", "utf8");
 
     expect(cleanup).toMatch(/runtimeConfig\.gmailCleanupMaxMessages/);
-    expect(cleanup).toMatch(/parsed > runtimeConfig\.gmailCleanupMaxMessages \|\| parsed > gmailCleanupHardMaximum/);
-    expect(cleanup).toMatch(/gmailCleanupHardMaximum = 100/);
+    expect(cleanup).toMatch(/getGmailCleanupRequestMode/);
+    expect(cleanup).toMatch(/scalableEnabled: false/);
+    expect(requestMode).toMatch(/gmailLegacyCleanupHardMaximum = 100/);
   });
 
   it("documents why ImapFlow emailId was not a reliable Gmail API id source", () => {

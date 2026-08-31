@@ -12,22 +12,27 @@ export type EncryptedSecret = {
 };
 
 export function getServerSecretKey(): Buffer {
-  const raw = env.TOKEN_ENCRYPTION_KEY;
-  if (!raw) {
-    throw new Error("TOKEN_ENCRYPTION_KEY is required for server-side secret handling.");
-  }
+  return decodeSecretKey(env.TOKEN_ENCRYPTION_KEY, "TOKEN_ENCRYPTION_KEY");
+}
 
-  const decoded = Buffer.from(raw, "base64");
-  if (decoded.length === 32) return decoded;
-
-  const utf8 = Buffer.from(raw, "utf8");
-  if (utf8.length === 32) return utf8;
-
-  throw new Error("TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes.");
+export function getCleanupStateSecretKey(): Buffer {
+  return decodeSecretKey(env.CLEANUP_STATE_ENCRYPTION_KEY, "CLEANUP_STATE_ENCRYPTION_KEY");
 }
 
 export function encryptSecret(plaintext: string): string {
-  const key = getServerSecretKey();
+  return encryptWithKey(plaintext, getServerSecretKey());
+}
+
+export function encryptCleanupState(plaintext: string): string {
+  return encryptWithKey(plaintext, getCleanupStateSecretKey());
+}
+
+export function encryptCleanupStateWithKey(plaintext: string, key: Buffer): string {
+  assertSecretKeyLength(key, "Cleanup state encryption key");
+  return encryptWithKey(plaintext, key);
+}
+
+function encryptWithKey(plaintext: string, key: Buffer): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv(algorithm, key, iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
@@ -41,7 +46,19 @@ export function encryptSecret(plaintext: string): string {
 }
 
 export function decryptSecret(serialized: string): string {
-  const key = getServerSecretKey();
+  return decryptWithKey(serialized, getServerSecretKey());
+}
+
+export function decryptCleanupState(serialized: string): string {
+  return decryptWithKey(serialized, getCleanupStateSecretKey());
+}
+
+export function decryptCleanupStateWithKey(serialized: string, key: Buffer): string {
+  assertSecretKeyLength(key, "Cleanup state encryption key");
+  return decryptWithKey(serialized, key);
+}
+
+function decryptWithKey(serialized: string, key: Buffer): string {
   const payload = JSON.parse(Buffer.from(serialized, "base64url").toString("utf8")) as EncryptedSecret;
   if (payload.version !== 1) {
     throw new Error("Unsupported encrypted secret version.");
@@ -50,6 +67,19 @@ export function decryptSecret(serialized: string): string {
   const decipher = createDecipheriv(algorithm, key, Buffer.from(payload.iv, "base64url"));
   decipher.setAuthTag(Buffer.from(payload.tag, "base64url"));
   return Buffer.concat([decipher.update(Buffer.from(payload.ciphertext, "base64url")), decipher.final()]).toString("utf8");
+}
+
+function decodeSecretKey(raw: string | undefined, name: string) {
+  if (!raw) throw new Error(`${name} is required for server-side secret handling.`);
+  const decoded = Buffer.from(raw, "base64");
+  if (decoded.length === 32) return decoded;
+  const utf8 = Buffer.from(raw, "utf8");
+  if (utf8.length === 32) return utf8;
+  throw new Error(`${name} must decode to exactly 32 bytes.`);
+}
+
+function assertSecretKeyLength(key: Buffer, name: string) {
+  if (key.length !== 32) throw new Error(`${name} must be exactly 32 bytes.`);
 }
 
 export function signValue(value: string): string {

@@ -1,4 +1,5 @@
 import type { EmailProviderName, NormalizedMailboxRecord } from "@/lib/domain/types";
+import type { GmailScalableScanIdentity } from "@/lib/providers/gmail/scalable-targets";
 
 export type MailboxProfile = {
   provider: EmailProviderName;
@@ -12,11 +13,18 @@ export type ScanMetadataInput = {
   batchSize: number;
   limit?: number | "full";
   signal?: AbortSignal;
-  onConnected?: (input: { mailboxPath: string; mailboxExists: number; readOnly: boolean }) => void;
+  onConnected?: (input: {
+    mailboxPath: string;
+    mailboxExists: number;
+    readOnly: boolean;
+    uidValidity?: string;
+    scalableIdentityBridgeAvailable?: boolean;
+  }) => void;
 };
 
 export type ScanMetadataBatch = {
   records: NormalizedMailboxRecord[];
+  gmailScalableIdentities?: GmailScalableScanIdentity[];
   subjectProtectionMs?: number;
   nextCursor?: string;
   mailboxExists?: number;

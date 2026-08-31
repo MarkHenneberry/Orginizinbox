@@ -9,6 +9,7 @@ import {
   normalizeGmailMessage
 } from "@/lib/providers/gmail/metadata";
 import { gmailRequiredImapScope } from "@/lib/providers/gmail/scopes";
+import { createGmailScalableScanIdentity } from "@/lib/providers/gmail/scalable-targets";
 import type {
   MailboxProcessor,
   MailboxProfile,
@@ -81,13 +82,24 @@ export class GmailProvider implements MailboxProcessor {
       }
 
       const mailboxExists = mailbox.exists;
+      const scalableIdentityBridgeAvailable =
+        client.capabilities.has("X-GM-EXT-1") && !client.capabilities.has("OBJECTID");
       const maxMessages = input.limit === "full" || input.limit === undefined ? mailboxExists : Math.min(input.limit, mailboxExists);
-      input.onConnected?.({ mailboxPath, mailboxExists, readOnly: mailbox.readOnly === true });
+      input.onConnected?.({
+        mailboxPath,
+        mailboxExists,
+        readOnly: mailbox.readOnly === true,
+        uidValidity: mailbox.uidValidity.toString(),
+        scalableIdentityBridgeAvailable
+      });
+
+      let scanOrdinal = 0;
 
       for (let start = 1; start <= maxMessages; start += input.batchSize) {
         throwIfAborted(input.signal);
         const end = Math.min(start + input.batchSize - 1, maxMessages);
         const records = [];
+        const gmailScalableIdentities = [];
         let subjectProtectionMs = 0;
 
         for await (const message of client.fetch(`${start}:${end}`, gmailFetchQuery, { uid: false })) {
@@ -96,10 +108,20 @@ export class GmailProvider implements MailboxProcessor {
           const subjectProtection = getGmailSubjectProtection(message.headers);
           subjectProtectionMs += performance.now() - subjectProtectionStarted;
           records.push(normalizeFetchMessage(message, subjectProtection));
+          if (scalableIdentityBridgeAvailable) {
+            const identity = createGmailScalableScanIdentity({
+              uid: message.uid,
+              emailId: message.emailId,
+              scanOrdinal
+            });
+            if (identity) gmailScalableIdentities.push(identity);
+          }
+          scanOrdinal += 1;
         }
 
         yield {
           records,
+          gmailScalableIdentities,
           subjectProtectionMs,
           nextCursor: end < maxMessages ? String(end + 1) : undefined,
           mailboxExists

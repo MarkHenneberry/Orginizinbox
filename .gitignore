@@ -6,3 +6,7 @@ node_modules
 coverage
 dist
 *.tsbuildinfo
+/.swc
+/.workflow-data
+/.workflow-vitest
+/app/.well-known/workflow

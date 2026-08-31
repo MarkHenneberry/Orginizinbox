@@ -114,6 +114,8 @@ function cleanupJob(overrides: Partial<GmailCleanupJobView> = {}): GmailCleanupJ
       undo: 0,
       scan: 0
     },
+    suggestedDeltas: [],
+    bulkUndoProofDuplicateSubmissions: 0,
     undoAvailable: true,
     expiresAt: Date.parse("2026-08-26T12:10:00Z"),
     completedAt: Date.parse("2026-08-26T12:01:00Z"),
@@ -133,6 +135,8 @@ describe("development cleanup summary", () => {
     expect(output).toContain("Sender-group outcomes");
     expect(output).toContain("Resolved successfully: 4");
     expect(output).toContain("Report Suggested: 184");
+    expect(output).toContain("Session Suggested adjustments");
+    expect(output).toContain("Verified moved: 0");
     expect(output).toContain("Resolved now: 100");
     expect(output).toContain("Protected subject: 2");
     expect(output).toContain("Method: batchModify");

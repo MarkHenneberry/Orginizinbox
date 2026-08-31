@@ -7,13 +7,14 @@ export const gmailHeaderAllowlist = ["From", "List-Id", "List-Unsubscribe", "Aut
 
 export const gmailFetchQuery = {
   uid: true,
+  emailId: true,
   flags: true,
   internalDate: true,
   size: true,
   labels: true,
   threadId: true,
   headers: [...gmailHeaderAllowlist]
-} satisfies FetchQueryObject;
+} as FetchQueryObject & { emailId: true };
 
 export const gmailConversationIndexQuery = {
   threadId: true

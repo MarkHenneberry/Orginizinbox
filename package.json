@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:workflow-fixtures": "vitest run --config vitest.workflow.config.ts",
     "prisma:generate": "prisma generate"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "next": "16.3.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "workflow": "^4.8.5",
     "zod": "4.1.5"
   },
   "devDependencies": {
@@ -26,11 +28,16 @@
     "@types/node": "22.17.2",
     "@types/react": "19.1.10",
     "@types/react-dom": "19.1.7",
+    "@workflow/vitest": "^4.0.21",
     "eslint": "9.34.0",
     "eslint-config-next": "16.3.2",
     "prisma": "6.12.0",
     "tailwindcss": "4.1.12",
     "typescript": "5.9.2",
     "vitest": "4.1.11"
+  },
+  "overrides": {
+    "nanoid": "5.1.16",
+    "undici": "7.29.0"
   }
 }
