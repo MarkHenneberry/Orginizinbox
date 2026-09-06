@@ -23,6 +23,7 @@ import type {
   CategoryAggregate,
   ClassifierScanPerformance,
   InboxReport,
+  OutlookScanDiagnostic,
   ReportSource,
   SenderAggregate
 } from "@/lib/domain/types";
@@ -56,7 +57,9 @@ export function InboxReportView({
   source,
   view,
   backHref,
-  scanPerformance
+  scanPerformance,
+  outlookScanDiagnostic,
+  outlookCleanupEnabled
 }: {
   report: InboxReport;
   reportStale: boolean;
@@ -65,7 +68,11 @@ export function InboxReportView({
   view: ReportView;
   backHref: string;
   scanPerformance?: ClassifierScanPerformance;
+  outlookScanDiagnostic?: OutlookScanDiagnostic;
+  outlookCleanupEnabled?: boolean;
 }) {
+  const cleanupAvailable = source !== "microsoft-live" || outlookCleanupEnabled === true;
+  const sizeAvailable = source !== "microsoft-live";
   return (
     <main className="py-8">
       <div className="container">
@@ -80,7 +87,9 @@ export function InboxReportView({
                 : "See the senders, categories, and old email filling your inbox."}
             </p>
           </div>
-          {report.totals.cleanupCandidates > 0 ? (
+          {!cleanupAvailable ? (
+            <span className="muted text-sm font-bold">Outlook cleanup is not available yet</span>
+          ) : report.totals.cleanupCandidates > 0 ? (
             <Link href="/app/cleanup" className="btn btn-primary focus-ring">
               Review cleanup
             </Link>
@@ -101,7 +110,11 @@ export function InboxReportView({
           </section>
         ) : null}
 
-        <DevelopmentMailboxClassifierSummary performance={scanPerformance} report={report} />
+        <DevelopmentMailboxClassifierSummary
+          outlookDiagnostic={outlookScanDiagnostic}
+          performance={scanPerformance}
+          report={report}
+        />
 
         <nav className="mb-6 flex flex-wrap gap-2" aria-label="Inbox report views">
           {viewLinks.map((item) => (
@@ -117,12 +130,16 @@ export function InboxReportView({
           ))}
         </nav>
 
-        {view === "overview" ? <OverviewView report={report} /> : null}
-        {view === "senders" ? <SendersView report={report} /> : null}
-        {view === "categories" ? <CategoriesView categories={report.categories} /> : null}
+        {view === "overview" ? <OverviewView report={report} sizeAvailable={sizeAvailable} /> : null}
+        {view === "senders" ? (
+          <SendersView cleanupAvailable={cleanupAvailable} report={report} sizeAvailable={sizeAvailable} />
+        ) : null}
+        {view === "categories" ? (
+          <CategoriesView categories={report.categories} sizeAvailable={sizeAvailable} />
+        ) : null}
         {view === "old-mail" ? <OldMailView senders={report.senders} /> : null}
 
-        {report.totals.cleanupCandidates > 0 ? (
+        {cleanupAvailable && report.totals.cleanupCandidates > 0 ? (
           <div className="mt-8 flex justify-end">
             <Link href="/app/cleanup" className="btn btn-primary focus-ring">
               Review cleanup
@@ -160,7 +177,7 @@ function PostUndoReportNotice({ action }: { action: ReportRecentCleanupAction })
   );
 }
 
-function OverviewView({ report }: { report: InboxReport }) {
+function OverviewView({ report, sizeAvailable }: { report: InboxReport; sizeAvailable: boolean }) {
   return (
     <>
       <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-4" aria-label="Inbox report summary">
@@ -170,18 +187,29 @@ function OverviewView({ report }: { report: InboxReport }) {
         <Summary label="Protected" value={report.totals.protectedMessages.toLocaleString()} />
         <Summary label="Unread older than one year" value={report.totals.unreadOlderThanOneYear.toLocaleString()} />
         <Summary label="Recurring senders" value={report.totals.recurringSenders.toLocaleString()} />
-        <Summary label="Potential recovery" value={formatBytes(report.totals.estimatedRecoverableBytes)} />
+        <Summary
+          label="Potential recovery"
+          value={sizeAvailable ? formatBytes(report.totals.estimatedRecoverableBytes) : "Unavailable"}
+        />
       </section>
       <section className="mt-6 grid gap-4 md:grid-cols-3" aria-label="Category summary">
         {report.categories.slice(0, 9).map((category) => (
-          <CategoryCard category={category} key={category.category} />
+          <CategoryCard category={category} key={category.category} sizeAvailable={sizeAvailable} />
         ))}
       </section>
     </>
   );
 }
 
-function SendersView({ report }: { report: InboxReport }) {
+function SendersView({
+  cleanupAvailable,
+  report,
+  sizeAvailable
+}: {
+  cleanupAvailable: boolean;
+  report: InboxReport;
+  sizeAvailable: boolean;
+}) {
   const detailPaneRef = useRef<HTMLDivElement>(null);
   const [workspace, dispatch] = useReducer(
     (state: ReturnType<typeof createSenderWorkspaceState>, action: Parameters<typeof reduceSenderWorkspaceState>[2]) =>
@@ -229,7 +257,7 @@ function SendersView({ report }: { report: InboxReport }) {
           <fieldset className="m-0 border-0 p-0">
             <legend className="mb-2 text-sm font-bold text-[var(--navy)]">Sort senders</legend>
             <div className="flex flex-wrap gap-2">
-              {senderSortOptions.map((option) => (
+              {senderSortOptions.filter((option) => sizeAvailable || option.value !== "storage").map((option) => (
                 <button
                   aria-pressed={workspace.sortKey === option.value}
                   className={`rounded-md border px-3 py-2 text-sm font-bold focus-ring ${workspace.sortKey === option.value ? "border-[var(--teal)] bg-[var(--soft)] text-[var(--navy)]" : "border-[var(--line)] bg-white text-[var(--muted)]"}`}
@@ -255,7 +283,7 @@ function SendersView({ report }: { report: InboxReport }) {
                 onSelect={() => selectSender(sender.senderKey)}
               />
               {sender.senderKey === selectedSender?.senderKey ? (
-                <SenderDetail allSenders={report.senders} embedded sender={sender} />
+                <SenderDetail allSenders={report.senders} cleanupAvailable={cleanupAvailable} embedded sender={sender} />
               ) : null}
             </Fragment>
           ))}
@@ -307,7 +335,9 @@ function SendersView({ report }: { report: InboxReport }) {
                     <td className="p-4 text-right">{sender.reviewMessages.toLocaleString()}</td>
                     <td className="p-4 text-right">{sender.protectedMessages.toLocaleString()}</td>
                     <td className="p-4">{formatDate(sender.oldestMessageAt)}</td>
-                    <td className="p-4 text-right">{formatBytes(sender.estimatedEligibleBytes)}</td>
+                    <td className="p-4 text-right">
+                      {sizeAvailable ? formatBytes(sender.estimatedEligibleBytes) : "Unavailable"}
+                    </td>
                     <td className="p-4">
                       <span className="badge">{recommendationLabel(sender.cleanupConfidence)}</span>
                     </td>
@@ -332,7 +362,7 @@ function SendersView({ report }: { report: InboxReport }) {
         tabIndex={0}
       >
         {selectedSender ? (
-          <SenderDetail allSenders={report.senders} sender={selectedSender} />
+          <SenderDetail allSenders={report.senders} cleanupAvailable={cleanupAvailable} sender={selectedSender} />
         ) : (
           <EmptySenderDetail filtered={Boolean(workspace.search)} />
         )}
@@ -381,11 +411,17 @@ function SenderMobileRow({
   );
 }
 
-function CategoriesView({ categories }: { categories: CategoryAggregate[] }) {
+function CategoriesView({
+  categories,
+  sizeAvailable
+}: {
+  categories: CategoryAggregate[];
+  sizeAvailable: boolean;
+}) {
   return (
     <section className="grid gap-4 md:grid-cols-3" aria-label="Category analysis">
       {categories.map((category) => (
-        <CategoryCard category={category} key={category.category} />
+        <CategoryCard category={category} key={category.category} sizeAvailable={sizeAvailable} />
       ))}
     </section>
   );
@@ -418,7 +454,7 @@ function OldMailView({ senders }: { senders: SenderAggregate[] }) {
   );
 }
 
-function CategoryCard({ category }: { category: CategoryAggregate }) {
+function CategoryCard({ category, sizeAvailable }: { category: CategoryAggregate; sizeAvailable: boolean }) {
   return (
     <section className="panel p-5">
       <div className="flex items-start justify-between gap-3">
@@ -450,7 +486,9 @@ function CategoryCard({ category }: { category: CategoryAggregate }) {
         </div>
         <div className="flex justify-between gap-4">
           <dt className="muted">Estimated size</dt>
-          <dd className="m-0 font-bold">{formatBytes(category.estimatedBytes)}</dd>
+          <dd className="m-0 font-bold">
+            {sizeAvailable ? formatBytes(category.estimatedBytes) : "Unavailable"}
+          </dd>
         </div>
       </dl>
     </section>
@@ -469,10 +507,12 @@ function Summary({ label, value }: { label: string; value: string }) {
 function SenderDetail({
   sender,
   allSenders,
+  cleanupAvailable,
   embedded = false
 }: {
   sender: SenderAggregate;
   allSenders: SenderAggregate[];
+  cleanupAvailable: boolean;
   embedded?: boolean;
 }) {
   return (
@@ -518,7 +558,12 @@ function SenderDetail({
           When we&apos;re unsure, we leave them alone.
         </p>
       </div>
-      {canCleanSender(sender) ? (
+      {!cleanupAvailable ? (
+        <div className="mt-6 rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-center">
+          <p className="m-0 font-extrabold text-[var(--navy)]">Outlook cleanup is not available yet</p>
+          <p className="muted m-0 mt-1 text-sm">This Inbox Report is read-only.</p>
+        </div>
+      ) : canCleanSender(sender) ? (
         <Link href="/app/cleanup" className="btn btn-primary focus-ring mt-6 w-full">
           Review {sender.cleanupCandidateCount.toLocaleString()} emails
         </Link>

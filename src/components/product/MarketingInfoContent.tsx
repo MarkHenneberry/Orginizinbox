@@ -1,13 +1,19 @@
 import Link from "next/link";
+import { runtimeConfig } from "@/lib/config";
 import { providerAvailability } from "@/lib/providers/availability";
+import { isMicrosoftOAuthDevelopmentUiEnabled } from "@/lib/providers/microsoft/development-access";
 import { getMarketingPagesBySlugs } from "@/lib/marketing-pages";
 import type { MarketingPage } from "@/lib/marketing-pages";
 import type { PublicPrimaryCta } from "@/lib/server/app-state";
 
 export function MarketingInfoContent({ page, appContext = false, primaryCta }: { page: MarketingPage; appContext?: boolean; primaryCta?: PublicPrimaryCta }) {
-  const cta = appContext ? { href: "/app/data-access", label: "Data access" } : (primaryCta ?? { href: "/connect/google", label: page.cta });
+  const cta = appContext ? { href: "/app/data-access", label: "Data access" } : (primaryCta ?? { href: "/connect", label: page.cta });
   const relatedPages = getMarketingPagesBySlugs(page.relatedSlugs);
   const outlookUnavailable = page.providerIntent === "outlook" && providerAvailability.microsoft.status === "comingSoon";
+  const outlookDevelopmentConnection = outlookUnavailable && isMicrosoftOAuthDevelopmentUiEnabled(
+    process.env.NODE_ENV,
+    runtimeConfig.microsoftOAuthDevEnabled
+  );
 
   return (
     <main>
@@ -19,8 +25,14 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
             <p className="muted mt-5 max-w-2xl text-lg leading-8">{page.body}</p>
             {outlookUnavailable ? (
               <div className="mt-6 rounded-md border border-[var(--line)] bg-white p-5">
-                <p className="m-0 text-sm font-extrabold text-[var(--navy)]">Outlook support is coming soon.</p>
-                <p className="muted mb-0 mt-2 text-sm">We&apos;re finishing the Outlook version of Organizinbox.</p>
+                <p className="m-0 text-sm font-extrabold text-[var(--navy)]">
+                  {outlookDevelopmentConnection ? "Microsoft connection is available for development testing." : "Outlook support is coming soon."}
+                </p>
+                <p className="muted mb-0 mt-2 text-sm">
+                  {outlookDevelopmentConnection
+                    ? "Read-only Outlook scanning is available for development testing. Cleanup is not enabled yet."
+                    : "We're finishing the Outlook version of Organizinbox."}
+                </p>
               </div>
             ) : null}
             <div className="mt-8 flex flex-wrap gap-3">

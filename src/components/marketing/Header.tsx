@@ -29,9 +29,11 @@ export async function Header() {
             </Link>
           ))}
         </nav>
-        <Link href={cta.href} className="btn btn-primary focus-ring hidden md:inline-flex">
-          {cta.label}
-        </Link>
+        <div className="hidden md:block">
+          <Link href={cta.href} className="btn btn-primary focus-ring">
+            {cta.label}
+          </Link>
+        </div>
         <MobileMarketingMenu cta={cta} links={marketingNavLinks} />
       </div>
     </header>

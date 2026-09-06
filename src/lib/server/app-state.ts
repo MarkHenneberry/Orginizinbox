@@ -4,6 +4,8 @@ import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 import { getLiveScan, hasExpiredLiveScan } from "@/lib/server/live-scan-store";
 import { providerAvailability } from "@/lib/providers/availability";
+import { isMicrosoftOAuthDevelopmentUiEnabled } from "@/lib/providers/microsoft/development-access";
+import { runtimeConfig } from "@/lib/config";
 
 export type AppHomeState =
   | {
@@ -15,15 +17,18 @@ export type AppHomeState =
     }
   | {
       mode: "needs_reconnect";
+      provider: "gmail" | "microsoft";
       reason: string;
     }
   | {
       mode: "connected_no_report";
+      provider: "gmail" | "microsoft";
       accountEmail?: string;
       reportExpired: boolean;
     }
   | {
       mode: "connected_active_report";
+      provider: "gmail" | "microsoft";
       accountEmail?: string;
       scanId: string;
       reportStale: boolean;
@@ -45,14 +50,19 @@ export async function getAppHomeState(): Promise<AppHomeState> {
     return { mode: "none" };
   }
   if (connection.mode === "needs_reconnect") {
-    return { mode: "needs_reconnect", reason: connection.reason };
+    return { mode: "needs_reconnect", provider: connection.provider, reason: connection.reason };
   }
 
-  const liveScan = getLiveScan(connection.userId);
-  if (liveScan?.report && liveScan.progress.status === "completed") {
+  const liveScan = await getLiveScan(connection.userId, connection.provider);
+  if (
+    liveScan?.report &&
+    liveScan.progress.status === "completed" &&
+    liveScan.progress.provider === connection.provider
+  ) {
     const report = sanitizeReportForClient(liveScan.report);
     return {
       mode: "connected_active_report",
+      provider: connection.provider,
       accountEmail: connection.accountEmail,
       scanId: liveScan.progress.scanId,
       reportStale: liveScan.reportStale === true,
@@ -65,8 +75,9 @@ export async function getAppHomeState(): Promise<AppHomeState> {
 
   return {
     mode: "connected_no_report",
+    provider: connection.provider,
     accountEmail: connection.accountEmail,
-    reportExpired: hasExpiredLiveScan(connection.userId)
+    reportExpired: await hasExpiredLiveScan(connection.userId, connection.provider)
   };
 }
 
@@ -83,13 +94,22 @@ export async function getPublicPrimaryCta(intent: PublicCtaIntent = "generic"): 
     return { href: "/app/report", label: "Return to Inbox Report" };
   }
   if (state.mode === "connected_no_report") {
-    return { href: "/app/scan", label: "Scan my inbox" };
+    return state.provider === "microsoft"
+      ? { href: "/app/scan", label: "Scan Outlook inbox" }
+      : { href: "/app/scan", label: "Scan my inbox" };
   }
   if (state.mode === "needs_reconnect") {
-    return { href: "/connect/google", label: "Reconnect Gmail" };
+    return state.provider === "microsoft"
+      ? { href: "/connect/microsoft", label: "Reconnect Microsoft" }
+      : { href: "/connect/google", label: "Reconnect Gmail" };
   }
   if (intent === "outlook" && providerAvailability.microsoft.status === "comingSoon") {
+    if (isMicrosoftOAuthDevelopmentUiEnabled(process.env.NODE_ENV, runtimeConfig.microsoftOAuthDevEnabled)) {
+      return { href: "/connect/microsoft", label: "Connect Outlook" };
+    }
     return { href: "/guides", label: "Explore cleanup guides" };
   }
-  return { href: "/connect/google", label: "Clean my inbox" };
+  return intent === "gmail"
+    ? { href: "/connect/google", label: "Clean my inbox" }
+    : { href: "/connect", label: "Clean my inbox" };
 }

@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const disconnectMock = vi.hoisted(() => ({
-  disconnectCurrentGmailSession: vi.fn(async () => ({ disconnected: true }))
+  disconnectCurrentProviderSession: vi.fn(async () => ({ disconnected: true }))
 }));
 
 vi.mock("@/lib/server/disconnect", () => disconnectMock);
 
 describe("app disconnect route", () => {
   beforeEach(() => {
-    disconnectMock.disconnectCurrentGmailSession.mockClear();
+    disconnectMock.disconnectCurrentProviderSession.mockClear();
   });
 
   it("does not disconnect on GET", async () => {
@@ -19,7 +19,7 @@ describe("app disconnect route", () => {
     expect(response.status).toBe(405);
     expect(response.headers.get("Allow")).toBe("POST");
     expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
-    expect(disconnectMock.disconnectCurrentGmailSession).not.toHaveBeenCalled();
+    expect(disconnectMock.disconnectCurrentProviderSession).not.toHaveBeenCalled();
   });
 
   it("rejects cross-origin or missing-origin POST requests without disconnecting", async () => {
@@ -35,7 +35,7 @@ describe("app disconnect route", () => {
 
     expect(missingOrigin.status).toBe(403);
     expect(crossOrigin.status).toBe(403);
-    expect(disconnectMock.disconnectCurrentGmailSession).not.toHaveBeenCalled();
+    expect(disconnectMock.disconnectCurrentProviderSession).not.toHaveBeenCalled();
   });
 
   it("disconnects on same-origin POST and redirects to the public homepage", async () => {
@@ -48,7 +48,7 @@ describe("app disconnect route", () => {
       })
     );
 
-    expect(disconnectMock.disconnectCurrentGmailSession).toHaveBeenCalledTimes(1);
+    expect(disconnectMock.disconnectCurrentProviderSession).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("http://localhost:3000/");
     expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");

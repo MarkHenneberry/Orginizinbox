@@ -217,6 +217,8 @@ const recommendationReasonCopy: Record<CleanupReason, string> = {
   PROTECTED_PERSONAL: "Personal messages are protected",
   PROTECTED_SENT: "Sent messages are protected",
   PROTECTED_DRAFT: "Drafts are protected",
+  PROTECTED_MAILBOX_LOCATION: "Messages outside cleanup-eligible mailbox locations are protected",
+  PROTECTED_INCOMPLETE_METADATA: "Messages with incomplete safety metadata are protected",
   PROTECTED_SENDER: "This sender is protected",
   PROTECTED_TRANSACTIONAL_SUBJECT: "Looks like this message may contain a receipt or account record",
   PROTECTED_SECURITY_ACCOUNT_SUBJECT: "Looks like this message may contain an account or security notice",

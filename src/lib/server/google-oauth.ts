@@ -282,36 +282,27 @@ export async function upsertGoogleConnection(tokens: VerifiedGoogleTokenResponse
   const encryptedRefreshToken = tokens.refresh_token ? encryptSecret(tokens.refresh_token) : undefined;
   const encryptedAccountEmail = profile.email ? encryptSecret(profile.email.toLowerCase()) : undefined;
 
-  const user = await prisma.user.upsert({
-    where: emailHash ? { emailHash } : { emailHash: providerIdentityHash },
-    update: {},
-    create: {
-      emailHash: emailHash ?? providerIdentityHash
-    }
-  });
-
-  const existingConnection = await prisma.providerConnection.findFirst({
-    where: {
-      userId: user.id,
-      provider: "gmail"
-    }
-  });
-
-  const connection = existingConnection
-    ? await prisma.providerConnection.update({
-        where: { id: existingConnection.id },
-        data: {
+  return prisma.$transaction(async (transaction) => {
+    const user = await transaction.user.upsert({
+      where: emailHash ? { emailHash } : { emailHash: providerIdentityHash },
+      update: {},
+      create: { emailHash: emailHash ?? providerIdentityHash }
+    });
+    const connection = await transaction.providerConnection.upsert({
+      where: { userId_provider: { userId: user.id, provider: "gmail" } },
+      update: {
           mailboxExternalIdHash: providerIdentityHash,
-          encryptedAccountEmail: encryptedAccountEmail ?? existingConnection.encryptedAccountEmail,
+          ...(encryptedAccountEmail ? { encryptedAccountEmail } : {}),
           encryptedAccessToken,
-          encryptedRefreshToken: encryptedRefreshToken ?? existingConnection.encryptedRefreshToken,
+          ...(encryptedRefreshToken ? { encryptedRefreshToken } : {}),
           tokenExpiresAt,
           scope: tokens.scope,
-          disconnectedAt: null
-        }
-      })
-    : await prisma.providerConnection.create({
-        data: {
+          disconnectedAt: null,
+          tokenVersion: { increment: 1 },
+          refreshLeaseOwner: null,
+          refreshLeaseExpiresAt: null
+      },
+      create: {
           userId: user.id,
           provider: "gmail",
           mailboxExternalIdHash: providerIdentityHash,
@@ -320,10 +311,10 @@ export async function upsertGoogleConnection(tokens: VerifiedGoogleTokenResponse
           encryptedRefreshToken,
           tokenExpiresAt,
           scope: tokens.scope
-        }
-      });
-
-  return { user, connection };
+      }
+    });
+    return { user, connection };
+  });
 }
 
 export class GmailImapScopeNotGrantedError extends Error {

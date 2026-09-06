@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const microsoftTenantSchema = z.string().trim().min(1).max(255).regex(
+  /^(?:common|organizations|consumers|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9](?:[a-z0-9.-]{0,253}[a-z0-9])?)$/i,
+  "MICROSOFT_TENANT_ID must be common, organizations, consumers, a tenant GUID, or a tenant domain."
+);
+
 const envSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().default("https://organizinbox.com"),
   ORGANIZINBOX_FIXTURE_MODE: z.enum(["true", "false"]).default("true"),
@@ -28,9 +33,13 @@ const envSchema = z.object({
   GMAIL_IMAP_PORT: z.coerce.number().default(993),
   MICROSOFT_CLIENT_ID: z.string().optional(),
   MICROSOFT_CLIENT_SECRET: z.string().optional(),
-  MICROSOFT_TENANT_ID: z.string().default("common"),
+  MICROSOFT_TENANT_ID: microsoftTenantSchema.default("common"),
   MICROSOFT_REDIRECT_URI: z.string().optional(),
   MICROSOFT_OAUTH_DEV_ENABLED: z.enum(["true", "false"]).default("false"),
+  OUTLOOK_IMAP_BENCHMARK_DEV_ENABLED: z.enum(["true", "false"]).default("false"),
+  OUTLOOK_IMAP_HOST: z.string().default("outlook.office365.com"),
+  OUTLOOK_IMAP_PORT: z.coerce.number().int().min(1).max(65535).default(993),
+  OUTLOOK_CLEANUP_DEV_ENABLED: z.enum(["true", "false"]).default("false"),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_PRICE_FULL_RESET_USD: z.string().optional()
 });
@@ -76,7 +85,9 @@ export const runtimeConfig = {
   cleanupStateUndoTtlSeconds: env.CLEANUP_STATE_UNDO_TTL_SECONDS,
   cleanupStateTerminalTtlSeconds: env.CLEANUP_STATE_TERMINAL_TTL_SECONDS,
   cleanupStateLockTtlSeconds: env.CLEANUP_STATE_LOCK_TTL_SECONDS,
-  microsoftOAuthDevEnabled: env.MICROSOFT_OAUTH_DEV_ENABLED === "true"
+  microsoftOAuthDevEnabled: env.MICROSOFT_OAUTH_DEV_ENABLED === "true",
+  outlookImapBenchmarkDevEnabled: env.OUTLOOK_IMAP_BENCHMARK_DEV_ENABLED === "true",
+  outlookCleanupDevEnabled: env.OUTLOOK_CLEANUP_DEV_ENABLED === "true"
 };
 
 export function requireGoogleOAuthConfig() {

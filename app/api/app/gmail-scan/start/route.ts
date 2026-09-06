@@ -1,6 +1,6 @@
 import { createGmailScanSession } from "@/lib/server/gmail-benchmark";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
-import { clearLiveScan, reuseRunningLiveScan, serializeScanProgress } from "@/lib/server/live-scan-store";
+import { serializeScanProgress } from "@/lib/server/live-scan-store";
 import { getSession } from "@/lib/server/session";
 
 export async function POST() {
@@ -11,16 +11,12 @@ export async function POST() {
     const activeConnection = await getActiveGmailConnection(session.userId, session.providerConnectionId);
     if (!activeConnection) return Response.json({ error: "Connect Gmail before scanning." }, { status: 401 });
 
-    const running = reuseRunningLiveScan(session.userId);
-    if (running) return Response.json({ progress: serializeScanProgress(running.progress), reused: true });
-
-    clearLiveScan(session.userId);
-    const progress = createGmailScanSession({
+    const accepted = await createGmailScanSession({
       userId: session.userId,
-      providerConnectionId: session.providerConnectionId
+      providerConnectionId: activeConnection.connection.id
     });
 
-    return Response.json({ progress: serializeScanProgress(progress) });
+    return Response.json({ progress: serializeScanProgress(accepted.progress), reused: accepted.reused });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Gmail scan could not be started." }, { status: 403 });
   }

@@ -25,7 +25,9 @@ export default async function ProductLayout({ children }: { children: React.Reac
             <span>Organizinbox</span>
           </Link>
           <nav className="flex flex-wrap items-center gap-2 text-sm font-bold text-[var(--navy)]" aria-label="Application navigation">
-            {connection.mode === "connected" ? <span className="badge">Gmail connected</span> : null}
+            {connection.mode === "connected" ? (
+              <span className="badge">{connection.provider === "gmail" ? "Gmail" : "Microsoft"} connected</span>
+            ) : null}
             <Link className="rounded-md px-3 py-2 hover:bg-[var(--soft)]" href="/app/help">
               Help
             </Link>

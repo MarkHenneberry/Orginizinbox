@@ -73,7 +73,7 @@ const googleMocks = vi.hoisted(() => {
 });
 
 vi.mock("server-only", () => ({}));
-vi.mock("next/headers", () => ({
+vi.mock("next/headers.js", () => ({
   cookies: cookieHarness.cookies
 }));
 vi.mock("@/lib/server/google-oauth", () => googleMocks);

@@ -10,7 +10,7 @@ export async function GET() {
     const session = await getSession();
     if (!session?.userId) return Response.json({ error: "Not connected.", progress: null }, { status: 401 });
 
-    const liveScan = getLiveScan(session.userId);
+    const liveScan = await getLiveScan(session.userId, "gmail");
     return Response.json({
       progress: liveScan ? serializeBenchmark(liveScan.progress) : null,
       report: liveScan?.report ? sanitizeReportForClient(liveScan.report) : null

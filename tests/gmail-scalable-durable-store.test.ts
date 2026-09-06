@@ -14,12 +14,14 @@ import {
 } from "@/lib/server/crypto";
 import {
   CleanupStateIntegrityError,
+  PrismaCleanupJobStore,
   PrismaGmailScalableCleanupStore,
   cleanupStateExpiryFor,
   createCleanupJobStateCodec,
   deleteDurableGmailScalableCleanupStateForUser,
   type CleanupJobStateRepository,
-  type CleanupJobStateRow
+  type CleanupJobStateRow,
+  type DurableCleanupJobEnvelope
 } from "@/lib/server/gmail-scalable-cleanup-durable-store";
 import type { GmailScalableStoredJob } from "@/lib/server/gmail-scalable-cleanup-store";
 import {
@@ -35,6 +37,30 @@ const codec = createCleanupJobStateCodec({
 });
 
 describe("durable scalable cleanup Workflow boundary", () => {
+  it("advances two users' cleanup Workflows concurrently without sharing locks or state", async () => {
+    const repository = new FakeCleanupJobStateRepository();
+    const store = new PrismaGmailScalableCleanupStore(repository, codec);
+    await Promise.all([
+      store.create(storedJob("job-user-a", "user-a")),
+      store.create(storedJob("job-user-b", "user-b"))
+    ]);
+    const executor = new FakeWorkflowExecutor();
+
+    const [resultA, resultB] = await Promise.all([
+      new GmailScalableWorkflowCoordinator(store, executor, Date.now, () => "worker-a")
+        .advance("job-user-a", "cleanup"),
+      new GmailScalableWorkflowCoordinator(store, executor, Date.now, () => "worker-b")
+        .advance("job-user-b", "cleanup")
+    ]);
+
+    expect(resultA).toMatchObject({ outcome: "continue", operation: "dispatch_trash", status: "verifying" });
+    expect(resultB).toMatchObject({ outcome: "continue", operation: "dispatch_trash", status: "verifying" });
+    expect(executor.trashMutationCalls).toBe(2);
+    expect((await store.get("user-a", "job-user-a"))?.view.status).toBe("verifying");
+    expect((await store.get("user-b", "job-user-b"))?.view.status).toBe("verifying");
+    expect(await store.get("user-a", "job-user-b")).toBeUndefined();
+  });
+
   it("persists dispatch intent before mutation and does not duplicate it after process replacement", async () => {
     const repository = new FakeCleanupJobStateRepository();
     const storeA = new PrismaGmailScalableCleanupStore(repository, codec);
@@ -159,6 +185,51 @@ describe("durable scalable cleanup Workflow boundary", () => {
 });
 
 describe("Prisma scalable cleanup transient store", () => {
+  it("locks concurrent Gmail and Outlook jobs independently for separate users", async () => {
+    const repository = new FakeCleanupJobStateRepository();
+    const isolationCodec = createCleanupJobStateCodec<IsolationJob>({
+      encrypt: (value) => encryptCleanupStateWithKey(value, key),
+      decrypt: (value) => decryptCleanupStateWithKey(value, key)
+    });
+    const store = new PrismaCleanupJobStore<IsolationJob>(repository, isolationCodec);
+    await Promise.all([
+      store.create(isolationJob("gmail-job", "user-gmail", "gmail")),
+      store.create(isolationJob("outlook-job", "user-outlook", "microsoft"))
+    ]);
+
+    const [gmailClaim, outlookClaim] = await Promise.all([
+      store.claim("gmail-job", "gmail-worker"),
+      store.claim("outlook-job", "outlook-worker")
+    ]);
+
+    expect(gmailClaim).toMatchObject({ userId: "user-gmail", provider: "gmail" });
+    expect(outlookClaim).toMatchObject({ userId: "user-outlook", provider: "microsoft" });
+    expect(await store.get("user-gmail", "outlook-job")).toBeUndefined();
+    expect(await store.get("user-outlook", "gmail-job")).toBeUndefined();
+  });
+
+  it("keeps multiple jobs available across independent replacement process stores", async () => {
+    const repository = new FakeCleanupJobStateRepository();
+    const firstProcess = new PrismaGmailScalableCleanupStore(repository, codec);
+    await Promise.all([
+      firstProcess.create(storedJob("job-a", "user-a")),
+      firstProcess.create(storedJob("job-b", "user-b")),
+      firstProcess.create(storedJob("job-c", "user-c"))
+    ]);
+
+    const replacementA = new PrismaGmailScalableCleanupStore(repository, codec);
+    const replacementB = new PrismaGmailScalableCleanupStore(repository, codec);
+    const [claimedA, claimedB] = await Promise.all([
+      replacementA.claim("job-a", "replacement-a"),
+      replacementB.claim("job-b", "replacement-b")
+    ]);
+
+    expect(claimedA?.userId).toBe("user-a");
+    expect(claimedB?.userId).toBe("user-b");
+    expect((await replacementA.get("user-c", "job-c"))?.userId).toBe("user-c");
+    expect(await replacementA.get("user-a", "job-b")).toBeUndefined();
+  });
+
   it("round-trips one application-encrypted job payload without storing plaintext Gmail IDs", async () => {
     const repository = new FakeCleanupJobStateRepository();
     const store = new PrismaGmailScalableCleanupStore(repository, codec);
@@ -286,6 +357,20 @@ describe("Prisma scalable cleanup transient store", () => {
     expect(schema.match(/model CleanupJobState/g)).toHaveLength(1);
   });
 });
+
+type IsolationJob = DurableCleanupJobEnvelope & {
+  provider: "gmail" | "microsoft";
+  view: DurableCleanupJobEnvelope["view"] & { status: "running" };
+};
+
+function isolationJob(jobId: string, userId: string, provider: IsolationJob["provider"]): IsolationJob {
+  return {
+    provider,
+    userId,
+    version: 0,
+    view: { id: jobId, status: "running", expiresAt: Date.now() + 60_000 }
+  };
+}
 
 export class FakeCleanupJobStateRepository implements CleanupJobStateRepository {
   readonly rows = new Map<string, CleanupJobStateRow>();

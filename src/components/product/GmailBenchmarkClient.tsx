@@ -8,7 +8,7 @@ import { OperationStatus } from "@/components/product/OperationStatus";
 type BenchmarkLimit = 5000 | 10000 | 25000 | 50000 | 100000 | "full";
 type BenchmarkProgress = {
   scanId: string;
-  provider: "gmail";
+  provider: "gmail" | "microsoft";
   status: "idle" | "running" | "completed" | "failed" | "cancelled";
   limit: BenchmarkLimit;
   batchSize: number;

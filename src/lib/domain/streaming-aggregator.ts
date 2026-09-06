@@ -324,6 +324,7 @@ function updateSenderDiagnostics(bucket: SenderBucket, message: ClassifiedMessag
   signals.recentMessages += message.ageBand === "recent" ? 1 : 0;
   signals.sentMessages += message.isSent ? 1 : 0;
   signals.draftMessages += message.isDraft ? 1 : 0;
+  signals.deletedItemsMessages += message.isDeleted ? 1 : 0;
   signals.personalMessages += message.mailClass === "PERSONAL" ? 1 : 0;
   signals.participatedConversationMessages += message.protectionReasons.includes(
     "PROTECTED_USER_PARTICIPATED_CONVERSATION"
@@ -389,6 +390,7 @@ function createMessageSignalDiagnostics(): SenderClassifierDiagnostics["messageS
     recentMessages: 0,
     sentMessages: 0,
     draftMessages: 0,
+    deletedItemsMessages: 0,
     personalMessages: 0,
     participatedConversationMessages: 0,
     userLabelMessages: 0,

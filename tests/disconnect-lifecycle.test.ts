@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   clearGmailCleanupJobsForUser: vi.fn(),
   clearGmailScalableCleanupJobsForUser: vi.fn(),
-  clearDurableGmailScalableCleanupStateForUser: vi.fn(),
+  clearDurableProviderCleanupStateForUser: vi.fn(),
   clearLiveScan: vi.fn(),
   clearOAuthStateCookie: vi.fn(),
   clearSessionCookie: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock("@/lib/server/gmail-scalable-cleanup-store", () => ({
   clearGmailScalableCleanupJobsForUser: mocks.clearGmailScalableCleanupJobsForUser
 }));
 vi.mock("@/lib/server/gmail-scalable-cleanup-durable-store", () => ({
-  clearDurableGmailScalableCleanupStateForUser: mocks.clearDurableGmailScalableCleanupStateForUser
+  clearDurableProviderCleanupStateForUser: mocks.clearDurableProviderCleanupStateForUser
 }));
 vi.mock("@/lib/server/google-oauth", () => ({ revokeGoogleToken: mocks.revokeGoogleToken }));
 vi.mock("@/lib/server/live-scan-store", () => ({ clearLiveScan: mocks.clearLiveScan }));
@@ -38,15 +38,26 @@ vi.mock("@/lib/server/session", () => ({
   getSession: mocks.getSession
 }));
 
-import { disconnectCurrentGmailSession, removeCurrentGoogleAuthorization } from "@/lib/server/disconnect";
+import {
+  disconnectCurrentGmailSession,
+  disconnectCurrentProviderSession,
+  removeCurrentGoogleAuthorization
+} from "@/lib/server/disconnect";
 
 const clearedConnectionData = {
   mailboxExternalIdHash: null,
   encryptedAccountEmail: null,
   encryptedAccessToken: null,
   encryptedRefreshToken: null,
+  encryptedImapAccessToken: null,
+  encryptedImapRefreshToken: null,
+  imapTokenExpiresAt: null,
+  imapScope: null,
   tokenExpiresAt: null,
   scope: null,
+  tokenVersion: { increment: 1 },
+  refreshLeaseOwner: null,
+  refreshLeaseExpiresAt: null,
   disconnectedAt: expect.any(Date)
 };
 
@@ -57,12 +68,13 @@ describe("Gmail disconnect lifecycle", () => {
     mocks.getSession.mockResolvedValue({ userId: "user-1", providerConnectionId: "connection-1" });
     mocks.findFirst.mockResolvedValue({
       id: "connection-1",
+      provider: "gmail",
       encryptedRefreshToken: "encrypted-refresh-token",
       encryptedAccessToken: "encrypted-access-token"
     });
     mocks.update.mockResolvedValue({});
     mocks.updateManyCleanupJobs.mockResolvedValue({ count: 0 });
-    mocks.clearDurableGmailScalableCleanupStateForUser.mockResolvedValue(0);
+    mocks.clearDurableProviderCleanupStateForUser.mockResolvedValue(0);
     mocks.revokeGoogleToken.mockResolvedValue({ succeeded: true, status: 200 });
   });
 
@@ -84,16 +96,16 @@ describe("Gmail disconnect lifecycle", () => {
     expect(mocks.revokeGoogleToken).not.toHaveBeenCalled();
     expect(mocks.update).toHaveBeenCalledWith({ where: { id: "connection-1" }, data: clearedConnectionData });
     expect(mocks.clearOAuthStateCookie).toHaveBeenCalledOnce();
-    expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1");
+    expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1", "gmail");
     expect(mocks.clearGmailCleanupJobsForUser).toHaveBeenCalledWith("user-1");
     expect(mocks.clearGmailScalableCleanupJobsForUser).toHaveBeenCalledWith("user-1");
-    expect(mocks.clearDurableGmailScalableCleanupStateForUser).toHaveBeenCalledWith("user-1");
+    expect(mocks.clearDurableProviderCleanupStateForUser).toHaveBeenCalledWith("user-1", "gmail");
     expect(mocks.updateManyCleanupJobs).toHaveBeenNthCalledWith(1, {
-      where: { scan: { userId: "user-1" }, status: { in: ["pending", "running"] } },
+      where: { scan: { userId: "user-1", provider: "gmail" }, status: { in: ["pending", "running"] } },
       data: { status: "cancelled", completedAt: expect.any(Date) }
     });
     expect(mocks.updateManyCleanupJobs).toHaveBeenNthCalledWith(2, {
-      where: { scan: { userId: "user-1" } },
+      where: { scan: { userId: "user-1", provider: "gmail" } },
       data: {
         terminalState: null,
         terminalSnapshot: expect.anything(),
@@ -116,7 +128,7 @@ describe("Gmail disconnect lifecycle", () => {
     expect(mocks.revokeGoogleToken).toHaveBeenCalledWith("decrypted-token");
     expect(mocks.revokeGoogleToken.mock.invocationCallOrder[0]).toBeLessThan(mocks.update.mock.invocationCallOrder[0]);
     expect(mocks.update).toHaveBeenCalledWith({ where: { id: "connection-1" }, data: clearedConnectionData });
-    expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1");
+    expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1", "gmail");
     expect(mocks.clearGmailCleanupJobsForUser).toHaveBeenCalledWith("user-1");
     expect(mocks.clearSessionCookie).toHaveBeenCalledOnce();
   });
@@ -124,6 +136,7 @@ describe("Gmail disconnect lifecycle", () => {
   it("falls back to the access token when remote authorization removal has no refresh token", async () => {
     mocks.findFirst.mockResolvedValueOnce({
       id: "connection-1",
+      provider: "gmail",
       encryptedRefreshToken: null,
       encryptedAccessToken: "encrypted-access-token"
     });
@@ -148,8 +161,30 @@ describe("Gmail disconnect lifecycle", () => {
 
     expect(mocks.update).toHaveBeenCalledWith({ where: { id: "connection-1" }, data: clearedConnectionData });
     expect(mocks.clearOAuthStateCookie).toHaveBeenCalledOnce();
-    expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1");
+    expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1", "gmail");
     expect(mocks.clearGmailCleanupJobsForUser).toHaveBeenCalledWith("user-1");
+    expect(mocks.clearSessionCookie).toHaveBeenCalledOnce();
+  });
+
+  it("disconnects Microsoft locally without revoking or clearing Gmail-specific state", async () => {
+    mocks.findFirst.mockResolvedValueOnce({
+      id: "microsoft-connection",
+      provider: "microsoft",
+      encryptedRefreshToken: "encrypted-microsoft-refresh",
+      encryptedAccessToken: "encrypted-microsoft-access"
+    });
+
+    await expect(disconnectCurrentProviderSession()).resolves.toMatchObject({
+      disconnected: true,
+      mode: "local_disconnect",
+      revocationAttempted: false
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith({ where: { id: "microsoft-connection" }, data: clearedConnectionData });
+    expect(mocks.revokeGoogleToken).not.toHaveBeenCalled();
+    expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1", "microsoft");
+    expect(mocks.clearGmailCleanupJobsForUser).not.toHaveBeenCalled();
+    expect(mocks.clearDurableProviderCleanupStateForUser).toHaveBeenCalledWith("user-1", "microsoft");
     expect(mocks.clearSessionCookie).toHaveBeenCalledOnce();
   });
 

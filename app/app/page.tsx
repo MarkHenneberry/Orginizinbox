@@ -1,8 +1,16 @@
 import Link from "next/link";
+import { runtimeConfig } from "@/lib/config";
+import { isOutlookCleanupDevelopmentEnabled } from "@/lib/domain/outlook-cleanup";
 import { getAppHomeState } from "@/lib/server/app-state";
 
 export default async function AppIndexPage() {
   const state = await getAppHomeState();
+  const outlookCleanupEnabled = isOutlookCleanupDevelopmentEnabled({
+    microsoftOAuthEnabled: runtimeConfig.microsoftOAuthDevEnabled,
+    outlookCleanupEnabled: runtimeConfig.outlookCleanupDevEnabled,
+    fixtureMode: runtimeConfig.fixtureMode,
+    nodeEnv: process.env.NODE_ENV
+  });
 
   return (
     <main className="py-8">
@@ -25,11 +33,9 @@ export default async function AppIndexPage() {
         {state.mode === "none" ? (
           <section className="panel mt-6 p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">No provider connected</h2>
-            <p className="muted">Connect Gmail to scan your inbox. Outlook support is coming soon.</p>
+            <p className="muted">Choose Gmail or review the available Outlook connection option.</p>
             <div className="mt-5 flex flex-wrap gap-3">
-              <Link className="btn btn-primary focus-ring" href="/connect/google">
-                Connect Gmail
-              </Link>
+              <Link className="btn btn-primary focus-ring" href="/connect">Connect an inbox</Link>
               <Link className="btn btn-secondary focus-ring" href="/outlook-cleaner">
                 Outlook support
               </Link>
@@ -39,17 +45,38 @@ export default async function AppIndexPage() {
 
         {state.mode === "needs_reconnect" ? (
           <section className="panel mt-6 p-6">
-            <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Gmail connection needs attention</h2>
-            <p className="muted">Reconnect Gmail, then approve access when Google asks.</p>
-            <form action="/api/oauth/google/start" method="get">
-              <button className="btn btn-primary focus-ring mt-4" type="submit">
-                Reconnect Gmail
-              </button>
-            </form>
+            <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">{state.provider === "gmail" ? "Gmail" : "Microsoft"} connection needs attention</h2>
+            <p className="muted">{state.reason}</p>
+            {state.provider === "gmail" ? (
+              <form action="/api/oauth/google/start" method="get">
+                <button className="btn btn-primary focus-ring mt-4" type="submit">Reconnect Gmail</button>
+              </form>
+            ) : (
+              <form action="/api/oauth/microsoft/start" method="get">
+                <button className="btn btn-primary focus-ring mt-4" type="submit">Reconnect Microsoft</button>
+              </form>
+            )}
           </section>
         ) : null}
 
-        {state.mode === "connected_no_report" ? (
+        {state.mode === "connected_no_report" && state.provider === "microsoft" ? (
+          <section className="panel mt-6 p-6">
+            <p className="eyebrow">Microsoft connected</p>
+            <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">Ready to scan Outlook</h2>
+            <p className="muted">
+              {state.accountEmail ? `${state.accountEmail} is connected. ` : "Your Microsoft account is connected. "}
+              {outlookCleanupEnabled
+                ? "Scanning is read-only. Development cleanup can move up to 500 reviewed messages to Deleted Items."
+                : "Scanning is read-only. Outlook cleanup is not available yet."}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Link className="btn btn-primary focus-ring" href="/app/scan">Scan Outlook inbox</Link>
+              <Link className="btn btn-secondary focus-ring" href="/app/account">Account</Link>
+            </div>
+          </section>
+        ) : null}
+
+        {state.mode === "connected_no_report" && state.provider === "gmail" ? (
           <section className="panel mt-6 p-6">
             <p className="eyebrow">Gmail connected</p>
             <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{state.reportExpired ? "Your Inbox Report has expired" : "Ready to scan your inbox"}</h2>
@@ -70,14 +97,14 @@ export default async function AppIndexPage() {
 
         {state.mode === "connected_active_report" ? (
           <section className="panel mt-6 p-6">
-            <p className="eyebrow">Gmail connected</p>
+            <p className="eyebrow">{state.provider === "microsoft" ? "Microsoft connected" : "Gmail connected"}</p>
             <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">
               {state.reportStale ? "Your Inbox Report needs a refresh" : "Your Inbox Report is ready"}
             </h2>
-            <p className="muted">{state.accountEmail ? `${state.accountEmail} is connected.` : "Your Gmail account is connected."}</p>
+            <p className="muted">{state.accountEmail ? `${state.accountEmail} is connected.` : `Your ${state.provider === "microsoft" ? "Microsoft" : "Gmail"} account is connected.`}</p>
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <Metric label="Emails analyzed" value={state.summary.messages.toLocaleString()} />
-              <Metric label="Emails you may want to clean" value={state.summary.cleanupCandidates.toLocaleString()} />
+              <Metric label="Suggested emails" value={state.summary.cleanupCandidates.toLocaleString()} />
             </div>
             <div className="mt-5 flex flex-wrap gap-3">
               <Link className="btn btn-primary focus-ring" href="/app/report">

@@ -9,7 +9,16 @@ import {
   type GmailScalableScanIdentity
 } from "@/lib/providers/gmail/scalable-targets";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
-import { createProgress, nextExpiry, setLiveScan, type BenchmarkLimit, type BenchmarkProgress } from "@/lib/server/live-scan-store";
+import {
+  acceptLiveScan,
+  createProgress,
+  getLiveScanExecutionContext,
+  nextExpiry,
+  setLiveScan,
+  type BenchmarkLimit,
+  type BenchmarkProgress
+} from "@/lib/server/live-scan-store";
+import { startProviderScanWorkflow } from "@/lib/server/provider-scan-workflow-start";
 
 export const benchmarkLimits = [5000, 10000, 25000, 50000, 100000, "full"] as const;
 export const normalGmailScanDefaults = {
@@ -27,40 +36,33 @@ export function isBenchmarkLimit(value: unknown): value is BenchmarkLimit {
   return benchmarkLimits.includes(value as BenchmarkLimit);
 }
 
-export function createGmailBenchmarkSession(input: {
+export async function createGmailBenchmarkSession(input: {
   userId: string;
-  providerConnectionId?: string;
+  providerConnectionId: string;
   limit: BenchmarkLimit;
   batchSize: number;
 }) {
-  const cancel = new AbortController();
   const progress = createProgress({
     scanId: randomUUID(),
     limit: input.limit,
     batchSize: input.batchSize
   });
 
-  setLiveScan(input.userId, {
-    progress,
-    cancel,
-    expiresAt: nextExpiry()
-  });
-
-  void runGmailBenchmark({
+  const accepted = await acceptLiveScan({
     userId: input.userId,
     providerConnectionId: input.providerConnectionId,
-    limit: input.limit,
-    batchSize: input.batchSize,
+    session: {
     progress,
-    signal: cancel.signal
+    expiresAt: nextExpiry()
+    }
   });
-
-  return progress;
+  await startProviderScanWorkflow(accepted.session.progress.scanId);
+  return { progress: accepted.session.progress, reused: accepted.reused };
 }
 
 export function createGmailScanSession(input: {
   userId: string;
-  providerConnectionId?: string;
+  providerConnectionId: string;
 }) {
   return createGmailBenchmarkSession({
     userId: input.userId,
@@ -69,13 +71,36 @@ export function createGmailScanSession(input: {
   });
 }
 
-async function runGmailBenchmark(input: {
+export async function runGmailBenchmark(input: { scanId: string; lockOwner: string }) {
+  const context = await getLiveScanExecutionContext(input.scanId);
+  if (!context || context.lockOwner !== input.lockOwner || context.session.progress.provider !== "gmail") return;
+  const progress = createProgress({
+    scanId: input.scanId,
+    limit: context.session.progress.limit,
+    batchSize: context.session.progress.batchSize,
+    provider: "gmail"
+  });
+  progress.duplicateStartCount = context.session.progress.duplicateStartCount;
+  await setLiveScan(context.userId, { progress, expiresAt: nextExpiry() }, "gmail", input.lockOwner);
+  return executeGmailBenchmark({
+    userId: context.userId,
+    providerConnectionId: context.providerConnectionId,
+    limit: progress.limit,
+    batchSize: progress.batchSize,
+    progress,
+    signal: new AbortController().signal,
+    lockOwner: input.lockOwner
+  });
+}
+
+async function executeGmailBenchmark(input: {
   userId: string;
-  providerConnectionId?: string;
+  providerConnectionId: string;
   limit: BenchmarkLimit;
   batchSize: number;
   progress: BenchmarkProgress;
   signal: AbortSignal;
+  lockOwner: string;
 }) {
   const started = performance.now();
   let protectionClassificationMs = 0;
@@ -147,6 +172,7 @@ async function runGmailBenchmark(input: {
           subjectProtectionMs
       );
       input.progress.approxMemoryMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+      await setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "gmail", input.lockOwner);
     }
 
     input.progress.status = "completed";
@@ -170,7 +196,7 @@ async function runGmailBenchmark(input: {
     input.progress.messagesPerMinute = Math.round((input.progress.messagesPerSecond ?? 0) * 60);
 
     const report = aggregator.snapshot("gmail", false);
-    setLiveScan(input.userId, {
+    await setLiveScan(input.userId, {
       progress: input.progress,
       report,
       participatedConversationIds,
@@ -179,9 +205,8 @@ async function runGmailBenchmark(input: {
         scalableIdentityBridgeAvailable && gmailUidValidity
           ? buildScalableCleanupTargets(report.senders, eligibleIdentities)
           : undefined,
-      cancel: new AbortController(),
       expiresAt: nextExpiry()
-    });
+    }, "gmail", input.lockOwner);
   } catch (error) {
     input.progress.completedAt = Date.now();
     input.progress.durationMs = Math.round(performance.now() - started);
@@ -192,6 +217,7 @@ async function runGmailBenchmark(input: {
     }
     input.progress.status = "failed";
     input.progress.errors.push(safeErrorMessage(error));
+    await setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "gmail", input.lockOwner);
   }
 }
 

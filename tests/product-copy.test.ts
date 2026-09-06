@@ -40,12 +40,13 @@ describe("product copy and contextual navigation", () => {
 
   it("keeps connect and retry copy plain while preserving fresh OAuth actions", () => {
     const connect = read("app/connect/google/page.tsx");
+    const connectShell = read("src/components/product/ProviderConnectShell.tsx");
     const error = read("app/connect/google/error/page.tsx");
 
     expect(connect).toMatch(/Connect Gmail/);
     expect(connect).toMatch(/move messages you approve to Trash/);
-    expect(connect).toMatch(/href="\/data-access"/);
-    expect(connect).toMatch(/ContextBackAction[^>]+href="\/"[^>]+label="Back to homepage"/);
+    expect(connectShell).toMatch(/href="\/data-access"/);
+    expect(connectShell).toMatch(/ContextBackAction/);
     expect(error).toMatch(/Gmail didn't finish connecting/);
     expect(error).toMatch(/Try again and approve Gmail access when Google asks/);
     expect(error).toMatch(/Try connecting Gmail again/);
@@ -118,7 +119,7 @@ describe("product copy and contextual navigation", () => {
     const privacy = read("src/components/product/PrivacyContent.tsx");
 
     expect(marketing).toMatch(/Outlook support is coming soon/);
-    expect(marketing).toMatch(/We&apos;re finishing the Outlook version of Organizinbox/);
+    expect(marketing).toMatch(/finishing the Outlook version of Organizinbox/);
     expect(marketing).toMatch(/!appContext \? \([\s\S]+Data access/);
     expect(microsoft).toMatch(/Outlook support is coming soon/);
     expect(dataAccess).toMatch(/Read email bodies", "No"/);

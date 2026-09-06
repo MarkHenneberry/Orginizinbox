@@ -34,7 +34,7 @@ describe("google oauth state lifecycle", () => {
 
     expect(startRoute).toMatch(/dynamic = "force-dynamic"/);
     expect(startRoute).toMatch(/revalidate = 0/);
-    expect(startRoute).toMatch(/createOAuthState\("\/app\/scan"\)/);
+    expect(startRoute).toMatch(/createOAuthState\("\/app\/scan", \{ provider: "google" \}\)/);
     expect(startRoute).toMatch(/Cache-Control",\s*"no-store, max-age=0"/);
     expect(startRoute).not.toMatch(/getCurrentProviderConnection/);
     expect(startRoute).not.toMatch(/mode === "connected"[\s\S]+redirect/);

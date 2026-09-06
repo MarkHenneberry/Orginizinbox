@@ -9,7 +9,7 @@ export const revalidate = 0;
 export async function GET() {
   try {
     requireGoogleOAuthConfig();
-    const state = await createOAuthState("/app/scan");
+    const state = await createOAuthState("/app/scan", { provider: "google" });
     const authorizationUrl = buildGoogleAuthorizationUrl(state);
     const response = NextResponse.redirect(authorizationUrl);
     response.headers.set("Cache-Control", "no-store, max-age=0");

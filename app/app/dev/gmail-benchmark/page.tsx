@@ -28,7 +28,7 @@ export default async function GmailBenchmarkPage() {
         return null;
       })
     : null;
-  const liveScan = session?.userId ? getLiveScan(session.userId) : undefined;
+  const liveScan = session?.userId ? await getLiveScan(session.userId, "gmail") : undefined;
 
   return (
     <main className="py-8">
@@ -59,7 +59,9 @@ export default async function GmailBenchmarkPage() {
             </div>
           </section>
         ) : activeConnection ? (
-          <GmailBenchmarkClient initialProgress={liveScan ? serializeBenchmark(liveScan.progress) : null} />
+          <GmailBenchmarkClient
+            initialProgress={liveScan?.progress.provider === "gmail" ? serializeBenchmark(liveScan.progress) : null}
+          />
         ) : (
           <section className="panel max-w-2xl p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Connect Gmail</h2>

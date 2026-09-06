@@ -401,7 +401,7 @@ async function performGmailCleanupConfirmation(job: GmailCleanupJob, userId: str
     batchApiResult = "failed";
   }
   const batchMutationMs = Math.round(performance.now() - batchStartedAt);
-  markLiveReportStale(userId);
+  await markLiveReportStale(userId, "gmail");
 
   running = updateGmailCleanupJob(running, {
     batchApiResult,
@@ -1158,7 +1158,7 @@ async function assertGmailCleanupContext(requestedCount: number, userIdOverride?
   }
   parseCleanupCount(requestedCount);
 
-  const liveScan = getLiveScan(session.userId);
+  const liveScan = await getLiveScan(session.userId, "gmail");
   if (!liveScan?.report || liveScan.progress.status !== "completed" || liveScan.progress.provider !== "gmail") {
     throw new GmailCleanupError("A completed live Gmail report is required before cleanup.", 409);
   }

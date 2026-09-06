@@ -1,28 +1,44 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef } from "react";
+import {
+  COPY_FEEDBACK_DURATION_MS,
+  copyFeedbackLabel,
+  reduceCopyFeedback
+} from "@/lib/domain/copy-feedback";
 import {
   formatGmailLabelCategoryDiagnostic,
   formatMailboxClassifierSummary,
   formatSenderClassifierSummary,
   getClassifierSafetyChecks
 } from "@/lib/domain/classifier-summary";
-import type { ClassifierScanPerformance, InboxReport, SenderAggregate } from "@/lib/domain/types";
+import { formatOutlookScanSummary } from "@/lib/domain/outlook-scan-summary";
+import type {
+  ClassifierScanPerformance,
+  InboxReport,
+  OutlookScanDiagnostic,
+  SenderAggregate
+} from "@/lib/domain/types";
 
 const developmentDiagnosticsEnabled = process.env.NODE_ENV !== "production";
 
 export function DevelopmentMailboxClassifierSummary({
   report,
-  performance
+  performance,
+  outlookDiagnostic
 }: {
   report: InboxReport;
   performance?: ClassifierScanPerformance;
+  outlookDiagnostic?: OutlookScanDiagnostic;
 }) {
   if (!developmentDiagnosticsEnabled || !report.classifierDiagnostics) return null;
 
   const summary = formatMailboxClassifierSummary(report, performance);
   const gmailDiagnostic = report.classifierDiagnostics.gmailLabelCategory
     ? formatGmailLabelCategoryDiagnostic(report)
+    : undefined;
+  const outlookSummary = outlookDiagnostic
+    ? formatOutlookScanSummary(report, outlookDiagnostic)
     : undefined;
   const safety = getClassifierSafetyChecks(report);
   const unsafe = Object.values(safety).some((count) => count > 0);
@@ -56,6 +72,24 @@ export function DevelopmentMailboxClassifierSummary({
           </pre>
         </section>
       ) : null}
+      {outlookSummary ? (
+        <section className="mt-5 border-t border-[var(--line)] pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="m-0 text-base font-extrabold text-[var(--navy)]">Outlook scan diagnostic</h3>
+              <p className="muted m-0 mt-1 text-sm">Aggregate development snapshot only.</p>
+            </div>
+            <CopySummaryButton
+              label="Copy Outlook scan summary"
+              snapshotKey={outlookDiagnostic?.snapshotId ?? outlookSummary}
+              text={outlookSummary}
+            />
+          </div>
+          <pre className="mt-4 max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-md border border-[var(--line)] bg-white p-4 text-xs leading-5 text-[var(--foreground)]">
+            {outlookSummary}
+          </pre>
+        </section>
+      ) : null}
     </details>
   );
 }
@@ -65,24 +99,42 @@ export function CopySenderClassifierSummaryButton({ sender }: { sender: SenderAg
   return <CopySummaryButton label="Copy sender summary" text={formatSenderClassifierSummary(sender)} />;
 }
 
-function CopySummaryButton({ label, text }: { label: string; text: string }) {
-  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+export function CopySummaryButton({
+  label,
+  text,
+  snapshotKey = text
+}: {
+  label: string;
+  text: string;
+  snapshotKey?: string;
+}) {
+  const [feedback, dispatch] = useReducer(reduceCopyFeedback, {
+    snapshotKey,
+    status: "idle"
+  });
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  useEffect(() => () => clearTimeout(resetTimer.current), []);
+  useEffect(() => {
+    clearTimeout(resetTimer.current);
+    dispatch({ type: "snapshot_changed", snapshotKey });
+    return () => clearTimeout(resetTimer.current);
+  }, [snapshotKey]);
 
   async function copySummary() {
     try {
       await navigator.clipboard.writeText(text);
-      setStatus("copied");
+      dispatch({ type: "copy_succeeded", snapshotKey });
     } catch {
-      setStatus("failed");
+      dispatch({ type: "copy_failed", snapshotKey });
     }
     clearTimeout(resetTimer.current);
-    resetTimer.current = setTimeout(() => setStatus("idle"), 1600);
+    resetTimer.current = setTimeout(
+      () => dispatch({ type: "reset", snapshotKey }),
+      COPY_FEEDBACK_DURATION_MS
+    );
   }
 
-  const buttonLabel = status === "copied" ? "Copied" : status === "failed" ? "Copy failed" : label;
+  const buttonLabel = copyFeedbackLabel(feedback, snapshotKey, label);
 
   return (
     <button className="btn btn-secondary focus-ring text-sm" onClick={copySummary} type="button">

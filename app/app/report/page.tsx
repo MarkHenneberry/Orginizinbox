@@ -16,6 +16,8 @@ export default async function ReportPage({ searchParams }: { searchParams?: Prom
       report={activeReport.report}
       reportStale={activeReport.reportStale}
       recentCleanupAction={activeReport.recentCleanupAction}
+      outlookScanDiagnostic={activeReport.outlookScanDiagnostic}
+      outlookCleanupEnabled={activeReport.outlookCleanupEnabled}
       scanPerformance={activeReport.scanPerformance}
       source={activeReport.source}
       view={view}

@@ -21,9 +21,15 @@ export type CleanupJobStateRow = Pick<
   | "updatedAt"
 >;
 
-export type CleanupJobStateCodec = {
-  encode(job: GmailScalableStoredJob): string;
-  decode(value: string): GmailScalableStoredJob;
+export type DurableCleanupJobEnvelope = {
+  userId: string;
+  version: number;
+  view: { id: string; expiresAt: number };
+};
+
+export type CleanupJobStateCodec<TJob extends DurableCleanupJobEnvelope = GmailScalableStoredJob> = {
+  encode(job: TJob): string;
+  decode(value: string): TJob;
 };
 
 export type CleanupJobStateRepository = {
@@ -46,19 +52,19 @@ export type CleanupJobStateRepository = {
   deleteExpired(now: Date): Promise<number>;
 };
 
-export interface GmailScalableDurableCleanupStore {
-  create(job: GmailScalableStoredJob): Promise<GmailScalableStoredJob>;
-  get(userId: string, jobId: string, now?: Date): Promise<GmailScalableStoredJob | undefined>;
-  getByJobId(jobId: string, now?: Date): Promise<GmailScalableStoredJob | undefined>;
+export interface DurableCleanupStore<TJob extends DurableCleanupJobEnvelope> {
+  create(job: TJob): Promise<TJob>;
+  get(userId: string, jobId: string, now?: Date): Promise<TJob | undefined>;
+  getByJobId(jobId: string, now?: Date): Promise<TJob | undefined>;
   compareAndSet(
     userId: string,
     jobId: string,
     expectedVersion: number,
-    update: (job: GmailScalableStoredJob) => GmailScalableStoredJob,
+    update: (job: TJob) => TJob,
     now?: Date,
     lockOwner?: string
-  ): Promise<GmailScalableStoredJob | undefined>;
-  claim(jobId: string, owner: string, now?: Date, ttlMs?: number): Promise<GmailScalableStoredJob | undefined>;
+  ): Promise<TJob | undefined>;
+  claim(jobId: string, owner: string, now?: Date, ttlMs?: number): Promise<TJob | undefined>;
   refreshLock(jobId: string, owner: string, now?: Date, ttlMs?: number): Promise<boolean>;
   releaseLock(jobId: string, owner: string): Promise<boolean>;
   delete(userId: string, jobId: string): Promise<boolean>;
@@ -66,13 +72,15 @@ export interface GmailScalableDurableCleanupStore {
   purgeExpired(now?: Date): Promise<number>;
 }
 
-export class PrismaGmailScalableCleanupStore implements GmailScalableDurableCleanupStore {
+export type GmailScalableDurableCleanupStore = DurableCleanupStore<GmailScalableStoredJob>;
+
+export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> implements DurableCleanupStore<TJob> {
   constructor(
     private readonly repository: CleanupJobStateRepository = new PrismaCleanupJobStateRepository(prisma),
-    private readonly codec: CleanupJobStateCodec = createCleanupJobStateCodec()
+    private readonly codec: CleanupJobStateCodec<TJob> = createCleanupJobStateCodec<TJob>()
   ) {}
 
-  async create(job: GmailScalableStoredJob) {
+  async create(job: TJob) {
     const stored = normalizeJob(job, 1);
     await this.repository.create({
       jobId: stored.view.id,
@@ -105,7 +113,7 @@ export class PrismaGmailScalableCleanupStore implements GmailScalableDurableClea
     userId: string,
     jobId: string,
     expectedVersion: number,
-    update: (job: GmailScalableStoredJob) => GmailScalableStoredJob,
+    update: (job: TJob) => TJob,
     now = new Date(),
     lockOwner?: string
   ) {
@@ -179,6 +187,8 @@ export class PrismaGmailScalableCleanupStore implements GmailScalableDurableClea
     return this.repository.deleteExpired(now);
   }
 }
+
+export class PrismaGmailScalableCleanupStore extends PrismaCleanupJobStore<GmailScalableStoredJob> {}
 
 export class PrismaCleanupJobStateRepository implements CleanupJobStateRepository {
   constructor(private readonly client: PrismaClient) {}
@@ -283,10 +293,10 @@ export class CleanupStateIntegrityError extends Error {
   }
 }
 
-export function createCleanupJobStateCodec(input?: {
+export function createCleanupJobStateCodec<TJob extends DurableCleanupJobEnvelope = GmailScalableStoredJob>(input?: {
   encrypt(value: string): string;
   decrypt(value: string): string;
-}): CleanupJobStateCodec {
+}): CleanupJobStateCodec<TJob> {
   const crypto = input ?? { encrypt: encryptCleanupState, decrypt: decryptCleanupState };
   return {
     encode(job) {
@@ -294,10 +304,29 @@ export function createCleanupJobStateCodec(input?: {
     },
     decode(value) {
       try {
-        return JSON.parse(crypto.decrypt(value)) as GmailScalableStoredJob;
+        return JSON.parse(crypto.decrypt(value)) as TJob;
       } catch {
         throw new CleanupStateIntegrityError();
       }
+    }
+  };
+}
+
+export function prepareCleanupJobState<TJob extends DurableCleanupJobEnvelope>(
+  job: TJob,
+  codec: CleanupJobStateCodec<TJob> = createCleanupJobStateCodec<TJob>()
+) {
+  const stored = normalizeJob(job, 1);
+  return {
+    job: cloneJob(stored),
+    data: {
+      jobId: stored.view.id,
+      userId: stored.userId,
+      encryptedPayload: codec.encode(stored),
+      version: stored.version,
+      lockOwner: null,
+      lockExpiresAt: null,
+      expiresAt: new Date(stored.view.expiresAt)
     }
   };
 }
@@ -324,10 +353,20 @@ export function createPrismaGmailScalableCleanupStore() {
 
 export async function clearDurableGmailScalableCleanupStateForUser(userId: string) {
   if (runtimeConfig.gmailScalableStoreAdapter !== "prisma") return 0;
-  return deleteDurableGmailScalableCleanupStateForUser(
-    userId,
-    new PrismaCleanupJobStateRepository(prisma)
-  );
+  return clearDurableCleanupStateForUser(userId);
+}
+
+export function clearDurableCleanupStateForUser(userId: string) {
+  return deleteDurableGmailScalableCleanupStateForUser(userId, new PrismaCleanupJobStateRepository(prisma));
+}
+
+export async function clearDurableProviderCleanupStateForUser(
+  userId: string,
+  provider: "gmail" | "microsoft"
+) {
+  return (await prisma.cleanupJobState.deleteMany({
+    where: { userId, job: { scan: { provider } } }
+  })).count;
 }
 
 export function deleteDurableGmailScalableCleanupStateForUser(
@@ -337,7 +376,7 @@ export function deleteDurableGmailScalableCleanupStateForUser(
   return repository.deleteForUser(userId);
 }
 
-function decodeAndValidate(row: CleanupJobStateRow, codec: CleanupJobStateCodec) {
+function decodeAndValidate<TJob extends DurableCleanupJobEnvelope>(row: CleanupJobStateRow, codec: CleanupJobStateCodec<TJob>) {
   const job = codec.decode(row.encryptedPayload);
   if (job.userId !== row.userId || job.view.id !== row.jobId || job.version !== row.version) {
     throw new CleanupStateIntegrityError("Cleanup state identity or version does not match its envelope.");
@@ -345,10 +384,10 @@ function decodeAndValidate(row: CleanupJobStateRow, codec: CleanupJobStateCodec)
   return cloneJob(job);
 }
 
-function normalizeJob(job: GmailScalableStoredJob, version: number): GmailScalableStoredJob {
+function normalizeJob<TJob extends DurableCleanupJobEnvelope>(job: TJob, version: number): TJob {
   return structuredClone({ ...job, version });
 }
 
-function cloneJob(job: GmailScalableStoredJob) {
+function cloneJob<TJob extends DurableCleanupJobEnvelope>(job: TJob): TJob {
   return structuredClone(job);
 }

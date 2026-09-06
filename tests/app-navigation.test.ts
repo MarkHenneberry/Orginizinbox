@@ -124,7 +124,7 @@ describe("authenticated app navigation", () => {
 
     expect(resolver).toMatch(/runtimeConfig\.fixtureMode/);
     expect(resolver).toMatch(/source: "fixture"/);
-    expect(resolver).toMatch(/source: `\$\{liveScan\.progress\.provider\}-live`/);
+    expect(resolver).toMatch(/liveScan\.progress\.provider === "microsoft" \? "microsoft-live" : "gmail-live"/);
     expect(resolver).toMatch(/redirect\("\/app"\)/);
   });
 
@@ -195,7 +195,7 @@ describe("authenticated app navigation", () => {
     expect(appState).toMatch(/connected_active_report[\s\S]+href: "\/app\/report", label: "Return to Inbox Report"/);
     expect(appState).toMatch(/connected_no_report[\s\S]+href: "\/app\/scan", label: "Scan my inbox"/);
     expect(appState).toMatch(/needs_reconnect[\s\S]+href: "\/connect\/google", label: "Reconnect Gmail"/);
-    expect(appState).toMatch(/href: "\/connect\/google", label: "Clean my inbox"/);
+    expect(appState).toMatch(/href: "\/connect", label: "Clean my inbox"/);
     expect(home).not.toMatch(/redirect\(["']\/app/);
   });
 
@@ -262,6 +262,7 @@ describe("authenticated app navigation", () => {
   it("keeps Outlook honest while unavailable and gates Microsoft OAuth behind a dev flag", () => {
     const availability = readFileSync("src/lib/providers/availability.ts", "utf8");
     const marketingTemplate = readFileSync("src/components/product/MarketingInfoContent.tsx", "utf8");
+    const appState = readFileSync("src/lib/server/app-state.ts", "utf8");
     const microsoftConnect = readFileSync("app/connect/microsoft/page.tsx", "utf8");
     const microsoftStart = readFileSync("app/api/oauth/microsoft/start/route.ts", "utf8");
     const appHome = readFileSync("app/app/page.tsx", "utf8");
@@ -271,7 +272,9 @@ describe("authenticated app navigation", () => {
     expect(marketingTemplate).toMatch(/Outlook support is coming soon/);
     expect(marketingTemplate).toMatch(/Clean Gmail instead/);
     expect(microsoftConnect).toMatch(/Outlook support is coming soon/);
-    expect(microsoftConnect).toMatch(/MICROSOFT_OAUTH_DEV_ENABLED=true/);
+    expect(microsoftConnect).toMatch(/runtimeConfig\.microsoftOAuthDevEnabled/);
+    expect(marketingTemplate).toMatch(/Microsoft connection is available for development testing/);
+    expect(appState).toMatch(/href: "\/connect\/microsoft", label: "Connect Outlook"/);
     expect(microsoftStart).toMatch(/microsoftOAuthDevEnabled/);
     expect(microsoftStart).toMatch(/status: 404/);
     expect(appHome).not.toMatch(/href="\/connect\/microsoft"/);
@@ -282,12 +285,18 @@ describe("authenticated app navigation", () => {
     const googleConnect = readFileSync("app/connect/google/page.tsx", "utf8");
     const googleError = readFileSync("app/connect/google/error/page.tsx", "utf8");
     const microsoftConnect = readFileSync("app/connect/microsoft/page.tsx", "utf8");
+    const providerChooser = readFileSync("app/connect/page.tsx", "utf8");
+    const sharedShell = readFileSync("src/components/product/ProviderConnectShell.tsx", "utf8");
 
-    for (const source of [googleConnect, googleError, microsoftConnect]) {
+    for (const source of [googleError, providerChooser, sharedShell]) {
       expect(source).toMatch(/<Header \/>/);
       expect(source).toMatch(/<Footer \/>/);
+    }
+    for (const source of [googleConnect, microsoftConnect, providerChooser]) {
       expect(source).toMatch(/robots:[\s\S]+index: false/);
     }
+    expect(googleConnect).toMatch(/ProviderConnectShell/);
+    expect(microsoftConnect).toMatch(/ProviderConnectShell/);
     expect(googleConnect).toMatch(/You do not need to reconnect Gmail/);
     expect(googleConnect).toMatch(/connectedHref/);
     expect(googleError).toMatch(/Try connecting Gmail again/);
@@ -314,7 +323,7 @@ describe("authenticated app navigation", () => {
 
     expect(reportView).toMatch(/Back to Organizinbox/);
     expect(cleanupPage).toMatch(/Back to Inbox Report/);
-    expect(cleanupClient).toMatch(/fetch\("\/api\/app\/gmail-scan\/start", \{ method: "POST" \}\)[\s\S]+router\.push\("\/app\/scan"\)/);
+    expect(cleanupClient).toMatch(/fetch\(provider === "microsoft" \? "\/api\/app\/microsoft-scan\/start" : "\/api\/app\/gmail-scan\/start", \{ method: "POST" \}\)[\s\S]+router\.push\("\/app\/scan"\)/);
     expect(cleanupClient).toMatch(/onClick=\{onRescan\}[\s\S]+Rescan inbox/);
     expect(cleanupClient).toMatch(/href="\/app\/report"[\s\S]+Back to Inbox Report/);
     expect(benchmarkPage).toMatch(/Back to Organizinbox/);
@@ -335,7 +344,8 @@ describe("authenticated app navigation", () => {
     const confirmation = readFileSync("src/components/product/DisconnectGmailConfirmation.tsx", "utf8");
     const route = readFileSync("app/api/app/disconnect/route.ts", "utf8");
 
-    expect(disconnect).toMatch(/disconnectCurrentGmailSessionWithMode\("local_disconnect"\)/);
+    expect(disconnect).toMatch(/disconnectCurrentProviderSessionWithMode\("local_disconnect", "gmail"\)/);
+    expect(disconnect).toMatch(/disconnectCurrentProviderSessionWithMode\("local_disconnect"\)/);
     expect(disconnect).toMatch(/clearLiveScan/);
     expect(disconnect).toMatch(/clearGmailCleanupJobsForUser/);
     expect(disconnect).toMatch(/clearSessionCookie/);

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { disconnectCurrentGmailSession } from "@/lib/server/disconnect";
+import { disconnectCurrentProviderSession } from "@/lib/server/disconnect";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     });
   }
 
-  await disconnectCurrentGmailSession();
+  await disconnectCurrentProviderSession();
   const response = NextResponse.redirect(new URL("/", request.url), { status: 303 });
   response.headers.set("Cache-Control", "no-store, max-age=0");
   return response;

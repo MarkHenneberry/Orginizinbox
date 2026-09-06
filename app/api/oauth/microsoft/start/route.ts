@@ -1,5 +1,13 @@
-import { ConfigurationError, env, requireMicrosoftOAuthConfig, runtimeConfig } from "@/lib/config";
-import { microsoftScopes } from "@/lib/providers/microsoft/provider";
+import { NextResponse } from "next/server";
+import { ConfigurationError, requireMicrosoftOAuthConfig, runtimeConfig } from "@/lib/config";
+import {
+  buildMicrosoftAuthorizationUrl,
+  createMicrosoftOAuthAttemptSecrets
+} from "@/lib/server/microsoft-oauth";
+import { createOAuthState } from "@/lib/server/session";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET() {
   try {
@@ -7,17 +15,26 @@ export async function GET() {
       return Response.json({ error: "Microsoft OAuth is not enabled for normal product navigation." }, { status: 404 });
     }
     requireMicrosoftOAuthConfig();
-    const authorizationUrl = new URL(`https://login.microsoftonline.com/${env.MICROSOFT_TENANT_ID}/oauth2/v2.0/authorize`);
-    authorizationUrl.searchParams.set("client_id", env.MICROSOFT_CLIENT_ID ?? "");
-    authorizationUrl.searchParams.set("redirect_uri", env.MICROSOFT_REDIRECT_URI ?? "");
-    authorizationUrl.searchParams.set("response_type", "code");
-    authorizationUrl.searchParams.set("response_mode", "query");
-    authorizationUrl.searchParams.set("scope", microsoftScopes.scan.join(" "));
-    return Response.redirect(authorizationUrl);
+    const attempt = createMicrosoftOAuthAttemptSecrets();
+    const state = await createOAuthState("/app/account", {
+      provider: "microsoft",
+      codeVerifier: attempt.codeVerifier,
+      nonce: attempt.nonce,
+      microsoftFlow: "graph"
+    });
+    const response = NextResponse.redirect(buildMicrosoftAuthorizationUrl({
+      state,
+      codeChallenge: attempt.codeChallenge,
+      nonce: attempt.nonce,
+      flow: "graph"
+    }));
+    response.headers.set("Cache-Control", "no-store, max-age=0");
+    response.headers.set("Referrer-Policy", "no-referrer");
+    return response;
   } catch (error) {
     if (error instanceof ConfigurationError) {
-      return Response.json({ error: error.message }, { status: 503 });
+      return Response.json({ error: error.message }, { status: 503, headers: { "Cache-Control": "no-store, max-age=0" } });
     }
-    return Response.json({ error: "Microsoft OAuth could not be started." }, { status: 500 });
+    return Response.json({ error: "Microsoft OAuth could not be started." }, { status: 500, headers: { "Cache-Control": "no-store, max-age=0" } });
   }
 }

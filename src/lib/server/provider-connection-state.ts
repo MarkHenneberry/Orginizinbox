@@ -1,8 +1,10 @@
 import "server-only";
 import { runtimeConfig } from "@/lib/config";
 import { hasRequiredGmailImapScope } from "@/lib/providers/gmail/scopes";
+import { hasRequiredMicrosoftMailScope } from "@/lib/providers/microsoft/scopes";
 import { decryptSecret } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
+import { getActiveMicrosoftConnection } from "@/lib/server/microsoft-connection";
 import { getSession } from "@/lib/server/session";
 
 export type CurrentProviderConnection =
@@ -18,15 +20,16 @@ export type CurrentProviderConnection =
       mode: "connected";
       userId: string;
       providerConnectionId: string;
-      provider: "gmail";
+      provider: "gmail" | "microsoft";
       accountEmail?: string;
       scope?: string | null;
+      imapScope?: string | null;
       status: "connected";
     }
   | {
       mode: "needs_reconnect";
       userId: string;
-      provider: "gmail";
+      provider: "gmail" | "microsoft";
       reason: string;
     };
 
@@ -43,7 +46,6 @@ export async function getCurrentProviderConnection(): Promise<CurrentProviderCon
     where: {
       ...(session.providerConnectionId ? { id: session.providerConnectionId } : {}),
       userId: session.userId,
-      provider: "gmail",
       disconnectedAt: null
     },
     orderBy: {
@@ -51,14 +53,14 @@ export async function getCurrentProviderConnection(): Promise<CurrentProviderCon
     }
   });
 
-  if (!connection?.encryptedAccessToken || !connection.encryptedAccountEmail) {
+  if (!connection?.encryptedAccessToken || (connection.provider === "gmail" && !connection.encryptedAccountEmail)) {
     if (runtimeConfig.fixtureMode) {
       return { mode: "fixture", userId: session.userId };
     }
     return { mode: "none", userId: session.userId };
   }
 
-  if (!hasRequiredGmailImapScope(connection.scope ?? undefined)) {
+  if (connection.provider === "gmail" && !hasRequiredGmailImapScope(connection.scope ?? undefined)) {
     return {
       mode: "needs_reconnect",
       userId: session.userId,
@@ -67,12 +69,44 @@ export async function getCurrentProviderConnection(): Promise<CurrentProviderCon
     };
   }
 
+  if (connection.provider === "microsoft") {
+    if (!connection.encryptedRefreshToken || !hasRequiredMicrosoftMailScope(connection.scope)) {
+      return {
+        mode: "needs_reconnect",
+        userId: session.userId,
+        provider: "microsoft",
+        reason: "Microsoft needs to reconnect. Try again and approve Microsoft mail access."
+      };
+    }
+    try {
+      const active = await getActiveMicrosoftConnection(session.userId, connection.id);
+      if (!active) throw new Error("Missing Microsoft credentials.");
+      return {
+        mode: "connected",
+        userId: session.userId,
+        providerConnectionId: connection.id,
+        provider: "microsoft",
+        accountEmail: active.accountEmail,
+        scope: active.connection.scope,
+        imapScope: active.connection.imapScope,
+        status: "connected"
+      };
+    } catch {
+      return {
+        mode: "needs_reconnect",
+        userId: session.userId,
+        provider: "microsoft",
+        reason: "Microsoft needs to reconnect. Try connecting Microsoft again."
+      };
+    }
+  }
+
   return {
     mode: "connected",
     userId: session.userId,
     providerConnectionId: connection.id,
     provider: "gmail",
-    accountEmail: decryptSecret(connection.encryptedAccountEmail),
+    accountEmail: decryptSecret(connection.encryptedAccountEmail ?? ""),
     scope: connection.scope,
     status: "connected"
   };

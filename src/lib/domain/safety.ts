@@ -43,6 +43,8 @@ export function getProtectionReasons({
   if (ageBand === "recent") reasons.add("PROTECTED_RECENT");
   if (message.isSent) reasons.add("PROTECTED_SENT");
   if (message.isDraft) reasons.add("PROTECTED_DRAFT");
+  if (message.isExcludedMailboxLocation) reasons.add("PROTECTED_MAILBOX_LOCATION");
+  if (message.hasUncertainMetadata) reasons.add("PROTECTED_INCOMPLETE_METADATA");
   if (message.subjectProtection === "transactional") reasons.add("PROTECTED_TRANSACTIONAL_SUBJECT");
   if (message.subjectProtection === "security_account") reasons.add("PROTECTED_SECURITY_ACCOUNT_SUBJECT");
   if (mailClass === "PERSONAL" || message.providerCategory === "personal") reasons.add("PROTECTED_PERSONAL");

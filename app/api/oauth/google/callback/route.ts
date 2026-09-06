@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
   const diagnostic = createOAuthCallbackDiagnostic();
   let stateResult: Awaited<ReturnType<typeof consumeOAuthState>>;
   try {
-    stateResult = await consumeOAuthState(request.nextUrl.searchParams.get("state"));
+    stateResult = await consumeOAuthState(request.nextUrl.searchParams.get("state"), "google");
   } catch {
     diagnostic.state_validation = "failure";
     return errorRedirect(request, diagnostic, "callback_failed");

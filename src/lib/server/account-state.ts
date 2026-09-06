@@ -9,7 +9,7 @@ export type AccountConnectionState =
     }
   | {
       mode: "connected";
-      provider: "gmail";
+      provider: "gmail" | "microsoft";
       accountEmail?: string;
       status: "Connected";
       hasActiveReport: boolean;
@@ -32,7 +32,7 @@ export async function getAccountConnectionState(hasActiveReport: boolean): Promi
   if (connection.mode === "connected") {
     return {
       mode: "connected",
-      provider: "gmail",
+      provider: connection.provider,
       accountEmail: connection.accountEmail,
       status: "Connected",
       hasActiveReport

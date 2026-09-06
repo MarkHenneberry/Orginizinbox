@@ -56,7 +56,7 @@ type RunnerDependencies = {
   store: GmailScalableCleanupStore;
   providerForUser(userId: string): Promise<GmailScalableCleanupProviderPort>;
   validateContext(userId: string, scanId: string, groupIndices: readonly number[]): void | Promise<void>;
-  onMutationAttempted(userId: string): void;
+  onMutationAttempted(userId: string): void | Promise<void>;
   now(): number;
   schedule(work: () => Promise<void>, delayMs: number): void;
   acceptanceHash(value: string): string;
@@ -328,7 +328,7 @@ export class CleanupJobRunner {
           targets.map((target) => target.apiMessageId),
           (kind) => this.reserveQuota(userId, jobId, chunkIndex, "mutating", kind)
         );
-        this.dependencies.onMutationAttempted(userId);
+        await this.dependencies.onMutationAttempted(userId);
       }
       current = this.requireJob(userId, jobId);
       const verifying = this.transition(current, "verifying", (job) => {
@@ -734,8 +734,8 @@ export const gmailScalableCleanupRunner = globalRunner.organizinboxScalableClean
     if (!connection) throw new GmailScalableCleanupError("An active Gmail connection is required.", 401);
     return new GmailScalableCleanupProvider(connection.accessToken, connection.accountEmail);
   },
-  validateContext(userId, scanId, groupIndices) {
-    const scan = getLiveScan(userId);
+  async validateContext(userId, scanId, groupIndices) {
+    const scan = await getLiveScan(userId, "gmail");
     if (!scan?.report || scan.progress.scanId !== scanId || scan.progress.status !== "completed" || scan.reportStale) {
       throw new GmailScalableCleanupError("The Inbox Report changed or expired. Run a fresh scan.", 409);
     }
@@ -744,7 +744,9 @@ export const gmailScalableCleanupRunner = globalRunner.organizinboxScalableClean
       throw new GmailScalableCleanupError("A selected sender group is no longer eligible.", 409);
     }
   },
-  onMutationAttempted: markLiveReportStale,
+  async onMutationAttempted(userId) {
+    await markLiveReportStale(userId, "gmail");
+  },
   now: Date.now,
   schedule(work, delayMs) {
     const timer = setTimeout(() => void work().catch(() => undefined), delayMs);
@@ -762,7 +764,7 @@ globalRunner.organizinboxScalableCleanupRunner = gmailScalableCleanupRunner;
 export async function startGmailScalableCleanup(input: { groupIndices: unknown; requestedCount: unknown }) {
   const session = await requireScalableSession();
   const { userId } = session;
-  const scan = getLiveScan(userId);
+  const scan = await getLiveScan(userId, "gmail");
   if (!scan?.report || scan.progress.status !== "completed" || scan.progress.provider !== "gmail" || scan.reportStale) {
     throw new GmailScalableCleanupError("Run a fresh Gmail scan before scalable cleanup.", 409);
   }

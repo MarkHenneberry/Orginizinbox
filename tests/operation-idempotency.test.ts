@@ -1,12 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/server/crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/server/crypto")>();
+  return {
+    ...actual,
+    encryptCleanupState: (value: string) => Buffer.from(value).toString("base64url"),
+    decryptCleanupState: (value: string) => Buffer.from(value, "base64url").toString("utf8")
+  };
+});
 import { runOrJoinGmailCleanupOperation } from "@/lib/server/gmail-cleanup-store";
 import {
-  clearLiveScan,
   createProgress,
-  nextExpiry,
-  reuseRunningLiveScan,
-  setLiveScan
+  DurableLiveScanStore,
+  MemoryScanStateRepository,
+  nextExpiry
 } from "@/lib/server/live-scan-store";
 
 describe("transient operation idempotency", () => {
@@ -34,20 +42,76 @@ describe("transient operation idempotency", () => {
     await expect(Promise.all([first.promise, second.promise])).resolves.toEqual(["completed", "completed"]);
   });
 
-  it("reuses an active scan and records the blocked duplicate without starting a new session", () => {
+  it("atomically reuses a duplicate same-user/provider scan request", async () => {
+    const store = new DurableLiveScanStore(new MemoryScanStateRepository());
     const userId = `scan-user-${crypto.randomUUID()}`;
-    const progress = createProgress({ scanId: "transient-scan", limit: "full", batchSize: 1000 });
-    setLiveScan(userId, {
-      progress,
-      cancel: new AbortController(),
-      expiresAt: nextExpiry()
+    const first = await store.accept({
+      userId,
+      providerConnectionId: "gmail-connection",
+      session: { progress: createProgress({ scanId: "scan-a", limit: "full", batchSize: 1000 }), expiresAt: nextExpiry() }
+    });
+    const duplicate = await store.accept({
+      userId,
+      providerConnectionId: "gmail-connection",
+      session: { progress: createProgress({ scanId: "scan-b", limit: "full", batchSize: 1000 }), expiresAt: nextExpiry() }
     });
 
-    const reused = reuseRunningLiveScan(userId);
+    expect(first.reused).toBe(false);
+    expect(duplicate.reused).toBe(true);
+    expect(duplicate.session.progress.scanId).toBe("scan-a");
+    expect(duplicate.session.progress.duplicateStartCount).toBe(1);
+  });
 
-    expect(reused?.progress).toBe(progress);
-    expect(progress.duplicateStartCount).toBe(1);
-    clearLiveScan(userId);
+  it("isolates two users scanning simultaneously", async () => {
+    const store = new DurableLiveScanStore(new MemoryScanStateRepository());
+    const gmailUser = `gmail-scan-user-${crypto.randomUUID()}`;
+    const outlookUser = `outlook-scan-user-${crypto.randomUUID()}`;
+    const gmailProgress = createProgress({ scanId: "gmail-scan", provider: "gmail", limit: "full", batchSize: 1000 });
+    const outlookProgress = createProgress({ scanId: "outlook-scan", provider: "microsoft", limit: "full", batchSize: 250 });
+
+    await Promise.all([
+      store.accept({
+        userId: gmailUser,
+        providerConnectionId: "gmail-connection",
+        session: { progress: gmailProgress, expiresAt: nextExpiry() }
+      }),
+      store.accept({
+        userId: outlookUser,
+        providerConnectionId: "outlook-connection",
+        session: { progress: outlookProgress, expiresAt: nextExpiry() }
+      })
+    ]);
+
+    expect((await store.get(gmailUser, "gmail"))?.progress.scanId).toBe("gmail-scan");
+    expect((await store.get(outlookUser, "microsoft"))?.progress.scanId).toBe("outlook-scan");
+    await store.delete(gmailUser, "gmail");
+    expect(await store.get(gmailUser, "gmail")).toBeUndefined();
+    expect((await store.get(outlookUser, "microsoft"))?.progress.scanId).toBe("outlook-scan");
+  });
+
+  it("survives process replacement and isolates Gmail from Outlook for one user", async () => {
+    const repository = new MemoryScanStateRepository();
+    const firstProcess = new DurableLiveScanStore(repository);
+    const userId = `replacement-user-${crypto.randomUUID()}`;
+    await Promise.all([
+      firstProcess.accept({
+        userId,
+        providerConnectionId: "gmail-connection",
+        session: { progress: createProgress({ scanId: "gmail-durable", provider: "gmail", limit: "full", batchSize: 1000 }), expiresAt: nextExpiry() }
+      }),
+      firstProcess.accept({
+        userId,
+        providerConnectionId: "outlook-connection",
+        session: { progress: createProgress({ scanId: "outlook-durable", provider: "microsoft", limit: "full", batchSize: 250 }), expiresAt: nextExpiry() }
+      })
+    ]);
+
+    const replacementProcess = new DurableLiveScanStore(repository);
+    expect((await replacementProcess.get(userId, "gmail"))?.progress.scanId).toBe("gmail-durable");
+    expect((await replacementProcess.get(userId, "microsoft"))?.progress.scanId).toBe("outlook-durable");
+    await replacementProcess.delete(userId, "gmail");
+    expect(await replacementProcess.get(userId, "gmail")).toBeUndefined();
+    expect((await replacementProcess.get(userId, "microsoft"))?.progress.scanId).toBe("outlook-durable");
   });
 });
 
@@ -66,8 +130,6 @@ describe("working-state contracts", () => {
   it("locks scan and rescan immediately and reuses a running server scan", () => {
     const client = readFileSync("src/components/product/GmailScanClient.tsx", "utf8");
     const route = readFileSync("app/api/app/gmail-scan/start/route.ts", "utf8");
-    const reusePosition = route.indexOf("reuseRunningLiveScan");
-    const clearPosition = route.indexOf("clearLiveScan(session.userId)");
 
     expect(client).toMatch(/pendingRef\.current \|\| isRunning/);
     expect(client).toMatch(/pendingRef\.current = true[\s\S]+setPending\(true\)/);
@@ -75,8 +137,8 @@ describe("working-state contracts", () => {
     expect(client).toContain("Scanning your inbox...");
     expect(client).toContain("Rescanning your inbox...");
     expect(client).toMatch(/finally[\s\S]+pendingRef\.current = false[\s\S]+setPending\(false\)/);
-    expect(reusePosition).toBeGreaterThan(-1);
-    expect(clearPosition).toBeGreaterThan(reusePosition);
+    expect(route).toContain("await createGmailScanSession");
+    expect(route).not.toContain("clearLiveScan(session.userId)");
   });
 
   it("locks resolution, benchmark, Trash, Undo, and result-page rescan before fetch", () => {
@@ -91,7 +153,7 @@ describe("working-state contracts", () => {
     expect(client).toContain("Rescanning your inbox...");
     expect(client).toMatch(/disabled=\{!group\.eligible \|\| busy\}/);
     expect(client).toMatch(/id="cleanup-search"[\s\S]+disabled=\{busy\}/);
-    expect(client).toMatch(/fetch\("\/api\/app\/gmail-scan\/start", \{ method: "POST" \}\)/);
+    expect(client).toMatch(/fetch\(provider === "microsoft" \? "\/api\/app\/microsoft-scan\/start" : "\/api\/app\/gmail-scan\/start", \{ method: "POST" \}\)/);
   });
 
   it("claims and single-flights provider work while consuming terminal Trash and Undo actions", () => {

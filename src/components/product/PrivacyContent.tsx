@@ -6,7 +6,7 @@ type PublicCta = {
 };
 
 export function PrivacyContent({ appContext = false, primaryCta }: { appContext?: boolean; primaryCta?: PublicCta }) {
-  const cta = primaryCta ?? { href: "/connect/google", label: "Clean my inbox" };
+  const cta = primaryCta ?? { href: "/connect", label: "Clean my inbox" };
 
   return (
     <main>

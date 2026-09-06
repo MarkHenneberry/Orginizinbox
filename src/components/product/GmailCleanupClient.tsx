@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { OperationStatus } from "@/components/product/OperationStatus";
 import {
@@ -20,7 +20,18 @@ import {
   type CleanupWorkspaceOperation,
   type CleanupWorkspaceState
 } from "@/lib/domain/cleanup-workspace-state";
+import {
+  COPY_FEEDBACK_DURATION_MS,
+  copyFeedbackLabel,
+  reduceCopyFeedback
+} from "@/lib/domain/copy-feedback";
 import { getGmailCleanupRequestMode } from "@/lib/domain/gmail-cleanup-request-mode";
+import {
+  formatOutlookCleanupDiagnostic,
+  outlookCleanupMaximum,
+  shouldPollOutlookCleanup,
+  type OutlookCleanupJobView
+} from "@/lib/domain/outlook-cleanup";
 import { formatDevelopmentBulkUndoProofSummary } from "@/lib/domain/gmail-bulk-undo-proof-summary";
 import {
   getGmailScalableDiagnosticSnapshot,
@@ -41,6 +52,8 @@ export function GmailCleanupClient({
   scalableCleanupEnabled,
   fixtureMode,
   initialScalableJob,
+  initialOutlookJob,
+  provider,
   countOptions,
   reportStale,
   developmentMode
@@ -52,21 +65,26 @@ export function GmailCleanupClient({
   scalableCleanupEnabled: boolean;
   fixtureMode: boolean;
   initialScalableJob?: GmailScalableJobView;
+  initialOutlookJob?: OutlookCleanupJobView;
+  provider: "gmail" | "microsoft";
   countOptions: number[];
   reportStale: boolean;
   developmentMode: boolean;
 }) {
   const router = useRouter();
   const [selectedGroupIndices, setSelectedGroupIndices] = useState<Set<number>>(
-    () => initialScalableJob ? new Set(initialScalableJob.groupIndices) : createDefaultCleanupSelection(groups)
+    () => initialScalableJob || initialOutlookJob
+      ? new Set((initialScalableJob ?? initialOutlookJob)!.groupIndices)
+      : createDefaultCleanupSelection(groups)
   );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<CleanupSortKey>("ready");
-  const [requestedCount, setRequestedCount] = useState(initialScalableJob?.requestedCount ?? countOptions.at(-1) ?? 0);
+  const [requestedCount, setRequestedCount] = useState(initialScalableJob?.requestedCount ?? initialOutlookJob?.requested ?? countOptions.at(-1) ?? 0);
   const [job, setJob] = useState<GmailCleanupJobView | null>(null);
   const [scalableJob, setScalableJob] = useState<GmailScalableJobView | null>(initialScalableJob ?? null);
-  const [checkedGroupIndices, setCheckedGroupIndices] = useState<number[]>(initialScalableJob?.groupIndices ?? []);
-  const [reviewStarted, setReviewStarted] = useState(Boolean(initialScalableJob));
+  const [outlookJob, setOutlookJob] = useState<OutlookCleanupJobView | null>(initialOutlookJob ?? null);
+  const [checkedGroupIndices, setCheckedGroupIndices] = useState<number[]>(initialScalableJob?.groupIndices ?? initialOutlookJob?.groupIndices ?? []);
+  const [reviewStarted, setReviewStarted] = useState(Boolean(initialScalableJob || initialOutlookJob));
   const [snapshotExpired, setSnapshotExpired] = useState(false);
   const [finalStep, setFinalStep] = useState(false);
   const [activeOperation, setActiveOperation] = useState<ActiveCleanupOperation | null>(null);
@@ -77,8 +95,10 @@ export function GmailCleanupClient({
 
   const scalablePollingActive = scalableJob ? shouldPollGmailScalableJob(scalableJob) : false;
   const scalableRunning = scalablePollingActive;
+  const outlookPollingActive = outlookJob ? shouldPollOutlookCleanup(outlookJob) : false;
   const scalableJobId = scalableJob?.id;
-  const busy = activeOperation !== null || scalableRunning;
+  const outlookJobId = outlookJob?.id;
+  const busy = activeOperation !== null || scalableRunning || outlookPollingActive;
   const activeJobId = job?.id;
 
   const visibleGroups = useMemo(() => filterAndSortCleanupGroups(groups, search, sortKey), [groups, search, sortKey]);
@@ -105,13 +125,19 @@ export function GmailCleanupClient({
   const visibleEligibleIndices = visibleGroups.filter((group) => group.eligible).map((group) => group.index);
   const allVisibleEligibleSelected =
     visibleEligibleIndices.length > 0 && visibleEligibleIndices.every((index) => selectedGroupIndices.has(index));
-  const cleanupRequestMode = getGmailCleanupRequestMode({
-    requestedCount,
-    legacyMaximum: legacyCleanupMaximum,
-    scalableEnabled: scalableCleanupEnabled
-  });
+  const cleanupRequestMode = provider === "microsoft"
+    ? Number.isInteger(requestedCount) && requestedCount >= 1 && requestedCount <= outlookCleanupMaximum
+      ? "outlook"
+      : "invalid"
+    : getGmailCleanupRequestMode({
+        requestedCount,
+        legacyMaximum: legacyCleanupMaximum,
+        scalableEnabled: scalableCleanupEnabled
+      });
   const requestModeEnabled =
-    cleanupRequestMode === "legacy"
+    cleanupRequestMode === "outlook"
+      ? cleanupEnabled
+      : cleanupRequestMode === "legacy"
       ? cleanupEnabled
       : cleanupRequestMode === "scalable";
   const disabled =
@@ -125,6 +151,7 @@ export function GmailCleanupClient({
   function resetPreview() {
     setJob(null);
     setScalableJob(null);
+    setOutlookJob(null);
     setCheckedGroupIndices([]);
     setReviewStarted(false);
     setSnapshotExpired(false);
@@ -220,6 +247,27 @@ export function GmailCleanupClient({
   }, [scalableJobId, scalablePollingActive]);
 
   useEffect(() => {
+    if (!outlookJobId || !outlookPollingActive) return;
+    let cancelled = false;
+    const poll = async () => {
+      const response = await fetch("/api/dev/outlook-cleanup/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: outlookJobId })
+      });
+      if (!response.ok || cancelled) return;
+      const body = await response.json() as { job?: OutlookCleanupJobView };
+      if (body.job) setOutlookJob(body.job);
+    };
+    void poll();
+    const interval = window.setInterval(poll, 750);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [outlookJobId, outlookPollingActive]);
+
+  useEffect(() => {
     if (!reviewStarted) return;
     reviewHeadingRef.current?.focus();
   }, [reviewStarted]);
@@ -251,14 +299,21 @@ export function GmailCleanupClient({
     setFinalStep(false);
     try {
       const scalable = cleanupRequestMode === "scalable";
-      const response = await fetch(scalable ? "/api/dev/gmail-scalable-cleanup/start" : "/api/dev/gmail-cleanup/resolve", {
+      const outlook = cleanupRequestMode === "outlook";
+      const response = await fetch(
+        outlook ? "/api/dev/outlook-cleanup/start" : scalable ? "/api/dev/gmail-scalable-cleanup/start" : "/api/dev/gmail-cleanup/resolve",
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ groupIndices, requestedCount, benchmarkOnly })
       });
-      const body = (await response.json()) as { job?: GmailCleanupJobView | GmailScalableJobView; error?: string };
+      const body = (await response.json()) as { job?: GmailCleanupJobView | GmailScalableJobView | OutlookCleanupJobView; error?: string };
       if (!response.ok || !body.job) throw new Error(body.error ?? "We couldn't check these messages. Try again.");
-      if (scalable) {
+      if (outlook) {
+        setOutlookJob(body.job as OutlookCleanupJobView);
+        setCheckedGroupIndices(groupIndices);
+        setReviewStarted(true);
+      } else if (scalable) {
         setScalableJob(body.job as GmailScalableJobView);
         setCheckedGroupIndices(groupIndices);
         setReviewStarted(true);
@@ -266,7 +321,7 @@ export function GmailCleanupClient({
         setJob(body.job as GmailCleanupJobView);
       }
       setSnapshotExpired(false);
-      if (!scalable && !benchmarkOnly && body.job.status === "ready") {
+      if (!outlook && !scalable && !benchmarkOnly && body.job.status === "ready") {
         setCheckedGroupIndices(groupIndices);
         setReviewStarted(true);
       }
@@ -278,35 +333,44 @@ export function GmailCleanupClient({
   }
 
   async function confirmCleanup() {
-    const activeJob = scalableJob ?? job;
+    const activeJob = outlookJob ?? scalableJob ?? job;
     if (!activeJob || !beginOperation("trash")) return;
     setError(null);
     try {
-      const response = await fetch(scalableJob ? "/api/dev/gmail-scalable-cleanup/confirm" : "/api/dev/gmail-cleanup/confirm", {
+      const response = await fetch(outlookJob ? "/api/dev/outlook-cleanup/confirm" : scalableJob ? "/api/dev/gmail-scalable-cleanup/confirm" : "/api/dev/gmail-cleanup/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId: activeJob.id, confirmation: "MOVE_TO_TRASH" })
+        body: JSON.stringify({ jobId: activeJob.id, confirmation: "MOVE_TO_TRASH", confirmed: true })
       });
-      const body = (await response.json()) as { job?: GmailCleanupJobView | GmailScalableJobView; error?: string };
+      const body = (await response.json()) as { job?: GmailCleanupJobView | GmailScalableJobView | OutlookCleanupJobView; error?: string };
       if (response.status === 410) {
         setSnapshotExpired(true);
         setFinalStep(false);
         return;
       }
-      if (!response.ok || !body.job) throw new Error(body.error ?? "We couldn't move these messages to Trash. Try again.");
-      if (scalableJob) setScalableJob(body.job as GmailScalableJobView);
+      if (!response.ok || !body.job) {
+        throw new Error(body.error ?? (outlookJob
+          ? "We couldn't move these messages to Deleted Items. Try again."
+          : "We couldn't move these messages to Trash. Try again."));
+      }
+      if (outlookJob) setOutlookJob(body.job as OutlookCleanupJobView);
+      else if (scalableJob) setScalableJob(body.job as GmailScalableJobView);
       else setJob(body.job as GmailCleanupJobView);
       setSnapshotExpired(false);
       setFinalStep(false);
     } catch (confirmError) {
-      setError(confirmError instanceof Error ? confirmError.message : "We couldn't move these messages to Trash. Try again.");
+      setError(confirmError instanceof Error
+        ? confirmError.message
+        : outlookJob
+          ? "We couldn't move these messages to Deleted Items. Try again."
+          : "We couldn't move these messages to Trash. Try again.");
     } finally {
       finishOperation("trash");
     }
   }
 
   async function startOver() {
-    const activeJob = scalableJob ?? job;
+    const activeJob = outlookJob ?? scalableJob ?? job;
     if (!activeJob || !beginOperation("start_over")) return;
     setError(null);
     try {
@@ -328,21 +392,23 @@ export function GmailCleanupClient({
   }
 
   async function undoCleanup() {
-    const activeJob = scalableJob ?? job;
+    const activeJob = outlookJob ?? scalableJob ?? job;
     if (!activeJob || !beginOperation("undo")) return;
     setError(null);
     try {
-      const response = await fetch(scalableJob ? "/api/dev/gmail-scalable-cleanup/undo" : "/api/dev/gmail-cleanup/undo", {
+      const response = await fetch(outlookJob ? "/api/dev/outlook-cleanup/undo" : scalableJob ? "/api/dev/gmail-scalable-cleanup/undo" : "/api/dev/gmail-cleanup/undo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           jobId: activeJob.id,
-          ...(scalableJob ? { confirmation: "RESTORE_FROM_TRASH" } : {})
+          ...(scalableJob ? { confirmation: "RESTORE_FROM_TRASH" } : {}),
+          ...(outlookJob ? { confirmed: true } : {})
         })
       });
-      const body = (await response.json()) as { job?: GmailCleanupJobView | GmailScalableJobView; error?: string };
+      const body = (await response.json()) as { job?: GmailCleanupJobView | GmailScalableJobView | OutlookCleanupJobView; error?: string };
       if (!response.ok || !body.job) throw new Error(body.error ?? "We couldn't restore these messages. Try again.");
-      if (scalableJob) setScalableJob(body.job as GmailScalableJobView);
+      if (outlookJob) setOutlookJob(body.job as OutlookCleanupJobView);
+      else if (scalableJob) setScalableJob(body.job as GmailScalableJobView);
       else setJob(body.job as GmailCleanupJobView);
     } catch (undoError) {
       setError(undoError instanceof Error ? undoError.message : "We couldn't restore these messages. Try again.");
@@ -375,7 +441,7 @@ export function GmailCleanupClient({
     setError(null);
     let navigating = false;
     try {
-      const response = await fetch("/api/app/gmail-scan/start", { method: "POST" });
+      const response = await fetch(provider === "microsoft" ? "/api/app/microsoft-scan/start" : "/api/app/gmail-scan/start", { method: "POST" });
       if (!response.ok) throw new Error("We couldn't rescan your inbox. Try again.");
       navigating = true;
       router.push("/app/scan");
@@ -384,6 +450,23 @@ export function GmailCleanupClient({
     } finally {
       if (!navigating) finishOperation("rescan");
     }
+  }
+
+  if (outlookJob) {
+    return (
+      <OutlookCleanupWorkspace
+        busy={busy}
+        error={error}
+        finalStep={finalStep}
+        groups={checkedGroups}
+        job={outlookJob}
+        onConfirm={confirmCleanup}
+        onRescan={rescanInbox}
+        onToggleFinalStep={setFinalStep}
+        onUndo={undoCleanup}
+        reportGroups={groups}
+      />
+    );
   }
 
   if (scalableJob) {
@@ -685,6 +768,192 @@ function cleanupWorkspaceHeading(state: CleanupWorkspaceState, job: GmailCleanup
   if (state === "undo_complete") return job.status === "undone" ? "Undo complete" : "Undo result";
   if (state === "complete") return job.status === "completed" ? "Cleanup complete" : "Cleanup result";
   return "Suggested cleanup";
+}
+
+function OutlookCleanupWorkspace({
+  busy,
+  error,
+  finalStep,
+  groups,
+  job,
+  onConfirm,
+  onRescan,
+  onToggleFinalStep,
+  onUndo,
+  reportGroups
+}: {
+  busy: boolean;
+  error: string | null;
+  finalStep: boolean;
+  groups: CleanupSenderGroup[];
+  job: OutlookCleanupJobView;
+  onConfirm: () => void;
+  onRescan: () => void;
+  onToggleFinalStep: (value: boolean) => void;
+  onUndo: () => void;
+  reportGroups: CleanupSenderGroup[];
+}) {
+  const working = shouldPollOutlookCleanup(job);
+  const frozenJob: FrozenSenderJob = {
+    suggestedDeltas: [],
+    verifiedCount: 0,
+    undoVerifiedCount: 0,
+    selectedSenderGroupCount: groups.length,
+    selectedReadyCount: groups.reduce((total, group) => total + group.cleanupCandidateCount, 0),
+    contributingSenderGroupCount: groups.length,
+    requestedCount: job.requested
+  };
+  const heading = job.status === "ready"
+    ? "Suggested cleanup"
+    : job.status === "complete"
+      ? "Cleanup complete"
+      : job.status === "undo_complete"
+        ? "Undo complete"
+        : job.status === "undoing"
+          ? "Restoring messages"
+          : job.status === "created" || job.status === "resolving"
+            ? "Checking messages"
+            : job.status === "running"
+              ? "Moving to Deleted Items"
+              : job.status === "failed"
+                ? "Cleanup stopped"
+                : "Cleanup result";
+
+  return (
+    <section aria-busy={working} className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+      <aside className="panel order-1 p-5 lg:order-2 lg:sticky lg:top-24">
+        <p className="eyebrow m-0">Up to {job.requested.toLocaleString()} Outlook messages</p>
+        <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{heading}</h2>
+        {working ? (
+          <>
+            <OperationStatus
+              description={job.status === "undoing"
+                  ? "We're restoring the exact verified messages to their original folders and checking each result."
+                  : job.status === "running"
+                    ? "Each frozen message is rechecked immediately before it moves, then verified in Deleted Items."
+                    : "We're freezing the exact Suggested messages for this review."}
+              startedAt={job.updatedAt}
+              title={job.status === "undoing"
+                ? "Restoring messages..."
+                : job.status === "running"
+                  ? `Moving up to ${job.requested.toLocaleString()} messages to Deleted Items...`
+                  : `Checking ${job.requested.toLocaleString()} messages...`}
+            />
+            {job.status === "running" ? (
+              <div className="mt-4 border-t border-[var(--line)] pt-4">
+                <progress aria-label="Outlook cleanup batch progress" className="h-2 w-full" max={job.totalBatches} value={job.batchesCompleted} />
+                <dl className="mt-3 grid gap-2 text-sm">
+                  <Row label="Messages checked" value={`${job.checked.toLocaleString()} / ${job.requested.toLocaleString()}`} />
+                  <Row label="Moved and verified" value={job.movedVerified.toLocaleString()} />
+                  <Row label="Batch size" value={job.effectiveBatchSize.toLocaleString()} />
+                  <Row label="Current chunk" value={`${job.currentChunk.toLocaleString()} / ${job.totalChunks.toLocaleString()}`} />
+                  <Row label="Current batch" value={`${job.currentBatch.toLocaleString()} / ${job.totalBatches.toLocaleString()}`} />
+                </dl>
+              </div>
+            ) : null}
+            {job.status === "undoing" ? (
+              <div className="mt-4 border-t border-[var(--line)] pt-4">
+                <progress aria-label="Outlook Undo batch progress" className="h-2 w-full" max={job.undoTotalBatches} value={job.undoBatchesCompleted} />
+                <dl className="mt-3 grid gap-2 text-sm">
+                  <Row label="Restored and verified" value={`${job.restoredVerified.toLocaleString()} / ${job.movedVerified.toLocaleString()}`} />
+                  <Row label="Batch size" value={job.effectiveBatchSize.toLocaleString()} />
+                  <Row label="Undo batches" value={`${job.undoBatchesCompleted.toLocaleString()} / ${job.undoTotalBatches.toLocaleString()}`} />
+                </dl>
+              </div>
+            ) : null}
+          </>
+        ) : null}
+        {error ? <Notice text={error} /> : null}
+
+        {job.status === "ready" ? (
+          <>
+            <dl className="mt-4 grid gap-2 text-sm">
+              <Row label="Messages frozen for review" value={job.requested.toLocaleString()} />
+              <Row label="Selected sender groups" value={groups.length.toLocaleString()} />
+            </dl>
+            <p className="muted m-0 mt-4 text-sm">We will recheck these messages and leave protected email out.</p>
+            <p className="muted m-0 mt-2 text-sm">Nothing will be permanently deleted.</p>
+            {!finalStep ? (
+              <button className="btn btn-primary focus-ring mt-5 w-full" onClick={() => onToggleFinalStep(true)} type="button">
+                Move up to {job.requested.toLocaleString()} to Deleted Items
+              </button>
+            ) : (
+              <div className="mt-5 grid gap-2 border-t border-[var(--line)] pt-4">
+                <p className="m-0 font-extrabold text-[var(--navy)]">Move up to {job.requested.toLocaleString()} messages to Deleted Items?</p>
+                <p className="muted m-0 text-sm">We will recheck these messages and leave protected email out.</p>
+                <p className="muted m-0 text-sm">Nothing will be permanently deleted.</p>
+                <button className="btn btn-secondary focus-ring w-full" onClick={() => onToggleFinalStep(false)} type="button">Cancel</button>
+                <button className="btn btn-primary focus-ring w-full" onClick={onConfirm} type="button">Move up to {job.requested.toLocaleString()} to Deleted Items</button>
+              </div>
+            )}
+          </>
+        ) : null}
+
+        {["complete", "partial", "uncertain", "failed"].includes(job.status) ? (
+          <div className="mt-4 grid gap-2 border-t border-[var(--line)] pt-4">
+            <p className="m-0 text-xl font-extrabold text-[var(--navy)]">{job.movedVerified.toLocaleString()} emails moved to Deleted Items.</p>
+            <p className="muted m-0 text-sm">They&apos;re still recoverable in Outlook Deleted Items.</p>
+            <dl className="grid gap-2 text-sm">
+              <Row label="Approved" value={job.approved.toLocaleString()} />
+              <Row label="Excluded by safety" value={job.excludedBySafety.toLocaleString()} />
+              <Row label="Failed" value={job.failed.toLocaleString()} />
+              <Row label="Uncertain" value={job.uncertain.toLocaleString()} />
+            </dl>
+            {job.uncertain > 0 ? <Notice text="A provider result is uncertain. Do not start another cleanup until Outlook folders are inspected." /> : null}
+            {job.status === "failed" ? <Notice text="The Outlook cleanup job stopped safely. No replacement messages were selected." /> : null}
+            {job.undoAvailable ? <button className="btn btn-secondary focus-ring w-full" disabled={busy} onClick={onUndo} type="button">Undo</button> : null}
+            <button className="btn btn-primary focus-ring w-full" disabled={busy} onClick={onRescan} type="button">Rescan inbox</button>
+            <ContextBackAction className="w-full" href="/app/report" label="Back to Inbox Report" />
+          </div>
+        ) : null}
+
+        {job.status === "undo_complete" ? (
+          <div className="mt-4 grid gap-2 border-t border-[var(--line)] pt-4">
+            <p className="m-0 text-lg font-extrabold text-[var(--navy)]">{job.restoredVerified.toLocaleString()} messages restored from Deleted Items.</p>
+            <dl className="grid gap-2 text-sm">
+              <Row label="Verified restored" value={job.restoredVerified.toLocaleString()} />
+              <Row label="Failed" value={job.failed.toLocaleString()} />
+              <Row label="Uncertain" value={job.uncertain.toLocaleString()} />
+            </dl>
+            <button className="btn btn-primary focus-ring w-full" disabled={busy} onClick={onRescan} type="button">Rescan inbox</button>
+            <ContextBackAction className="w-full" href="/app/report" label="Back to Inbox Report" />
+          </div>
+        ) : null}
+
+        <CopyOutlookCleanupSummaryButton job={job} />
+      </aside>
+      <FrozenSenderContext groups={groups} job={frozenJob} reportGroups={reportGroups} sessionAdjusted={false} />
+    </section>
+  );
+}
+
+function CopyOutlookCleanupSummaryButton({ job }: { job: OutlookCleanupJobView }) {
+  const summary = formatOutlookCleanupDiagnostic(job);
+  const [feedback, dispatch] = useReducer(reduceCopyFeedback, {
+    snapshotKey: summary,
+    status: "idle"
+  });
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    clearTimeout(timer.current);
+    dispatch({ type: "snapshot_changed", snapshotKey: summary });
+    return () => clearTimeout(timer.current);
+  }, [summary]);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(summary);
+      dispatch({ type: "copy_succeeded", snapshotKey: summary });
+    } catch {
+      dispatch({ type: "copy_failed", snapshotKey: summary });
+    }
+    clearTimeout(timer.current);
+    timer.current = setTimeout(
+      () => dispatch({ type: "reset", snapshotKey: summary }),
+      COPY_FEEDBACK_DURATION_MS
+    );
+  }
+  const label = copyFeedbackLabel(feedback, summary, "Copy Outlook cleanup summary");
+  return <button className="btn btn-secondary focus-ring mt-4 w-full" onClick={copy} type="button"><span aria-live="polite">{label}</span></button>;
 }
 
 function ScalableCleanupWorkspace({

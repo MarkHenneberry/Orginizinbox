@@ -1,12 +1,16 @@
 import Link from "next/link";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
-import { GmailScanClient } from "@/components/product/GmailScanClient";
+import { GmailScanClient, OutlookScanClient } from "@/components/product/GmailScanClient";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 import { getLiveScan, serializeScanProgress } from "@/lib/server/live-scan-store";
+import { runtimeConfig } from "@/lib/config";
+import { hasRequiredMicrosoftImapScope } from "@/lib/providers/microsoft/scopes";
 
 export default async function ScanPage() {
   const connection = await getCurrentProviderConnection();
-  const liveScan = connection.mode === "connected" ? getLiveScan(connection.userId) : undefined;
+  const liveScan = connection.mode === "connected"
+    ? await getLiveScan(connection.userId, connection.provider)
+    : undefined;
 
   return (
     <main className="py-8">
@@ -37,7 +41,7 @@ export default async function ScanPage() {
           </section>
         ) : null}
 
-        {connection.mode === "needs_reconnect" ? (
+        {connection.mode === "needs_reconnect" && connection.provider === "gmail" ? (
           <section className="panel mt-6 p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Gmail connection needs attention</h2>
             <p className="muted">Reconnect Gmail, then approve access when Google asks.</p>
@@ -49,7 +53,28 @@ export default async function ScanPage() {
           </section>
         ) : null}
 
-        {connection.mode === "connected" ? (
+        {connection.mode === "needs_reconnect" && connection.provider === "microsoft" ? (
+          <section className="panel mt-6 p-6">
+            <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Microsoft connection needs attention</h2>
+            <p className="muted">Reconnect Microsoft from the development connection page.</p>
+            <Link className="btn btn-primary focus-ring mt-4" href="/connect/microsoft">
+              Reconnect Microsoft
+            </Link>
+          </section>
+        ) : null}
+
+        {connection.mode === "connected" && connection.provider === "microsoft" ? (
+          <>
+            <p className="muted mt-3">{connection.accountEmail ? `${connection.accountEmail} is connected.` : "Microsoft is connected."}</p>
+            <OutlookScanClient
+              imapAvailable={runtimeConfig.outlookImapBenchmarkDevEnabled && hasRequiredMicrosoftImapScope(connection.imapScope)}
+              imapBenchmarkEnabled={runtimeConfig.outlookImapBenchmarkDevEnabled}
+              initialProgress={liveScan?.progress.provider === "microsoft" ? serializeScanProgress(liveScan.progress) : null}
+            />
+          </>
+        ) : null}
+
+        {connection.mode === "connected" && connection.provider === "gmail" ? (
           <>
             <p className="muted mt-3">{connection.accountEmail ? `${connection.accountEmail} is connected.` : "Gmail is connected."}</p>
             <GmailScanClient initialProgress={liveScan ? serializeScanProgress(liveScan.progress) : null} />

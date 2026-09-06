@@ -125,6 +125,18 @@ describe("transient scalable cleanup store", () => {
 });
 
 describe("CleanupJobRunner", () => {
+  it("deduplicates the same user's cleanup acceptance without colliding with another user", () => {
+    const harness = createHarness();
+    const first = harness.runner.accept(acceptanceInput());
+    const sameUserDuplicate = harness.runner.accept(acceptanceInput());
+    const otherUser = harness.runner.accept({ ...acceptanceInput(), userId: "user-2" });
+
+    expect(sameUserDuplicate.id).toBe(first.id);
+    expect(sameUserDuplicate.duplicateStartCount).toBe(1);
+    expect(otherUser.id).not.toBe(first.id);
+    expect(harness.queue).toHaveLength(2);
+  });
+
   it("runs one deterministic 250-message chunk and one bulk Undo single-flight", async () => {
     const harness = createHarness();
     const first = harness.runner.accept(acceptanceInput());

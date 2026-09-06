@@ -115,7 +115,7 @@ describe("gmail live benchmark guardrails", () => {
   it("checks Gmail readiness before starting a benchmark job", () => {
     const startRoute = readFileSync("app/api/dev/gmail-benchmark/start/route.ts", "utf8");
     expect(startRoute).toMatch(/getActiveGmailConnection/);
-    expect(startRoute).toMatch(/const activeConnection = await getActiveGmailConnection[\s\S]+const progress = createGmailBenchmarkSession/);
+    expect(startRoute).toMatch(/const activeConnection = await getActiveGmailConnection[\s\S]+const accepted = await createGmailBenchmarkSession/);
   });
 
   it("keeps encrypted credential fields separate from mailbox-derived persistence", () => {

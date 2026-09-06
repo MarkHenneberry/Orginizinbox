@@ -173,6 +173,7 @@ describe("development classifier diagnostics", () => {
         recentMessages: 0,
         sentMessages: 0,
         draftMessages: 0,
+        deletedItemsMessages: 0,
         personalMessages: 0,
         participatedConversationMessages: 0,
         userLabelMessages: 0,

@@ -22,7 +22,8 @@ import { sha256Base64Url } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
 import {
   cleanupStateExpiryFor,
-  createPrismaGmailScalableCleanupStore
+  createPrismaGmailScalableCleanupStore,
+  prepareCleanupJobState
 } from "@/lib/server/gmail-scalable-cleanup-durable-store";
 import { GmailScalableCleanupError } from "@/lib/server/gmail-scalable-cleanup-runner";
 import { prepareGmailScalableJobForConfirmedCleanup } from "@/lib/server/gmail-scalable-workflow-executor";
@@ -35,8 +36,6 @@ import {
   startGmailScalableCleanupWorkflow,
   startGmailScalableUndoWorkflow
 } from "@/lib/server/gmail-scalable-workflow-start";
-
-const activeStatuses = new Set(["created", "safety_checking", "ready", "mutating", "verifying", "chunk_complete", "paused", "complete", "undoing"]);
 
 export async function acceptDurableGmailScalableCleanup(input: {
   userId: string;
@@ -62,8 +61,6 @@ export async function acceptDurableGmailScalableCleanup(input: {
     JSON.stringify([input.scanId, [...groupIndices].sort((left, right) => left - right), input.requestedCount])
   );
   const store = createPrismaGmailScalableCleanupStore();
-  const existing = await findActiveDurableJob(input.userId, acceptanceKey);
-  if (existing) return serializeGmailScalableJob(existing);
 
   const connection = await prisma.providerConnection.findFirst({
     where: {
@@ -80,33 +77,41 @@ export async function acceptDurableGmailScalableCleanup(input: {
 
   const now = Date.now();
   const job = createAcceptedJob({ ...input, groupIndices, allocatedTargets, acceptanceKey, now });
-  await prisma.$transaction(async (transaction) => {
-    await transaction.scan.upsert({
-      where: { id: input.scanId },
-      update: { status: "completed", completedAt: new Date(now) },
-      create: {
-        id: input.scanId,
-        userId: input.userId,
-        providerConnectionId: connection.id,
-        provider: "gmail",
-        status: "completed",
-        startedAt: new Date(now),
-        completedAt: new Date(now)
-      }
-    });
-    await transaction.cleanupJob.create({
-      data: { id: job.view.id, scanId: input.scanId, status: "pending" }
-    });
-  });
+  const prepared = prepareCleanupJobState(job);
   try {
-    const created = await store.create(job);
-    await startGmailScalableCleanupWorkflow(created.view.id);
-    return serializeGmailScalableJob(created);
+    await prisma.$transaction(async (transaction) => {
+      await transaction.scan.upsert({
+        where: { id: input.scanId },
+        update: { status: "completed", completedAt: new Date(now) },
+        create: {
+          id: input.scanId,
+          userId: input.userId,
+          providerConnectionId: connection.id,
+          provider: "gmail",
+          status: "completed",
+          startedAt: new Date(now),
+          completedAt: new Date(now)
+        }
+      });
+      await transaction.cleanupJob.create({
+        data: { id: prepared.job.view.id, scanId: input.scanId, acceptanceKey, status: "pending" }
+      });
+      await transaction.cleanupJobState.create({ data: prepared.data });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    await store.delete(input.userId, job.view.id).catch(() => false);
-    await prisma.cleanupJob.deleteMany({ where: { id: job.view.id } });
-    throw error;
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+    const existingRow = await prisma.cleanupJob.findUnique({
+      where: { scanId_acceptanceKey: { scanId: input.scanId, acceptanceKey } },
+      select: { id: true, scan: { select: { userId: true, provider: true } } }
+    });
+    if (!existingRow || existingRow.scan.userId !== input.userId || existingRow.scan.provider !== "gmail") throw error;
+    const existing = await store.get(input.userId, existingRow.id);
+    if (!existing) throw new GmailScalableCleanupError("The accepted cleanup job is not available yet. Try again.", 409);
+    await startGmailScalableCleanupWorkflow(existing.view.id);
+    return serializeGmailScalableJob(existing);
   }
+  await startGmailScalableCleanupWorkflow(prepared.job.view.id);
+  return serializeGmailScalableJob(prepared.job);
 }
 
 export async function getDurableGmailScalableCleanupStatus(userId: string, jobId: string) {
@@ -118,14 +123,13 @@ export async function getDurableGmailScalableCleanupStatus(userId: string, jobId
 }
 
 export async function getLatestDurableGmailScalableCleanup(userId: string) {
-  const rows = await prisma.cleanupJobState.findMany({
-    where: { userId, expiresAt: { gt: new Date() } },
+  const row = await prisma.cleanupJobState.findFirst({
+    where: { userId, expiresAt: { gt: new Date() }, job: { scan: { provider: "gmail" } } },
     orderBy: { updatedAt: "desc" },
-    take: 10,
     select: { jobId: true }
   });
   const store = createPrismaGmailScalableCleanupStore();
-  for (const row of rows) {
+  if (row) {
     const job = await store.get(userId, row.jobId);
     if (job) return serializeGmailScalableJob(job);
   }
@@ -242,21 +246,6 @@ function terminalRowToView(row: { id: string; terminalSnapshot: Prisma.JsonValue
   return snapshot
     ? terminalSnapshotToGmailScalableJobView({ id: row.id, snapshot, snapshotVersion: row.terminalSnapshotVersion })
     : undefined;
-}
-
-async function findActiveDurableJob(userId: string, acceptanceKey: string) {
-  const rows = await prisma.cleanupJobState.findMany({
-    where: { userId, expiresAt: { gt: new Date() } },
-    orderBy: { updatedAt: "desc" },
-    take: 10,
-    select: { jobId: true }
-  });
-  const store = createPrismaGmailScalableCleanupStore();
-  for (const row of rows) {
-    const job = await store.get(userId, row.jobId);
-    if (job?.acceptanceKey === acceptanceKey && activeStatuses.has(job.view.status)) return job;
-  }
-  return undefined;
 }
 
 function createAcceptedJob(input: {

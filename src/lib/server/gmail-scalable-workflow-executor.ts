@@ -46,7 +46,7 @@ export class GmailScalableProviderWorkflowExecutor implements GmailScalableWorkf
           break;
         case "dispatch_trash":
           await provider.moveToTrash(activeSafeTargetIds(job), reserve);
-          if (!job.payload.fixture?.enabled) markLiveReportStale(job.userId);
+          if (!job.payload.fixture?.enabled) await markLiveReportStale(job.userId, "gmail").catch(() => undefined);
           setActiveChunkStatus(job, "verifying");
           setJobStatus(job, "verifying", this.now());
           break;
@@ -62,7 +62,7 @@ export class GmailScalableProviderWorkflowExecutor implements GmailScalableWorkf
           break;
         case "dispatch_undo":
           await provider.removeTrashLabel(activeUndoTargetIds(job), reserve);
-          if (!job.payload.fixture?.enabled) markLiveReportStale(job.userId);
+          if (!job.payload.fixture?.enabled) await markLiveReportStale(job.userId, "gmail").catch(() => undefined);
           break;
         case "verify_undo":
           await verifyUndo(job, provider, reserve, this.now());

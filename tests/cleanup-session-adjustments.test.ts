@@ -66,7 +66,7 @@ describe("cleanup session Suggested-count adjustments", () => {
 
   it("keeps the report stale and derives deltas after authoritative verification", () => {
     const cleanup = readFileSync("src/lib/server/gmail-cleanup.ts", "utf8");
-    expect(cleanup).toMatch(/markLiveReportStale\(userId\)/);
+    expect(cleanup).toMatch(/markLiveReportStale\(userId, "gmail"\)/);
     expect(cleanup).not.toMatch(/markLiveReportCurrent|reportStale:\s*false/);
     expect(cleanup.indexOf("verifyMessagesInTrash(eligibleIds)")).toBeLessThan(
       cleanup.indexOf("countVerifiedCandidatesByGroup(eligibleCandidates, verification.verifiedIds)")

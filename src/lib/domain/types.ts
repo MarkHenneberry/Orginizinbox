@@ -22,6 +22,8 @@ export type ProtectionReason =
   | "PROTECTED_PERSONAL"
   | "PROTECTED_SENT"
   | "PROTECTED_DRAFT"
+  | "PROTECTED_MAILBOX_LOCATION"
+  | "PROTECTED_INCOMPLETE_METADATA"
   | "PROTECTED_SENDER"
   | "PROTECTED_TRANSACTIONAL_SUBJECT"
   | "PROTECTED_SECURITY_ACCOUNT_SUBJECT";
@@ -78,6 +80,9 @@ export type NormalizedMailboxRecord = {
   isImportant?: boolean;
   isSent?: boolean;
   isDraft?: boolean;
+  isDeleted?: boolean;
+  isExcludedMailboxLocation?: boolean;
+  hasUncertainMetadata?: boolean;
   conversationId?: string;
   subjectProtection?: SubjectProtection;
 };
@@ -110,6 +115,7 @@ export type SenderClassifierDiagnostics = {
     recentMessages: number;
     sentMessages: number;
     draftMessages: number;
+    deletedItemsMessages: number;
     personalMessages: number;
     participatedConversationMessages: number;
     userLabelMessages: number;
@@ -180,6 +186,57 @@ export type ClassifierScanPerformance = {
   protectionClassificationMs?: number;
   aggregationMs?: number;
   durationMs?: number;
+};
+
+export type OutlookScanDiagnostic = {
+  snapshotId: string;
+  transport: "graph" | "imap";
+  result: "SUCCESS" | "PARTIAL" | "FAILED";
+  messagesScanned: number;
+  graphPages: number;
+  graphRequests: number;
+  scanMode: "full" | "delta";
+  foldersScanned: number;
+  maxConcurrentGraphRequests: number;
+  metadataRequests: number;
+  headerEnrichmentRequests: number;
+  messagesEnriched: number;
+  mainMessagePageSize: number;
+  mainMessagePageSizes: number[];
+  mainMessagePages: number;
+  mainMessagePageFallbacks: number;
+  throttleWaitMs: number;
+  peakScanMemoryMb: number;
+  imapFolders: number;
+  imapMetadataBatches: number;
+  imapCommands: number;
+  imapRetries: number;
+  imapErrors: number;
+  imapPeakScanMemoryMb: number;
+  durationMs: number;
+  messagesPerSecond: number;
+  evidenceAvailability: {
+    conversationIdentity: boolean;
+    importance: boolean;
+    categories: boolean;
+    listId: boolean;
+    listUnsubscribe: boolean;
+    autoSubmitted: boolean;
+    precedence: boolean;
+  };
+  providerFailures: {
+    unauthorized401: number;
+    forbidden403: number;
+    throttled429: number;
+    server5xx: number;
+    other4xx: number;
+    lastOther4xxStatus?: number;
+    lastOther4xxCategory?: string;
+    lastOther4xxOperation?: string;
+    lastNonHttpFailureOperation?: string;
+    lastNonHttpFailureCategory?: string;
+    retries: number;
+  };
 };
 
 export type SenderAggregate = {

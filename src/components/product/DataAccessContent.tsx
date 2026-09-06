@@ -17,7 +17,7 @@ const capabilities = [
 ];
 
 export function DataAccessContent({ appContext = false, primaryCta }: { appContext?: boolean; primaryCta?: PublicPrimaryCta }) {
-  const cta = primaryCta ?? { href: "/connect/google", label: "Clean my inbox" };
+  const cta = primaryCta ?? { href: "/connect", label: "Clean my inbox" };
 
   return (
     <main>
