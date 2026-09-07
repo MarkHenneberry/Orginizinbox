@@ -70,7 +70,8 @@ describe("Google OAuth reconnect persistence", () => {
         encryptedAccessToken: "encrypted:fresh-access-token",
         encryptedRefreshToken: "encrypted:fresh-refresh-token",
         scope: "openid email profile https://mail.google.com/",
-        disconnectedAt: null
+        disconnectedAt: null,
+        sessionGeneration: null
       }),
       create: expect.objectContaining({ userId: "user-1", provider: "gmail" })
     });

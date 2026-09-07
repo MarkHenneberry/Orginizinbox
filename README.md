@@ -70,8 +70,8 @@ Next.js remains the product UI, marketing site, account surface, and API/control
 
 Organizinbox should not become a mailbox database. Production mailbox records are transient processing data.
 
-- Do not persist message IDs, sender addresses, message dates, labels, flags, per-message classifications, user-specific sender rankings, category analytics, or permanent Inbox Report results.
-- Do not retrieve subjects in MVP.
+- Keep minimum mailbox-derived scan/report checkpoints and cleanup/Undo ledgers only in encrypted transient ScanState/CleanupJobState payloads, never normal Prisma columns or permanent reports.
+- Discard Subject text after deriving protection signals; do not store or log it.
 - Do not retrieve email bodies during normal scans.
 - Do not download attachments.
 - Do not send mailbox data to LLMs or external AI providers.
@@ -79,7 +79,15 @@ Organizinbox should not become a mailbox database. Production mailbox records ar
 - Do not sell mailbox-derived data, use it for advertising, train AI on it, or use it for unrelated profiling.
 - Do not add permanent-delete capability.
 
-The accurate user-facing claim is: **We do not store your inbox.**
+Inbox Reports and required scan/cleanup state are stored temporarily in encrypted form, then removed after expiry; there is no permanent inbox copy.
+
+### Scheduled Retention Deletion
+
+`vercel.json` schedules `GET /api/cron/purge-transient-state` every minute in production. Configure a strong `CRON_SECRET` in Vercel Production before deploying; Vercel supplies it as a Bearer authorization header. Do not put it in a URL, browser bundle, or logs. Minute scheduling requires a supporting Vercel plan (not Hobby). Local development and preview deployments do not run this schedule automatically.
+
+The purge uses stored `expiresAt`, not a new retention period. Scan/report state uses its existing one-hour window. Cleanup uses `CLEANUP_STATE_ACTIVE_TTL_SECONDS`, `CLEANUP_STATE_UNDO_TTL_SECONDS`, and `CLEANUP_STATE_TERMINAL_TTL_SECONDS` (defaults 1800/1800/60). Valid worker leases defer deletion. Each run removes at most 5,000 expired rows per table; subsequent runs drain any backlog. No provider request or decryption is involved. Normal aggregate Scan/CleanupJob records and provider credentials remain intact.
+
+Monitor the aggregate-only `transient_state_purge` event, HTTP failures, missing scheduled invocations, remaining backlog and deferred counts. Vercel does not retry failed Cron invocations; the next sweep retries eligible rows. Deploy-time scheduling/authentication and backup retention require operational verification. Application row deletion does not erase backups or copies already delivered to a browser. Development memory adapters sweep idle expired entries while their process runs; the legacy scalable memory adapter defers potentially in-flight statuses until they finish or the process exits.
 
 ## Gmail OAuth / IMAP
 

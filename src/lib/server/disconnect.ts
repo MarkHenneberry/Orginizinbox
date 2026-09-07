@@ -77,6 +77,7 @@ async function disconnectCurrentProviderSessionWithMode(
         tokenExpiresAt: null,
         scope: null,
         tokenVersion: { increment: 1 },
+        sessionGeneration: null,
         refreshLeaseOwner: null,
         refreshLeaseExpiresAt: null,
         disconnectedAt: new Date()

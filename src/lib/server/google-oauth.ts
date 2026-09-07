@@ -298,6 +298,7 @@ export async function upsertGoogleConnection(tokens: VerifiedGoogleTokenResponse
           tokenExpiresAt,
           scope: tokens.scope,
           disconnectedAt: null,
+          sessionGeneration: null,
           tokenVersion: { increment: 1 },
           refreshLeaseOwner: null,
           refreshLeaseExpiresAt: null

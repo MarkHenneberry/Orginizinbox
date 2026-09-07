@@ -37,6 +37,7 @@ enum EntitlementPlan {
 model User {
   id                  String               @id @default(cuid())
   emailHash           String?              @unique
+  microsoftIdentityHash String?            @unique
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   providerConnections ProviderConnection[]
@@ -61,6 +62,7 @@ model ProviderConnection {
   imapTokenExpiresAt        DateTime?
   imapScope                 String?
   tokenVersion          Int               @default(0)
+  sessionGeneration     String?
   refreshLeaseOwner     String?
   refreshLeaseExpiresAt DateTime?
   createdAt             DateTime          @default(now())

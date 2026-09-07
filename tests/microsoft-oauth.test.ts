@@ -293,7 +293,7 @@ describe("Microsoft OAuth", () => {
     expect(JSON.stringify(persistence.upsert.mock.calls)).not.toContain('"provider":"gmail"');
   });
 
-  it("uses the same compound upsert boundary for simultaneous OAuth callbacks", async () => {
+  it("uses stable Microsoft identity for simultaneous OAuth callbacks", async () => {
     const tokens = {
       access_token: "access-token",
       refresh_token: "refresh-token",
@@ -309,11 +309,60 @@ describe("Microsoft OAuth", () => {
 
     await Promise.all([upsertMicrosoftConnection(tokens), upsertMicrosoftConnection(tokens)]);
 
+    expect(persistence.userUpsert).toHaveBeenCalledWith({
+      where: { microsoftIdentityHash: "hash:11111111-1111-4111-8111-111111111111:microsoft-subject" },
+      update: {},
+      create: { microsoftIdentityHash: "hash:11111111-1111-4111-8111-111111111111:microsoft-subject" }
+    });
     expect(persistence.upsert).toHaveBeenCalledTimes(2);
     expect(persistence.upsert.mock.calls.every(([input]) =>
       input.where.userId_provider.userId === "user-1" && input.where.userId_provider.provider === "microsoft"
     )).toBe(true);
     expect(persistence.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-email identities and tenants separate, and reconnects after email changes or removal", async () => {
+    const owners = new Map<string, { id: string }>();
+    persistence.userUpsert.mockImplementation(async ({ where }) => {
+      const key = where.microsoftIdentityHash;
+      expect(typeof key).toBe("string");
+      expect(where).not.toHaveProperty("emailHash");
+      if (!owners.has(key)) owners.set(key, { id: `owner-${owners.size}` });
+      return owners.get(key);
+    });
+    const connect = (tenantId: string, subject: string, email?: string) => upsertMicrosoftConnection({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      id_token: "verified-id-token",
+      scope: "mail.readwrite",
+      identity: { tenantId, subject, email }
+    });
+    const first = await connect("tenant-a", "subject-a", "same@example.test");
+    const second = await connect("tenant-a", "subject-b", "same@example.test");
+    const otherTenant = await connect("tenant-b", "subject-a", "same@example.test");
+    expect(new Set([first.user.id, second.user.id, otherTenant.user.id]).size).toBe(3);
+    expect((await connect("tenant-a", "subject-a", "changed@example.test")).user.id).toBe(first.user.id);
+    expect((await connect("tenant-a", "subject-a")).user.id).toBe(first.user.id);
+    expect(persistence.upsert).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { userId_provider: { userId: first.user.id, provider: "microsoft" } },
+      update: expect.objectContaining({ encryptedAccountEmail: null, sessionGeneration: null, disconnectedAt: null })
+    }));
+  });
+
+  it("preserves migrated ownership on reconnect and invalidates the previous session", async () => {
+    const identity = { tenantId: "tenant", subject: "subject", email: "new@example.test" };
+    persistence.userUpsert.mockImplementation(async ({ where }) => {
+      expect(where).toEqual({ microsoftIdentityHash: "hash:tenant:subject" });
+      return { id: "migrated-user" };
+    });
+    await upsertMicrosoftConnection({
+      access_token: "new-access", refresh_token: "new-refresh", id_token: "verified",
+      scope: "mail.readwrite", identity
+    });
+    expect(persistence.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId_provider: { userId: "migrated-user", provider: "microsoft" } },
+      update: expect.objectContaining({ sessionGeneration: null, disconnectedAt: null })
+    }));
   });
 
   it("keeps secrets server-side and excludes send, attachment, and directory permissions", () => {

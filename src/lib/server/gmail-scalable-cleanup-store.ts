@@ -1,4 +1,5 @@
 import "server-only";
+import { createLocalRetentionSweep } from "@/lib/server/local-retention-sweep";
 import { decryptCleanupState, encryptCleanupState } from "@/lib/server/crypto";
 import type {
   GmailScalableChunkView,
@@ -92,6 +93,11 @@ const terminalStatuses = new Set(["complete", "partial", "uncertain", "failed", 
 
 export class InMemoryGmailScalableCleanupStore implements GmailScalableCleanupStore {
   private readonly jobs = new Map<string, EncryptedStoredJob>();
+  private readonly ensureRetentionSweep = createLocalRetentionSweep(() => {
+    // This development adapter has no worker leases. Defer states that may be in flight.
+    this.purgeExpiredIdle();
+    return this.jobs.size > 0;
+  });
 
   constructor(private readonly codec: GmailScalablePayloadCodec = createEncryptedJsonCodec()) {}
 
@@ -100,6 +106,7 @@ export class InMemoryGmailScalableCleanupStore implements GmailScalableCleanupSt
     if (this.jobs.has(job.view.id)) throw new Error("Scalable cleanup job already exists.");
     const stored = normalizeStoredJob(job, 1);
     this.jobs.set(job.view.id, this.encrypt(stored));
+    this.ensureRetentionSweep();
     return cloneStoredJob(stored);
   }
 
@@ -169,6 +176,13 @@ export class InMemoryGmailScalableCleanupStore implements GmailScalableCleanupSt
       if (job.view.expiresAt <= now && this.jobs.delete(jobId)) deleted += 1;
     }
     return deleted;
+  }
+
+  private purgeExpiredIdle(now = Date.now()) {
+    for (const [id, job] of this.jobs) {
+      if (["safety_checking", "mutating", "verifying", "undoing"].includes(job.view.status)) continue;
+      if (job.view.expiresAt <= now) this.jobs.delete(id);
+    }
   }
 
   private encrypt(job: GmailScalableStoredJob): EncryptedStoredJob {

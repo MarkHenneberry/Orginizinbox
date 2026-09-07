@@ -1,4 +1,5 @@
 import "server-only";
+import { scanStateTtlMs } from "@/lib/domain/transient-retention";
 import { Prisma, type EmailProviderName, type PrismaClient, type ScanState } from "@prisma/client";
 import type { InboxReport } from "@/lib/domain/types";
 import type { GmailScalableCleanupTarget } from "@/lib/providers/gmail/scalable-targets";
@@ -129,7 +130,7 @@ export interface ScanStateRepository {
   delete(userId: string, provider?: LiveScanProvider): Promise<number>;
 }
 
-const ttlMs = 60 * 60 * 1000;
+const ttlMs = scanStateTtlMs;
 
 export class DurableLiveScanStore {
   constructor(private readonly repository: ScanStateRepository = new PrismaScanStateRepository(prisma)) {}

@@ -160,7 +160,7 @@ export default async function HomePage() {
             <div>
               <p className="eyebrow">Privacy</p>
               <h2 className="mt-3 text-3xl font-extrabold text-[var(--navy)]">Plain-language data access.</h2>
-              <p className="muted">We don&apos;t store your inbox. Basic email details are processed only while building your report and completing cleanup you approve.</p>
+              <p className="muted">Your report and required scan/cleanup state are stored temporarily in encrypted form and deleted after expiry. We do not keep a permanent copy of your inbox.</p>
             </div>
             <div>
               <p className="eyebrow">Compatibility</p>

@@ -455,10 +455,11 @@ export class FakeCleanupJobStateRepository implements CleanupJobStateRepository 
     return count;
   }
 
-  async deleteExpired(now: Date) {
+  async deleteExpired(now: Date, onlyJobId?: string) {
     let count = 0;
     for (const [jobId, row] of this.rows) {
-      if (row.expiresAt <= now && this.rows.delete(jobId)) count += 1;
+      if ((!onlyJobId || jobId === onlyJobId) && row.expiresAt <= now &&
+          (!row.lockExpiresAt || row.lockExpiresAt <= now) && this.rows.delete(jobId)) count += 1;
     }
     return count;
   }

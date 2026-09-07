@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RetentionDisclosure } from "@/components/product/RetentionDisclosure";
 import type { PublicPrimaryCta } from "@/lib/server/app-state";
 
 const capabilities = [
@@ -10,7 +11,7 @@ const capabilities = [
   ["Create drafts", "No", "Draft creation is outside the product scope."],
   ["Permanently delete email", "No", "Approved cleanup moves mail to Trash or Deleted Items only."],
   ["Move mail you approve to Trash / Deleted Items", "Yes", "Only after you review and confirm the cleanup."],
-  ["Store a permanent copy of your inbox", "No", "Your Inbox Report is temporary and is not saved to your account database."],
+  ["Store a permanent copy of your inbox", "No", "Inbox Reports and required scan/cleanup state are stored temporarily in encrypted form, then deleted after expiry."],
   ["Sell mailbox data", "Never", "Mailbox-derived data is not for sale."],
   ["Use mailbox data for advertising", "Never", "Mailbox-derived data must not be used for ads or targeting."],
   ["Train AI on mailbox data", "Never", "Mailbox data is not sent to AI training systems."]
@@ -24,7 +25,7 @@ export function DataAccessContent({ appContext = false, primaryCta }: { appConte
       <section className="section">
         <div className="container">
           <p className="eyebrow">Data access</p>
-          <h1 className="section-title mt-3">We do not store your inbox.</h1>
+          <h1 className="section-title mt-3">Temporary reports. Encrypted storage.</h1>
           <p className="muted mt-5 max-w-3xl text-lg leading-8">
             Organizinbox temporarily processes basic email details needed to build your Inbox Report and complete cleanup you approve. Subject lines are used only to protect messages that may be important and are not stored. Google may describe broader Gmail access, but Organizinbox only implements the actions listed below.
           </p>
@@ -34,6 +35,7 @@ export function DataAccessContent({ appContext = false, primaryCta }: { appConte
           <p className="muted mt-4 max-w-3xl text-lg leading-8">
             Disconnect Gmail destroys the access and refresh credentials saved by Organizinbox and clears temporary report and cleanup state. Removing Organizinbox from your Google Account connected apps is available as a separate confirmed action while Gmail is connected.
           </p>
+          <RetentionDisclosure />
         </div>
       </section>
       <section className="section bg-white">

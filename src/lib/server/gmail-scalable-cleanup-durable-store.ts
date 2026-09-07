@@ -1,4 +1,5 @@
 import "server-only";
+import { expiredUnlockedStateWhere } from "@/lib/domain/transient-retention";
 import type { CleanupJobState, PrismaClient } from "@prisma/client";
 import { runtimeConfig } from "@/lib/config";
 import {
@@ -49,7 +50,7 @@ export type CleanupJobStateRepository = {
   releaseLock(jobId: string, owner: string): Promise<boolean>;
   delete(jobId: string, userId?: string): Promise<boolean>;
   deleteForUser(userId: string): Promise<number>;
-  deleteExpired(now: Date): Promise<number>;
+  deleteExpired(now: Date, jobId?: string): Promise<number>;
 };
 
 export interface DurableCleanupStore<TJob extends DurableCleanupJobEnvelope> {
@@ -103,7 +104,7 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
     const row = await this.repository.find(jobId);
     if (!row) return undefined;
     if (row.expiresAt.getTime() <= now.getTime()) {
-      await this.repository.delete(jobId);
+      await this.repository.deleteExpired(now, jobId);
       return undefined;
     }
     return decodeAndValidate(row, this.codec);
@@ -120,7 +121,7 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
     const row = await this.repository.find(jobId);
     if (!row || row.userId !== userId || row.version !== expectedVersion) return undefined;
     if (row.expiresAt.getTime() <= now.getTime()) {
-      await this.repository.delete(jobId, userId);
+      await this.repository.deleteExpired(now, jobId);
       return undefined;
     }
     const current = decodeAndValidate(row, this.codec);
@@ -281,8 +282,10 @@ export class PrismaCleanupJobStateRepository implements CleanupJobStateRepositor
     return (await this.client.cleanupJobState.deleteMany({ where: { userId } })).count;
   }
 
-  async deleteExpired(now: Date) {
-    return (await this.client.cleanupJobState.deleteMany({ where: { expiresAt: { lte: now } } })).count;
+  async deleteExpired(now: Date, jobId?: string) {
+    return (await this.client.cleanupJobState.deleteMany({
+      where: { ...expiredUnlockedStateWhere(now), ...(jobId ? { jobId } : {}) }
+    })).count;
   }
 }
 

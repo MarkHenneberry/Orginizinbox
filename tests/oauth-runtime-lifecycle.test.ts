@@ -77,6 +77,10 @@ vi.mock("next/headers.js", () => ({
   cookies: cookieHarness.cookies
 }));
 vi.mock("@/lib/server/google-oauth", () => googleMocks);
+vi.mock("@/lib/server/db", async () => {
+  const { createSessionConnectionFixture } = await import("./fixtures/session-connection");
+  return { prisma: createSessionConnectionFixture().client };
+});
 
 describe("oauth runtime lifecycle", () => {
   beforeEach(() => {

@@ -43,6 +43,10 @@ vi.mock("@/lib/config", () => ({
   runtimeConfig: { microsoftOAuthDevEnabled: true }
 }));
 vi.mock("@/lib/server/microsoft-oauth", () => oauth);
+vi.mock("@/lib/server/db", async () => {
+  const { createSessionConnectionFixture } = await import("./fixtures/session-connection");
+  return { prisma: createSessionConnectionFixture().client };
+});
 
 describe("Microsoft OAuth callback", () => {
   beforeEach(() => {

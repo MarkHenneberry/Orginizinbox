@@ -296,17 +296,16 @@ export async function upsertMicrosoftConnection(tokens: VerifiedMicrosoftTokenRe
   const identityKey = `${tokens.identity.tenantId}:${tokens.identity.subject}`;
   const providerIdentityHash = sha256Base64Url(identityKey);
   const normalizedEmail = tokens.identity.email?.toLowerCase();
-  const emailHash = normalizedEmail ? sha256Base64Url(normalizedEmail) : undefined;
   return prisma.$transaction(async (transaction) => {
     const user = await transaction.user.upsert({
-      where: { emailHash: emailHash ?? providerIdentityHash },
+      where: { microsoftIdentityHash: providerIdentityHash },
       update: {},
-      create: { emailHash: emailHash ?? providerIdentityHash }
+      create: { microsoftIdentityHash: providerIdentityHash }
     });
-    const encryptedAccountEmail = normalizedEmail ? encryptSecret(normalizedEmail) : undefined;
+    const encryptedAccountEmail = normalizedEmail ? encryptSecret(normalizedEmail) : null;
     const data = {
       mailboxExternalIdHash: providerIdentityHash,
-      ...(encryptedAccountEmail ? { encryptedAccountEmail } : {}),
+      encryptedAccountEmail,
       encryptedAccessToken: encryptSecret(tokens.access_token),
       encryptedRefreshToken: encryptSecret(tokens.refresh_token),
       tokenExpiresAt: tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000) : undefined,
@@ -316,6 +315,7 @@ export async function upsertMicrosoftConnection(tokens: VerifiedMicrosoftTokenRe
       imapTokenExpiresAt: null,
       imapScope: null,
       disconnectedAt: null,
+      sessionGeneration: null,
       refreshLeaseOwner: null,
       refreshLeaseExpiresAt: null
     };

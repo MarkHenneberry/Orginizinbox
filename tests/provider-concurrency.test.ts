@@ -117,6 +117,7 @@ function providerConnection() {
     tokenExpiresAt: new Date(Date.now() - 1),
     scope: "Mail.ReadWrite",
     tokenVersion: 0,
+    sessionGeneration: null as string | null,
     refreshLeaseOwner: null as string | null,
     refreshLeaseExpiresAt: null as Date | null,
     createdAt: new Date(),

@@ -531,7 +531,11 @@ Microsoft does not expose a narrower delegated move/restore-only permission: `Ma
 
 The callback consumes state once before handling denial or code errors, exchanges the code with the matching PKCE verifier and server-only client secret, requires an access token, refresh token and ID token, and positively verifies the explicit access-token scope when Microsoft returns it. Because Microsoft documents the response `scope` field as optional, omission means the initial requested resource scope; an explicit returned scope without `Mail.ReadWrite` fails closed. Validate the ID-token signature against Microsoft OIDC metadata/JWKS, exact audience, tenant-bound issuer, signing-key issuer, expiry/not-before and the stored nonce before trusting `tid`, `sub`, `email` or `preferred_username`. Never trust or parse a Microsoft Graph access token as application identity.
 
-Persist only a hash of the tenant-qualified signed subject, optional encrypted account email, encrypted access and refresh tokens, expiry and normalized granted scope in the existing provider-neutral `ProviderConnection` with `provider=microsoft`. Reconnection reactivates only the matching Microsoft record and must not update or destroy a Gmail record. Refresh through the Microsoft token endpoint without calling mail APIs, rotate a returned refresh token, revalidate explicit returned mail scope, and classify rejection or missing credentials as requiring reconnect. No token, authorization code, state, PKCE verifier, nonce, raw provider response, account address or provider identifier may enter browser responses or application logs.
+Microsoft account ownership uses a unique `User.microsoftIdentityHash` derived only from the validated tenant-qualified signed subject (`tid` + `sub`). Email and preferred username are optional display information, never ownership keys or automatic account-linking evidence. A changed or missing email preserves the same Microsoft user and connection; different Microsoft identities with the same email remain separate users. Backfill existing ownership only from stored Microsoft provider identity hashes, failing the migration on ambiguous duplicates. If a legacy disconnect already erased that identity, do not recover ownership by email; a new stable-identity account is required. Existing historical account links are not automatically split or inferred.
+
+Persist only a hash of the tenant-qualified signed subject, optional encrypted account email, encrypted access and refresh tokens, expiry and normalized granted scope in the existing provider-neutral `ProviderConnection` with `provider=microsoft`. The authoritative user identity hash survives Disconnect so legitimate reconnect reactivates only the matching Microsoft record and must not update or destroy a Gmail record. Refresh through the Microsoft token endpoint without calling mail APIs, rotate a returned refresh token, revalidate explicit returned mail scope, and classify rejection or missing credentials as requiring reconnect. No token, authorization code, state, PKCE verifier, nonce, raw provider response, account address or provider identifier may enter browser responses or application logs.
+
+Application sessions have a fixed seven-day lifetime enforced on the server as well as by the cookie. Reject malformed, missing, future or expired issuance timestamps, invalid signatures, missing connection ownership and pre-upgrade cookies without a generation. Each signed session binds the exact user and provider connection to a random database-backed `sessionGeneration`. Successful session issuance rotates that generation atomically; reconnect credential writes and explicit Disconnect/security resets invalidate it. Session reads require a matching generation and an active connection with usable access credentials. Routine access/refresh-token rotation does not rotate the session generation. Clearing a session revokes only its matching generation, so an older browser cannot revoke a newer reconnect. Database failure never falls back to signature-only authentication. Independent users and provider connections retain independent generations.
 
 Normal Microsoft Disconnect is local and confirmed: scrub the Microsoft ProviderConnection credentials and identity hash, mark it disconnected, clear the application session and any provider-neutral transient state, and redirect to `/`. It does not call a Microsoft revocation endpoint. A fresh reconnect creates new state, PKCE material and nonce and uses only credentials returned by that new authorization.
 
@@ -907,7 +911,7 @@ The following reason codes make a message ineligible for cleanup:
 - `PROTECTED_DRAFT`
 - `PROTECTED_SENDER` when a user protection exists
 
-User participation is detected without message content. During the scan, build a transient set of conversation identifiers from Sent-labeled messages. Any incoming message with the same conversation identifier receives `PROTECTED_USER_PARTICIPATED_CONVERSATION`. The set belongs to the active transient report lifecycle, must not be written to Prisma or logs, and must be destroyed when the report expires, cleanup completes, the user disconnects or the session is cleared. If participation cannot be re-established after report expiry, require a rescan before cleanup.
+User participation is detected without message content. During the scan, build a transient set of conversation identifiers from Sent-labeled messages. Any incoming message with the same conversation identifier receives `PROTECTED_USER_PARTICIPATED_CONVERSATION`. The set belongs to the active transient report lifecycle, may be checkpointed only in encrypted transient state (never normal Prisma columns or logs), and follows Section 30 expiry/deletion and disconnect rules. If participation cannot be re-established after report expiry, require a rescan before cleanup.
 
 ### Soft review and keep evidence
 
@@ -1389,7 +1393,7 @@ The accurate privacy claim is:
 
 > **We don't store your inbox.**
 
-Organizinbox temporarily processes only the mailbox metadata required to build the Inbox Report and perform cleanup the user approves. Subject lines are temporarily decoded only to protect messages that may be important and are not stored. Individual mailbox data is not saved to the application database and is discarded after processing.
+Organizinbox temporarily processes only the mailbox metadata required to build the Inbox Report and perform cleanup the user approves. Subject lines are temporarily decoded only to protect messages that may be important and are not stored. Inbox Reports and the minimum state needed to resume scans and approved cleanup are stored temporarily in encrypted database payloads, not as a permanent inbox copy or plaintext mailbox columns. They expire and are physically deleted under the retention policy below.
 
 Mailbox-derived data must never be used for:
 
@@ -1412,13 +1416,23 @@ The research concludes that inbox access itself creates a separate purchase deci
 
 # 30. Data Retention Target
 
-Design toward:
+The following retention policy applies to both Gmail and Outlook:
 
 ### Active scan
 
-Individual mailbox records may exist transiently in scan-worker memory or bounded buffers while the active scan is running. They should be transformed into aggregate counters immediately and discarded. The production application database must not store message IDs, sender addresses, per-message dates, per-message flags, per-message labels, per-message classifications, or user-specific sender rankings.
+Individual mailbox records may exist transiently in scan-worker memory or bounded buffers while the active scan is running. Transform them into the required report/checkpoint state and discard raw records. The production application database must not store message IDs, sender addresses, per-message dates, flags, labels, classifications, or user-specific sender rankings in normal columns. Minimum mailbox-derived checkpoint/report state is permitted only in encrypted transient ScanState payloads.
 
-Conversation identifiers for Sent/user-participation detection may exist only in a transient in-memory set associated with the active scan/report. They are subject to the same cleanup, expiry and disconnect lifecycle and must never be persisted or logged. Raw Subject text must be discarded immediately after deriving its typed protection signal and must not be retained in the active report.
+Conversation identifiers for Sent/user-participation detection belong to the transient scan/report lifecycle: bounded memory or encrypted transient state only, never plaintext persistence or logs. Raw Subject text must be discarded immediately after deriving its typed protection signal and must not be retained in the active report.
+
+### Expiry and physical deletion
+
+ScanState (including the Inbox Report, checkpoints and participation state) has the existing one-hour expiry renewed by saved scan/report updates. CleanupJobState contains encrypted exact-target/restore ledgers and associated temporary state. Its existing configurable windows are CLEANUP_STATE_ACTIVE_TTL_SECONDS (default 1800 seconds), CLEANUP_STATE_UNDO_TTL_SECONDS (default 1800 seconds), and CLEANUP_STATE_TERMINAL_TTL_SECONDS (default 60 seconds). Legitimate lifecycle writes can renew these windows; the row's expiresAt is authoritative. This does not extend existing confirmation windows or permit an expired state to be used.
+
+A Vercel Cron GET to /api/cron/purge-transient-state runs every minute in production, authenticated with the server-only CRON_SECRET. Each invocation uses bounded indexed batches and deletes expired ScanState and CleanupJobState rows without decrypting them or contacting providers. Every delete rechecks expiry and absence of an unexpired worker lease, including access-time cleanup deletion. A live lease defers physical deletion until release/expiry; a stale running status alone does not preserve abandoned expired state. Non-expired state is never deleted by the purge. Concurrent runs are idempotent and cannot delete a concurrently renewed row. Aggregate Scan/CleanupJob records, terminal summaries, account/billing data, provider credentials and coordination slots are not purge targets.
+
+The remaining development-only in-memory cleanup adapters also sweep idle expired state while their process is running. In-flight operations are protected; these timers are not a substitute for production database Cron. Legacy small-cleanup state retains its existing 10-minute lifetime and 2-minute confirmation window.
+
+Operational output contains only deletion/backlog/deferred counts, elapsed time and fixed success/failure categories. Never log row/user/provider identifiers, encrypted payloads, mailbox content, request authorization, or database exception details. Cron has no immediate retry guarantee: failed or bounded sweeps resume on the next invocation. Deployment must configure CRON_SECRET, a Vercel plan supporting minute schedules, and monitoring for missed/failed sweeps and backlog. Expired state becomes unavailable immediately; physical deletion follows the next successful sweep after leases end. Database outages can delay deletion. Database backups and already-delivered browser copies require separate retention controls; this purge does not claim to erase them.
 
 ### Completed cleanup
 
@@ -1428,7 +1442,7 @@ Destroy remaining transient mailbox processing state after completion. Do not re
 
 Delete every locally stored OAuth token, clear token expiry, mark the provider connection disconnected, clear the application session and active scan/cleanup queues, and destroy remaining temporary mailbox-derived processing state. This normal action does not claim to remove the Google-side connected-app grant. The separately confirmed `Remove Google authorization` action attempts provider revocation first and then performs the same local destruction even if provider revocation fails. Retain only ordinary SaaS/account records required for identity, billing, support, fraud prevention, or legal/accounting obligations.
 
-The final exact retention duration must be reflected accurately on `/data-access`.
+Public Data Access and Privacy copy must describe temporary encrypted database storage, the existing configured retention windows and scheduled deletion, without promising instantaneous erasure or a permanent report.
 
 ---
 
@@ -2076,7 +2090,7 @@ Do not persist:
 - user-specific category analytics
 - permanent Inbox Report results
 
-Message-level metadata, sender aggregates, category analytics, cleanup group membership, and provider message identifiers are transient production processing data. They may exist in bounded worker memory, temporary queues, or the active client session only as required to build the current report or perform approved cleanup, and they must not become persistent Prisma models.
+Message-level metadata, sender aggregates, category analytics, cleanup group membership, and provider message identifiers are transient production processing data. They may exist in bounded worker memory, the active client session, or the encrypted transient ScanState/CleanupJobState payloads only as required to build the current report or perform approved cleanup. They must not become permanent report models or plaintext mailbox columns and are subject to Section 30 expiry and physical deletion.
 
 ---
 
@@ -2750,7 +2764,7 @@ After local Disconnect, Account or Help may link users to `https://myaccount.goo
 
 Public marketing/SEO pages, provider pages, cleanup intent pages, pricing, trust pages, About, and Guides are indexable. `/connect/google`, `/connect/google/error`, `/connect/microsoft`, `/app/*`, development routes, API routes, scan result URLs, cleanup result URLs, and account pages are noindex or excluded from the sitemap as appropriate.
 
-Transient reports must use a report-store abstraction. The development implementation may be in-memory with a 30-60 minute inactivity TTL. The store should support `get`, `set`, `touch`, `delete`, and active-report checks so production can later replace it with suitable ephemeral worker/cache infrastructure without storing reports in Prisma.
+Transient reports use the durable report-store abstraction backed by encrypted Prisma ScanState and the existing one-hour saved-update expiry. Physical deletion follows Section 30. In-memory repositories are test adapters, not the production report store; no permanent plaintext report model is permitted.
 
 ---
 

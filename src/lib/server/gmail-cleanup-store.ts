@@ -1,4 +1,6 @@
 import "server-only";
+import { legacyCleanupTtlMs } from "@/lib/domain/transient-retention";
+import { createLocalRetentionSweep } from "@/lib/server/local-retention-sweep";
 import { randomUUID } from "node:crypto";
 import type { GmailCleanupJobView } from "@/lib/domain/gmail-cleanup-summary";
 import type { GmailCleanupCandidate } from "@/lib/providers/gmail/cleanup-candidates";
@@ -20,12 +22,13 @@ export type GmailCleanupJob = Omit<
   expiresAt: number;
 };
 
-const undoTtlMs = 10 * 60 * 1000;
+const undoTtlMs = legacyCleanupTtlMs;
 export const gmailCleanupConfirmationTtlMs = 2 * 60 * 1000;
 
 const globalStore = globalThis as unknown as {
   organizinboxGmailCleanupJobs?: Map<string, GmailCleanupJob>;
   organizinboxGmailCleanupOperations?: Map<string, ActiveCleanupOperation>;
+  organizinboxGmailCleanupRetentionSweep?: () => void;
 };
 
 type ActiveCleanupOperation = {
@@ -38,6 +41,22 @@ globalStore.organizinboxGmailCleanupJobs = gmailCleanupJobs;
 const activeCleanupOperations =
   globalStore.organizinboxGmailCleanupOperations ?? new Map<string, ActiveCleanupOperation>();
 globalStore.organizinboxGmailCleanupOperations = activeCleanupOperations;
+
+export function purgeExpiredGmailCleanupJobs(now = Date.now()) {
+  let deleted = 0;
+  for (const [id, job] of gmailCleanupJobs) {
+    const active = [...activeCleanupOperations.keys()].some((key) => key.endsWith(`:${id}`));
+    if (job.expiresAt <= now && !active && gmailCleanupJobs.delete(id)) deleted += 1;
+  }
+  return deleted;
+}
+
+const ensureRetentionSweep = globalStore.organizinboxGmailCleanupRetentionSweep ?? createLocalRetentionSweep(() => {
+  purgeExpiredGmailCleanupJobs();
+  return gmailCleanupJobs.size > 0;
+});
+globalStore.organizinboxGmailCleanupRetentionSweep = ensureRetentionSweep;
+if (gmailCleanupJobs.size > 0) ensureRetentionSweep();
 
 export function createGmailCleanupJob(
   input: Omit<GmailCleanupJob, "id" | "createdAt" | "expiresAt" | "validatedAt" | "confirmationExpiresAt">
@@ -52,14 +71,15 @@ export function createGmailCleanupJob(
     expiresAt: now + undoTtlMs
   };
   gmailCleanupJobs.set(job.id, job);
+  ensureRetentionSweep();
   return job;
 }
 
 export function getGmailCleanupJob(userId: string, jobId: string) {
   const job = gmailCleanupJobs.get(jobId);
   if (!job || job.userId !== userId) return undefined;
-  if (job.expiresAt < Date.now()) {
-    gmailCleanupJobs.delete(jobId);
+  if (job.expiresAt <= Date.now()) {
+    purgeExpiredGmailCleanupJobs();
     return undefined;
   }
   return job;
@@ -69,6 +89,7 @@ export function updateGmailCleanupJob(job: GmailCleanupJob, patch: Partial<Gmail
   const current = gmailCleanupJobs.get(job.id) ?? job;
   const updated = { ...current, ...patch };
   gmailCleanupJobs.set(updated.id, updated);
+  ensureRetentionSweep();
   return updated;
 }
 

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RetentionDisclosure } from "@/components/product/RetentionDisclosure";
 
 type PublicCta = {
   href: string;
@@ -20,6 +21,7 @@ export function PrivacyContent({ appContext = false, primaryCta }: { appContext?
           <p className="muted mt-4 max-w-3xl text-lg leading-8">
             Normal scans do not retrieve email bodies or attachments. Subject lines are processed temporarily only to protect messages that may be important, then discarded without being stored, logged, sent to analytics, or sent to AI systems.
           </p>
+          <RetentionDisclosure />
         </div>
       </section>
       <section className="section bg-white">

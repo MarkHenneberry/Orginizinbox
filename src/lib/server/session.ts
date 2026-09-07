@@ -1,16 +1,21 @@
 import "server-only";
 import { cookies } from "next/headers.js";
 import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { prisma } from "./db";
 import { verifySignedValue, signValue } from "./crypto";
 
 export const SESSION_COOKIE = "organizinbox_session";
 export const OAUTH_STATE_COOKIE = "organizinbox_oauth_state";
 
-type SessionPayload = {
-  userId: string;
-  providerConnectionId?: string;
-  createdAt: number;
-};
+const sessionSchema = z.object({
+  userId: z.string().min(1).max(128),
+  providerConnectionId: z.string().min(1).max(128),
+  createdAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  sessionGeneration: z.string().regex(/^[a-f0-9]{64}$/)
+}).strict();
+
+type SessionPayload = z.infer<typeof sessionSchema>;
 
 type OAuthStatePayload = {
   state: string;
@@ -57,19 +62,52 @@ function expiredCookieOptions() {
   };
 }
 
-export async function setSessionCookie(payload: SessionPayload) {
+export async function setSessionCookie(payload: Omit<SessionPayload, "sessionGeneration">) {
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, signValue(Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")), appSessionCookieOptions());
+  const session = sessionSchema.parse({
+    ...payload,
+    createdAt: Date.now(),
+    sessionGeneration: randomBytes(32).toString("hex")
+  });
+  await prisma.providerConnection.update({
+    where: {
+      id: session.providerConnectionId,
+      userId: session.userId,
+      disconnectedAt: null,
+      encryptedAccessToken: { not: null }
+    },
+    data: { sessionGeneration: session.sessionGeneration },
+    select: { id: true }
+  });
+  cookieStore.set(SESSION_COOKIE, signValue(Buffer.from(JSON.stringify(session), "utf8").toString("base64url")), appSessionCookieOptions());
 }
 
 export async function getSession(): Promise<SessionPayload | null> {
   const cookieStore = await cookies();
   const signed = cookieStore.get(SESSION_COOKIE)?.value;
+  const session = parseSessionCookie(signed);
+  if (!session) return null;
+  const age = Date.now() - session.createdAt;
+  if (age < 0 || age >= sessionTtlSeconds * 1000) return null;
+  const connection = await prisma.providerConnection.findFirst({
+    where: {
+      id: session.providerConnectionId,
+      userId: session.userId,
+      sessionGeneration: session.sessionGeneration,
+      disconnectedAt: null,
+      encryptedAccessToken: { not: null }
+    },
+    select: { id: true }
+  });
+  return connection ? session : null;
+}
+
+function parseSessionCookie(signed: string | undefined): SessionPayload | null {
   if (!signed) return null;
-  const verified = verifySignedValue(signed);
-  if (!verified) return null;
   try {
-    return JSON.parse(Buffer.from(verified, "base64url").toString("utf8")) as SessionPayload;
+    const verified = verifySignedValue(signed);
+    if (!verified) return null;
+    return sessionSchema.parse(JSON.parse(Buffer.from(verified, "base64url").toString("utf8")));
   } catch {
     return null;
   }
@@ -77,7 +115,21 @@ export async function getSession(): Promise<SessionPayload | null> {
 
 export async function clearSessionCookie() {
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, "", expiredCookieOptions());
+  const session = parseSessionCookie(cookieStore.get(SESSION_COOKIE)?.value);
+  try {
+    if (session) {
+      await prisma.providerConnection.updateMany({
+        where: {
+          id: session.providerConnectionId,
+          userId: session.userId,
+          sessionGeneration: session.sessionGeneration
+        },
+        data: { sessionGeneration: null }
+      });
+    }
+  } finally {
+    cookieStore.set(SESSION_COOKIE, "", expiredCookieOptions());
+  }
 }
 
 export async function createOAuthState(returnTo?: string, options: OAuthStateOptions = {}): Promise<string> {
