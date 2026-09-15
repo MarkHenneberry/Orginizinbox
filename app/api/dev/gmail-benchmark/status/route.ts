@@ -5,6 +5,7 @@ import { getLiveScan, serializeBenchmark } from "@/lib/server/live-scan-store";
 import { getSession } from "@/lib/server/session";
 
 export async function GET() {
+  if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   try {
     assertDevBenchmarkEnabled(runtimeConfig.gmailBenchmarkEnabled);
     const session = await getSession();

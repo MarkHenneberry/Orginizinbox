@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cookieHarness = vi.hoisted(() => {
   const jar = new Map<string, string>();
@@ -40,7 +40,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("next/headers.js", () => ({ cookies: cookieHarness.cookies }));
 vi.mock("@/lib/config", () => ({
   env: { TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString("base64") },
-  runtimeConfig: { microsoftOAuthDevEnabled: true }
+  runtimeConfig: { microsoftAvailable: true, microsoftOAuthDevEnabled: true, outlookImapBenchmarkDevEnabled: true }
 }));
 vi.mock("@/lib/server/microsoft-oauth", () => oauth);
 vi.mock("@/lib/server/db", async () => {
@@ -49,6 +49,7 @@ vi.mock("@/lib/server/db", async () => {
 });
 
 describe("Microsoft OAuth callback", () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
   beforeEach(() => {
     vi.clearAllMocks();
     cookieHarness.jar.clear();

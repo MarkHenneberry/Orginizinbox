@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { runtimeConfig } from "@/lib/config";
+import { ProviderUnavailable } from "@/components/product/ProviderUnavailable";
 import { ProviderConnectShell } from "@/components/product/ProviderConnectShell";
 import { getAppHomeState } from "@/lib/server/app-state";
 
@@ -12,6 +14,11 @@ export const metadata: Metadata = {
 };
 
 export default async function GoogleConnectPage() {
+  if (!runtimeConfig.gmailAvailable) return (
+    <ProviderConnectShell description="Gmail connection and scanning are currently paused." eyebrow="Google / Gmail" title="Gmail availability">
+      <ProviderUnavailable provider="gmail" />
+    </ProviderConnectShell>
+  );
   const state = await getAppHomeState();
   const connectedHref = state.mode === "connected_active_report" ? "/app/report" : "/app/scan";
   const connectedLabel = state.mode === "connected_active_report" ? "Return to Inbox Report" : "Scan my inbox";
@@ -22,7 +29,7 @@ export default async function GoogleConnectPage() {
 
   return (
     <ProviderConnectShell
-      description="Organizinbox needs access to scan your inbox and move messages you approve to Trash."
+      description={runtimeConfig.development ? "Organizinbox needs access to scan your inbox and move messages you approve to Trash." : "Connect Gmail for a read-only Inbox Report. Cleanup is not available."}
       eyebrow="Google / Gmail"
       title="Connect Gmail"
     >

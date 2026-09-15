@@ -182,7 +182,8 @@ describe("authenticated app navigation", () => {
     expect(appHome).toMatch(/connected_active_report/);
     expect(appHome).toMatch(/Your Inbox Report has expired/);
     expect(scanPage).toMatch(/GmailScanClient/);
-    expect(scanPage).not.toMatch(/benchmark/i);
+    expect(scanPage).not.toMatch(/GmailBenchmarkClient/);
+    expect(scanPage).toContain("imapBenchmarkEnabled={runtimeConfig.outlookImapBenchmarkDevEnabled}");
     expect(header).toMatch(/getPublicPrimaryCta/);
     expect(home).toMatch(/getPublicPrimaryCta/);
   });
@@ -268,14 +269,14 @@ describe("authenticated app navigation", () => {
     const appHome = readFileSync("app/app/page.tsx", "utf8");
     const account = readFileSync("app/app/account/page.tsx", "utf8");
 
-    expect(availability).toMatch(/microsoft:[\s\S]+status: "comingSoon"/);
+    expect(availability).toMatch(/microsoft:[\s\S]+runtimeConfig.microsoftAvailable \? "available" : "comingSoon"/);
     expect(marketingTemplate).toMatch(/Outlook support is coming soon/);
     expect(marketingTemplate).toMatch(/Clean Gmail instead/);
     expect(microsoftConnect).toMatch(/Outlook support is coming soon/);
     expect(microsoftConnect).toMatch(/runtimeConfig\.microsoftOAuthDevEnabled/);
     expect(marketingTemplate).toMatch(/Microsoft connection is available for development testing/);
     expect(appState).toMatch(/href: "\/connect\/microsoft", label: "Connect Outlook"/);
-    expect(microsoftStart).toMatch(/microsoftOAuthDevEnabled/);
+    expect(microsoftStart).toMatch(/microsoftAvailable/);
     expect(microsoftStart).toMatch(/status: 404/);
     expect(appHome).not.toMatch(/href="\/connect\/microsoft"/);
     expect(account).not.toMatch(/href="\/connect\/microsoft"/);

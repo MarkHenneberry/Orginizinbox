@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { DisconnectUndoWarning } from "@/components/product/DisconnectUndoWarning";
 
 export function RemoveGoogleAuthorizationConfirmation() {
   const [confirming, setConfirming] = useState(false);
@@ -29,6 +30,7 @@ export function RemoveGoogleAuthorizationConfirmation() {
         If you reconnect immediately, Google may take a short time to finish removing the previous authorization.
       </p>
       <div className="mt-4 flex flex-wrap gap-3">
+        <DisconnectUndoWarning />
         <button className="btn btn-secondary focus-ring" onClick={() => setConfirming(false)} type="button">
           Cancel
         </button>

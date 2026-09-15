@@ -16,7 +16,11 @@ export async function runDurableProviderScan(scanId: string) {
     } else {
       await runGmailBenchmark({ scanId, lockOwner: owner });
     }
-    return { outcome: "completed" as const };
+    const latest = await getLiveScanById(scanId);
+    return { outcome: latest?.progress.status === "completed" ? "completed" as const : "stopped" as const };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return { outcome: "stopped" as const };
+    throw error;
   } finally {
     await releaseLiveScan(scanId, owner);
   }

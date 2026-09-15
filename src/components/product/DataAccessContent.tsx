@@ -1,16 +1,17 @@
 import Link from "next/link";
+import { runtimeConfig } from "@/lib/config";
 import { RetentionDisclosure } from "@/components/product/RetentionDisclosure";
 import type { PublicPrimaryCta } from "@/lib/server/app-state";
 
 const capabilities = [
   ["Read basic email details", "Yes", "Only the sender, date, read state, and other details needed for your Inbox Report and approved cleanup."],
-  ["Read email bodies", "No", "The scanner does not retrieve message content."],
+  ["Read email bodies", "No", "The scanner does not fetch body text or body previews."],
   ["Process subject lines", "Temporarily", "Used only to protect messages that may be important, then discarded. Subject lines are not stored."],
-  ["Download attachments", "No", "Attachment download and extraction are not implemented."],
-  ["Send email from your mailbox", "No", "Organizinbox cannot reply, forward, or send mail."],
-  ["Create drafts", "No", "Draft creation is outside the product scope."],
+  ["Download attachments", "No", "Attachment contents are not fetched."],
+  ["Send email from your mailbox", "No", "Organizinbox does not reply, forward, or send mail."],
+  ["Create drafts", "No", "Organizinbox does not create draft messages."],
   ["Permanently delete email", "No", "Approved cleanup moves mail to Trash or Deleted Items only."],
-  ["Move mail you approve to Trash / Deleted Items", "Yes", "Only after you review and confirm the cleanup."],
+  ["Move mail you approve to Trash / Deleted Items", "When enabled", "Only after you review and confirm the cleanup. Production cleanup is not available yet."],
   ["Store a permanent copy of your inbox", "No", "Inbox Reports and required scan/cleanup state are stored temporarily in encrypted form, then deleted after expiry."],
   ["Sell mailbox data", "Never", "Mailbox-derived data is not for sale."],
   ["Use mailbox data for advertising", "Never", "Mailbox-derived data must not be used for ads or targeting."],
@@ -36,6 +37,7 @@ export function DataAccessContent({ appContext = false, primaryCta }: { appConte
             Disconnect Gmail destroys the access and refresh credentials saved by Organizinbox and clears temporary report and cleanup state. Removing Organizinbox from your Google Account connected apps is available as a separate confirmed action while Gmail is connected.
           </p>
           <RetentionDisclosure />
+          {!runtimeConfig.development ? <p className="muted mt-4">Production cleanup is not available. Enabled providers offer read-only scanning.</p> : null}
         </div>
       </section>
       <section className="section bg-white">

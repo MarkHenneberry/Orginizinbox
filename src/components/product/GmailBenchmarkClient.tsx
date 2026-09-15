@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { OperationStatus } from "@/components/product/OperationStatus";
+import { startAdaptivePolling } from "@/lib/adaptive-polling";
 
 type BenchmarkLimit = 5000 | 10000 | 25000 | 50000 | 100000 | "full";
 type BenchmarkProgress = {
@@ -27,6 +28,8 @@ type BenchmarkProgress = {
   messagesPerMinute?: number;
   approxMemoryMb?: number;
   peakParticipatedConversationCount?: number;
+  gmailPendingIdentityCount?: number;
+  gmailPeakPendingIdentityCount?: number;
   errors: string[];
   notes: string[];
 };
@@ -39,7 +42,9 @@ export function GmailBenchmarkClient({ initialProgress }: { initialProgress: Ben
   const [batchSize, setBatchSize] = useState(1000);
   const [progress, setProgress] = useState<BenchmarkProgress | null>(initialProgress);
   const [pending, setPending] = useState(false);
+  const [pollError, setPollError] = useState(false);
   const pendingRef = useRef(false);
+  const pollingRef = useRef<ReturnType<typeof startAdaptivePolling> | null>(null);
 
   const isRunning = progress?.status === "running";
   const percent = useMemo(() => {
@@ -50,14 +55,18 @@ export function GmailBenchmarkClient({ initialProgress }: { initialProgress: Ben
 
   useEffect(() => {
     if (!isRunning) return;
-    const interval = window.setInterval(async () => {
-      const response = await fetch("/api/dev/gmail-benchmark/status", { cache: "no-store" });
-      if (!response.ok) return;
+    const polling = startAdaptivePolling(async (signal) => {
+      const response = await fetch("/api/dev/gmail-benchmark/status", { cache: "no-store", signal });
+      if (!response.ok) throw new Error("Status unavailable");
       const payload = (await response.json()) as { progress: BenchmarkProgress | null };
+      if (signal.aborted) return false;
+      setPollError(false);
       setProgress(payload.progress);
-    }, 1000);
-    return () => window.clearInterval(interval);
-  }, [isRunning]);
+      return payload.progress?.status === "running";
+    }, () => setPollError(true));
+    pollingRef.current = polling;
+    return () => { polling(); pollingRef.current = null; };
+  }, [isRunning, progress?.scanId]);
 
   async function start() {
     if (pendingRef.current || isRunning) return;
@@ -92,9 +101,7 @@ export function GmailBenchmarkClient({ initialProgress }: { initialProgress: Ben
 
   async function cancel() {
     await fetch("/api/dev/gmail-benchmark/cancel", { method: "POST" });
-    const response = await fetch("/api/dev/gmail-benchmark/status", { cache: "no-store" });
-    const payload = (await response.json()) as { progress: BenchmarkProgress | null };
-    setProgress(payload.progress);
+    pollingRef.current?.refresh();
   }
 
   async function disconnect() {
@@ -177,6 +184,9 @@ export function GmailBenchmarkClient({ initialProgress }: { initialProgress: Ben
           <Metric label="Protection rules" value={formatMs(progress?.protectionClassificationMs)} />
           <Metric label="Aggregation" value={formatMs(progress?.aggregationMs)} />
           <Metric label="Participation set" value={progress?.peakParticipatedConversationCount?.toLocaleString() ?? "-"} />
+          <Metric label="Pending identities" value={progress?.gmailPendingIdentityCount?.toLocaleString() ?? "-"} />
+          <Metric label="Peak pending identities" value={progress?.gmailPeakPendingIdentityCount?.toLocaleString() ?? "-"} />
+          {pollError ? <p role="alert">Status could not be refreshed. Retrying...</p> : null}
           <Metric label="Memory RSS" value={progress?.approxMemoryMb ? `${progress.approxMemoryMb} MB` : "-"} />
         </div>
         {progress?.errors.length ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{progress.errors[0]}</p> : null}

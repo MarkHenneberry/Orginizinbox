@@ -1,7 +1,10 @@
 import Link from "next/link";
+import { CleanupGuideContent } from "@/components/product/CleanupGuideContent";
+import { RetentionDisclosure } from "@/components/product/RetentionDisclosure";
+import { cleanupGuides } from "@/lib/cleanup-guides";
+import { getBillingConfig } from "@/lib/billing/config";
 import { runtimeConfig } from "@/lib/config";
 import { providerAvailability } from "@/lib/providers/availability";
-import { isMicrosoftOAuthDevelopmentUiEnabled } from "@/lib/providers/microsoft/development-access";
 import { getMarketingPagesBySlugs } from "@/lib/marketing-pages";
 import type { MarketingPage } from "@/lib/marketing-pages";
 import type { PublicPrimaryCta } from "@/lib/server/app-state";
@@ -9,11 +12,12 @@ import type { PublicPrimaryCta } from "@/lib/server/app-state";
 export function MarketingInfoContent({ page, appContext = false, primaryCta }: { page: MarketingPage; appContext?: boolean; primaryCta?: PublicPrimaryCta }) {
   const cta = appContext ? { href: "/app/data-access", label: "Data access" } : (primaryCta ?? { href: "/connect", label: page.cta });
   const relatedPages = getMarketingPagesBySlugs(page.relatedSlugs);
+  const subscriptionAvailable = page.slug === "pricing" && getBillingConfig()?.checkoutEnabled;
   const outlookUnavailable = page.providerIntent === "outlook" && providerAvailability.microsoft.status === "comingSoon";
-  const outlookDevelopmentConnection = outlookUnavailable && isMicrosoftOAuthDevelopmentUiEnabled(
-    process.env.NODE_ENV,
-    runtimeConfig.microsoftOAuthDevEnabled
-  );
+  const outlookDevelopmentConnection = page.providerIntent === "outlook" && runtimeConfig.microsoftOAuthDevEnabled;
+  const providerUnavailable = page.providerIntent === "gmail" ? !runtimeConfig.gmailAvailable : outlookUnavailable;
+  const hasGuide = Boolean(cleanupGuides[page.slug]);
+  const preserveExplanation = hasGuide || page.contentCluster === "trust";
 
   return (
     <main>
@@ -22,7 +26,13 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
           <div>
             <p className="eyebrow">{page.eyebrow}</p>
             <h1 className="section-title mt-3">{page.h1}</h1>
-            <p className="muted mt-5 max-w-2xl text-lg leading-8">{page.body}</p>
+            <p className="muted mt-5 max-w-2xl text-lg leading-8">{!preserveExplanation && !runtimeConfig.development && page.providerIntent
+              ? providerUnavailable ? "Connection and scanning for this provider are currently unavailable. Cleanup is not available." : "Read-only Inbox Reports are available for this provider. Cleanup is not available."
+              : page.body}</p>
+            {hasGuide ? <p className="mt-4 text-sm font-bold">{page.providerIntent === "gmail" || page.providerIntent === "outlook"
+              ? providerUnavailable ? "Connection and scanning are currently unavailable for this provider. " : "Read-only Inbox Reports are available for enabled accounts. "
+              : "These steps work directly in Gmail. "}Production cleanup is not available yet.</p> : null}
+            {page.slug === "security" ? <RetentionDisclosure /> : null}
             {outlookUnavailable ? (
               <div className="mt-6 rounded-md border border-[var(--line)] bg-white p-5">
                 <p className="m-0 text-sm font-extrabold text-[var(--navy)]">
@@ -36,12 +46,13 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
               </div>
             ) : null}
             <div className="mt-8 flex flex-wrap gap-3">
+              {subscriptionAvailable ? <Link href="/app/account" className="btn btn-secondary focus-ring">Subscription and billing</Link> : null}
               <Link href={cta.href} className="btn btn-primary focus-ring">
                 {cta.label}
               </Link>
-              {outlookUnavailable ? (
+              {outlookUnavailable && runtimeConfig.gmailAvailable ? (
                 <Link href="/gmail-cleaner" className="btn btn-secondary focus-ring">
-                  Clean Gmail instead
+                  {runtimeConfig.development ? "Clean Gmail instead" : "Gmail availability"}
                 </Link>
               ) : !appContext ? (
                 <Link href={appContext ? "/app/data-access" : "/data-access"} className="btn btn-secondary focus-ring">
@@ -49,25 +60,26 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
                 </Link>
               ) : null}
             </div>
+            {subscriptionAvailable ? <p className="muted mt-3 text-sm">One recurring subscription, with price and interval shown before payment. Production cleanup is not available yet.</p> : null}
           </div>
           <div className="panel p-6">
             <p className="m-0 text-sm font-extrabold text-[var(--navy)]">Product facts</p>
             <dl className="mt-5 grid gap-4 text-sm">
               <div className="flex justify-between gap-4 border-b border-[var(--line)] pb-3">
-                <dt className="muted">Permanent deletion</dt>
+                <dt className="muted">Organizinbox permanently deletes email</dt>
                 <dd className="m-0 font-bold">No</dd>
               </div>
               <div className="flex justify-between gap-4 border-b border-[var(--line)] pb-3">
-                <dt className="muted">Normal body retrieval</dt>
+                <dt className="muted">Email bodies fetched</dt>
                 <dd className="m-0 font-bold">No</dd>
               </div>
               <div className="flex justify-between gap-4 border-b border-[var(--line)] pb-3">
-                <dt className="muted">Attachment retrieval</dt>
+                <dt className="muted">Attachments downloaded</dt>
                 <dd className="m-0 font-bold">No</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="muted">Cleanup destination</dt>
-                <dd className="m-0 font-bold">Trash / Deleted Items</dd>
+                <dd className="m-0 font-bold">{runtimeConfig.development ? "Trash / Deleted Items" : "Cleanup unavailable"}</dd>
               </div>
             </dl>
           </div>
@@ -77,7 +89,9 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
         <div className="container">
           <h2 className="m-0 text-3xl font-extrabold text-[var(--navy)]">What you can do</h2>
           <div className="mt-8 grid gap-4 md:grid-cols-3">
-            {page.bullets.map((bullet) => (
+            {(!runtimeConfig.development && page.contentCluster !== "trust" && page.providerIntent
+              ? [providerUnavailable ? "Provider currently unavailable" : "Read-only Inbox Report", "Cleanup is not available", "No permanent deletion"]
+              : page.bullets).map((bullet) => (
               <div className="panel p-5" key={bullet}>
                 <p className="m-0 font-bold">{bullet}</p>
               </div>
@@ -85,6 +99,7 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
           </div>
         </div>
       </section>
+      {hasGuide ? <CleanupGuideContent slug={page.slug} /> : null}
       {relatedPages.length ? (
         <section className="section">
           <div className="container">

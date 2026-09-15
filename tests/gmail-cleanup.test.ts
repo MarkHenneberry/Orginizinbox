@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parseCleanupGroupIndices } from "@/lib/server/gmail-cleanup";
+import { gmailCleanupJobs, getGmailCleanupJob, purgeExpiredGmailCleanupJobs, type GmailCleanupJob } from "@/lib/server/gmail-cleanup-store";
 import {
   allocateCleanupCountAcrossGroups,
   assessGmailApiCleanupCandidate,
@@ -341,7 +343,10 @@ describe("cleanup group eligibility", () => {
     const cleanup = readFileSync("src/lib/server/gmail-cleanup.ts", "utf8");
 
     expect(ui).toMatch(/const groupIndices = \[\.\.\.selectedGroupIndices\]/);
-    expect(ui).toMatch(/JSON\.stringify\(\{ groupIndices, requestedCount, benchmarkOnly \}\)/);
+    const groups = buildCleanupSenderGroups([sender(), sender({ senderKey: "other@example.test", displayName: "Other" })]);
+    const selection = createDefaultCleanupSelection(groups);
+    expect(parseCleanupGroupIndices([...selection])).toEqual(groups.filter((group) => group.eligible).map((group) => group.index));
+    expect(() => parseCleanupGroupIndices(["deals@example.test"])).toThrow();
     expect(cleanup).toMatch(/const reportSender = report\.senders\[group\.index\]/);
     expect(cleanup).toMatch(/normalizeGmailCleanupSenderIdentity\(reportSender\.senderKey\)/);
     expect(cleanup).not.toMatch(/senderAddress:\s*group\.displayName/);
@@ -464,11 +469,21 @@ describe("gmail cleanup gates and privacy", () => {
   });
 
   it("expires transient Undo state and keeps rescan on the existing connection lifecycle", () => {
-    const store = readFileSync("src/lib/server/gmail-cleanup-store.ts", "utf8");
     const cleanup = readFileSync("src/lib/server/gmail-cleanup.ts", "utf8");
     const scan = readFileSync("src/lib/server/gmail-benchmark.ts", "utf8");
 
-    expect(store).toMatch(/job\.expiresAt < Date\.now\(\)[\s\S]+gmailCleanupJobs\.delete/);
+    const expiredId = crypto.randomUUID();
+    const activeId = crypto.randomUUID();
+    const expiresAt = Date.now();
+    gmailCleanupJobs.set(expiredId, { id: expiredId, userId: "retention-test", expiresAt } as GmailCleanupJob);
+    const active = { id: activeId, userId: "retention-test", expiresAt: expiresAt + 60_000 } as GmailCleanupJob;
+    gmailCleanupJobs.set(activeId, active);
+    try {
+      expect(getGmailCleanupJob("retention-test", expiredId)).toBeUndefined();
+      expect(gmailCleanupJobs.has(expiredId)).toBe(false);
+      expect(getGmailCleanupJob("retention-test", activeId)).toBe(active);
+      expect(purgeExpiredGmailCleanupJobs(expiresAt)).toBe(0);
+    } finally { gmailCleanupJobs.delete(expiredId); gmailCleanupJobs.delete(activeId); }
     expect(cleanup).toMatch(/Cleanup result expired/);
     expect(scan).toMatch(/getActiveGmailConnection/);
     expect(scan).not.toMatch(/createGoogleAuthorizationUrl|oauth\/google\/start/);

@@ -101,6 +101,7 @@ export class GmailScalableCleanupProvider implements GmailScalableCleanupProvide
       pollAttempts?: number;
       retryAttempts?: number;
       requestTimeoutMs?: number;
+      beforeRequest?: () => Promise<void>;
     } = {}
   ) {
     if (!accessToken || !accountEmail) throw new Error("An active Gmail connection is required for scalable cleanup.");
@@ -115,15 +116,20 @@ export class GmailScalableCleanupProvider implements GmailScalableCleanupProvide
     const client = this.createImapClient();
     const messages = [];
     try {
+      await this.options.beforeRequest?.();
       await client.connect();
       if (!client.capabilities.has("X-GM-EXT-1") || client.capabilities.has("OBJECTID")) {
         throw new Error("The explicit Gmail X-GM-MSGID bridge is unavailable.");
       }
-      const mailbox = await client.mailboxOpen(await resolveGmailAllMail(client), { readOnly: true });
+      await this.options.beforeRequest?.();
+      const mailboxPath = await resolveGmailAllMail(client);
+      await this.options.beforeRequest?.();
+      const mailbox = await client.mailboxOpen(mailboxPath, { readOnly: true });
       if (!mailbox.readOnly) throw new Error("Gmail All Mail was not opened read-only.");
       assertMatchingUidValidity(BigInt(input.uidValidity), mailbox.uidValidity);
       const uids = input.targets.map((target) => target.uid);
       const exactFetchQuery = { uid: true, emailId: true, flags: true, labels: true } as Parameters<ImapFlow["fetch"]>[1];
+      await this.options.beforeRequest?.();
       for await (const message of client.fetch(uids, exactFetchQuery, { uid: true })) {
         messages.push({ uid: message.uid, emailId: message.emailId, flags: message.flags, labels: [...(message.labels ?? [])] });
       }
@@ -457,6 +463,7 @@ export class GmailScalableCleanupProvider implements GmailScalableCleanupProvide
     let lastStatus: number | undefined;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       await reserve(quotaKind);
+      await this.options.beforeRequest?.();
       if (attempt > 0) metrics.retries += 1;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), clamp(this.options.requestTimeoutMs ?? 10_000, 1, 30_000));

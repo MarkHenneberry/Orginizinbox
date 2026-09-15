@@ -1,4 +1,6 @@
 import "server-only";
+import { createScanRequestFence } from "@/lib/server/provider-work-fence";
+import { createDurableWriteGate } from "@/lib/server/durable-write-gate";
 import { randomUUID } from "node:crypto";
 import { StreamingReportAggregator } from "@/lib/domain/streaming-aggregator";
 import { MicrosoftProvider } from "@/lib/providers/microsoft/provider";
@@ -83,6 +85,7 @@ async function executeMicrosoftScan(input: {
   let aggregationMs = 0;
   let subjectProtectionMs = 0;
   let provider: MicrosoftProvider | undefined;
+  const writeProgress = createDurableWriteGate(5_000);
   input.progress.outlookTransport = "graph";
 
   try {
@@ -91,7 +94,9 @@ async function executeMicrosoftScan(input: {
 
     provider = new MicrosoftProvider(activeConnection.accessToken, {
       refreshAccessToken: () => forceRefreshMicrosoftConnection(input.userId, input.providerConnectionId),
-      requestCoordinator: createProviderRequestCoordinator(activeConnection.connection.id)
+      requestCoordinator: createProviderRequestCoordinator(activeConnection.connection.id, {
+        beforeRequest: createScanRequestFence(input.progress.scanId, input.lockOwner, "microsoft")
+      })
     });
     const conversationIndexStarted = performance.now();
     const participatedConversationIds = await provider.scanParticipatedConversationIds({
@@ -129,7 +134,7 @@ async function executeMicrosoftScan(input: {
         input.progress.subjectProtectionMs = Math.round(subjectProtectionMs);
         input.progress.approxMemoryMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
         updateGraphProgress(input.progress, provider!);
-        await setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner);
+        await writeProgress(() => setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner));
       },
       async onFallback() {
         aggregator = createAggregator();
@@ -138,7 +143,7 @@ async function executeMicrosoftScan(input: {
           "Outlook returned an oversized or invalid metadata page. Restarted the main scan with smaller pages."
         );
         updateGraphProgress(input.progress, provider!);
-        await setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner);
+        await writeProgress(() => setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner), true);
       }
     });
 
@@ -205,6 +210,7 @@ async function executeMicrosoftImapScan(input: {
   let aggregationMs = 0;
   let subjectProtectionMs = 0;
   let provider: OutlookImapProvider | undefined;
+  const writeProgress = createDurableWriteGate(5_000);
   input.progress.outlookTransport = "imap";
 
   try {
@@ -212,7 +218,9 @@ async function executeMicrosoftImapScan(input: {
       input.userId,
       input.providerConnectionId
     );
-    provider = new OutlookImapProvider(activeConnection.accessToken, activeConnection.accountEmail);
+    provider = new OutlookImapProvider(activeConnection.accessToken, activeConnection.accountEmail, {
+      beforeRequest: createScanRequestFence(input.progress.scanId, input.lockOwner, "microsoft")
+    });
     const conversationIndexStarted = performance.now();
     const participatedConversationIds = await provider.scanParticipatedConversationIds({
       batchSize: outlookImapBatchSize,
@@ -245,7 +253,7 @@ async function executeMicrosoftImapScan(input: {
       input.progress.subjectProtectionMs = Math.round(subjectProtectionMs);
       input.progress.approxMemoryMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
       updateImapProgress(input.progress, provider);
-      await setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner);
+      await writeProgress(() => setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner));
     }
 
     input.progress.status = "completed";
@@ -267,6 +275,7 @@ async function executeMicrosoftImapScan(input: {
     if (error instanceof DOMException && error.name === "AbortError") {
       input.progress.status = "cancelled";
       input.progress.notes.push("Outlook IMAP benchmark cancelled.");
+      return;
     } else {
       input.progress.status = "failed";
       input.progress.errors.push(safeImapScanError(error));

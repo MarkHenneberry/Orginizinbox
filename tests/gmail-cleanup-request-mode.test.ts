@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getGmailCleanupRequestMode } from "@/lib/domain/gmail-cleanup-request-mode";
+import { cleanupEndpoint } from "@/lib/domain/cleanup-ui";
 import { parseCleanupCount } from "@/lib/server/gmail-cleanup";
 import { parseScalableCount } from "@/lib/server/gmail-scalable-cleanup-runner";
 
@@ -47,7 +48,13 @@ describe("Gmail cleanup route boundaries", () => {
 
     expect(client).toContain("getGmailCleanupRequestMode");
     expect(client).toContain('const scalable = cleanupRequestMode === "scalable"');
-    expect(client).toMatch(/scalable \? "\/api\/dev\/gmail-scalable-cleanup\/start" : "\/api\/dev\/gmail-cleanup\/resolve"/);
+    for (const requestedCount of [100, 250, 500]) {
+      const scalable = getGmailCleanupRequestMode({ ...enabledPolicy, requestedCount }) === "scalable";
+      expect(cleanupEndpoint("gmail", scalable ? "start" : "resolve", true, scalable)).toBe(
+        scalable ? "/api/dev/gmail-scalable-cleanup/start" : "/api/dev/gmail-cleanup/resolve"
+      );
+      if (scalable) expect(cleanupEndpoint("gmail", "start", false, scalable)).toBe("/api/app/cleanup/gmail/start");
+    }
     expect(client).not.toContain("requestedCount === 250");
     expect(scalableRoute).toContain("startGmailScalableCleanup");
     expect(scalableRoute).not.toContain("createGmailCleanupPreview");

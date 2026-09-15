@@ -7,8 +7,11 @@ import {
 } from "@/lib/server/microsoft-connection";
 import { serializeScanProgress } from "@/lib/server/live-scan-store";
 import { getSession } from "@/lib/server/session";
+import { scanStartFailure } from "@/lib/server/scan-start-response";
 
 export async function POST(request?: NextRequest) {
+  if (!runtimeConfig.microsoftAvailable) return Response.json({ error: "Outlook is temporarily unavailable." }, { status: 503 });
+  let phase: "connection" | "start" = "connection";
   try {
     const session = await getSession();
     if (!session?.userId) return Response.json({ error: "Connect Microsoft before scanning Outlook." }, { status: 401 });
@@ -26,6 +29,7 @@ export async function POST(request?: NextRequest) {
       await getActiveMicrosoftImapConnection(session.userId, activeConnection.connection.id);
     }
 
+    phase = "start";
     const accepted = await createMicrosoftScanSession({
       userId: session.userId,
       providerConnectionId: activeConnection.connection.id,
@@ -33,6 +37,6 @@ export async function POST(request?: NextRequest) {
     });
     return Response.json({ progress: serializeScanProgress(accepted.progress), reused: accepted.reused });
   } catch {
-    return Response.json({ error: "Microsoft needs to reconnect before Outlook can be scanned." }, { status: 403 });
+    return scanStartFailure("microsoft", phase);
   }
 }

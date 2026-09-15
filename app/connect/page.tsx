@@ -4,7 +4,6 @@ import { Footer } from "@/components/marketing/Footer";
 import { Header } from "@/components/marketing/Header";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { runtimeConfig } from "@/lib/config";
-import { isMicrosoftOAuthDevelopmentUiEnabled } from "@/lib/providers/microsoft/development-access";
 
 export const metadata: Metadata = {
   title: "Connect your inbox",
@@ -14,11 +13,10 @@ export const metadata: Metadata = {
   }
 };
 
+export const dynamic = "force-dynamic";
+
 export default function ProviderChooserPage() {
-  const microsoftDevelopmentEnabled = isMicrosoftOAuthDevelopmentUiEnabled(
-    process.env.NODE_ENV,
-    runtimeConfig.microsoftOAuthDevEnabled
-  );
+  const microsoftDevelopmentEnabled = runtimeConfig.microsoftAvailable;
 
   return (
     <>
@@ -30,7 +28,7 @@ export default function ProviderChooserPage() {
             <p className="eyebrow">Connect an inbox</p>
             <h1 className="section-title mt-3">Connect your inbox</h1>
             <p className="muted mx-auto mt-4 max-w-xl text-lg leading-8">
-              Choose the inbox you want Organizinbox to clean.
+              Choose an available inbox for a read-only Inbox Report. Cleanup is not available in production.
             </p>
           </div>
           <div className="mx-auto mt-8 grid max-w-4xl gap-5 md:grid-cols-2">
@@ -39,9 +37,9 @@ export default function ProviderChooserPage() {
               <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">Gmail</h2>
               <p className="muted mt-3 leading-7">Connect your Gmail inbox.</p>
               <div className="mt-auto pt-7">
-                <Link className="btn btn-primary focus-ring w-full justify-center" href="/connect/google">
+                {runtimeConfig.gmailAvailable ? <Link className="btn btn-primary focus-ring w-full justify-center" href="/connect/google">
                   Continue with Google
-                </Link>
+                </Link> : <p role="status">Gmail is temporarily unavailable.</p>}
               </div>
             </section>
             <section className="panel flex min-h-64 flex-col p-6 md:p-7">
@@ -50,7 +48,7 @@ export default function ProviderChooserPage() {
               <p className="muted mt-3 leading-7">Outlook.com, Hotmail, and Microsoft 365.</p>
               <p className="muted mt-3 text-sm">
                 {microsoftDevelopmentEnabled
-                  ? "Read-only scanning is available for development testing. Cleanup is not enabled yet."
+                  ? "Read-only scanning is available. Cleanup is not enabled in production."
                   : "Outlook scanning and cleanup are not enabled yet."}
               </p>
               <div className="mt-auto pt-7">

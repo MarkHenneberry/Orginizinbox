@@ -2,12 +2,14 @@ import Link from "next/link";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { GmailBenchmarkClient } from "@/components/product/GmailBenchmarkClient";
 import { runtimeConfig } from "@/lib/config";
+import { notFound } from "next/navigation";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
 import { getLiveScan, serializeBenchmark } from "@/lib/server/live-scan-store";
 import { getSession } from "@/lib/server/session";
 
 export default async function GmailBenchmarkPage() {
-  if (process.env.NODE_ENV === "production" || !runtimeConfig.gmailBenchmarkEnabled) {
+  if (process.env.NODE_ENV === "production") notFound();
+  if (!runtimeConfig.gmailBenchmarkEnabled) {
     return (
       <main className="py-8">
         <div className="container max-w-3xl">

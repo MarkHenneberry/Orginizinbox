@@ -45,6 +45,7 @@ model User {
   purchases           Purchase[]
   cleanupJobStates    CleanupJobState[]
   scanStates          ScanState[]
+  billingAccount      BillingAccount?
 }
 
 model ProviderConnection {
@@ -178,4 +179,37 @@ model Purchase {
   currency        String          @default("usd")
   createdAt       DateTime        @default(now())
   user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BillingAccount {
+  userId               String   @id
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  stripePriceId        String?
+  subscriptionStatus  String   @default("free")
+  latestInvoicePaid    Boolean  @default(false)
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean  @default(false)
+  livemode            Boolean  @default(false)
+  syncedAt            DateTime?
+  leaseOwner          String?
+  leaseExpiresAt      DateTime?
+  checkoutAttemptKey  String?
+  checkoutAttemptedAt DateTime?
+  checkoutPriceId     String?
+  checkoutSessionId   String?
+  checkoutExpiresAt   DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  webhookReceipts     StripeWebhookReceipt[]
+}
+
+model StripeWebhookReceipt {
+  eventId     String   @id
+  userId      String
+  eventType   String
+  livemode    Boolean
+  processedAt DateTime @default(now())
+  account     BillingAccount @relation(fields: [userId], references: [userId], onDelete: Cascade)
 }

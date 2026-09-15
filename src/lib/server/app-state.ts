@@ -4,10 +4,10 @@ import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 import { getLiveScan, hasExpiredLiveScan } from "@/lib/server/live-scan-store";
 import { providerAvailability } from "@/lib/providers/availability";
-import { isMicrosoftOAuthDevelopmentUiEnabled } from "@/lib/providers/microsoft/development-access";
 import { runtimeConfig } from "@/lib/config";
 
 export type AppHomeState =
+  | { mode: "unavailable"; provider?: "gmail" | "microsoft" }
   | {
       mode: "fixture";
       report: ReturnType<typeof getFixtureInboxReport>;
@@ -40,6 +40,7 @@ export type AppHomeState =
 
 export async function getAppHomeState(): Promise<AppHomeState> {
   const connection = await getCurrentProviderConnection();
+  if (connection.mode === "unavailable") return { mode: "unavailable", provider: connection.provider };
   if (connection.mode === "fixture") {
     return {
       mode: "fixture",
@@ -90,6 +91,7 @@ export type PublicPrimaryCta = {
 
 export async function getPublicPrimaryCta(intent: PublicCtaIntent = "generic"): Promise<PublicPrimaryCta> {
   const state = await getAppHomeState();
+  if (state.mode === "unavailable") return { href: "/connect", label: "View provider availability" };
   if (state.mode === "connected_active_report") {
     return { href: "/app/report", label: "Return to Inbox Report" };
   }
@@ -104,10 +106,12 @@ export async function getPublicPrimaryCta(intent: PublicCtaIntent = "generic"): 
       : { href: "/connect/google", label: "Reconnect Gmail" };
   }
   if (intent === "outlook" && providerAvailability.microsoft.status === "comingSoon") {
-    if (isMicrosoftOAuthDevelopmentUiEnabled(process.env.NODE_ENV, runtimeConfig.microsoftOAuthDevEnabled)) {
-      return { href: "/connect/microsoft", label: "Connect Outlook" };
-    }
     return { href: "/guides", label: "Explore cleanup guides" };
+  }
+  if (intent === "outlook") return { href: "/connect/microsoft", label: "Connect Outlook" };
+  if (!runtimeConfig.development) {
+    if (intent === "gmail" && runtimeConfig.gmailAvailable) return { href: "/connect/google", label: "Scan Gmail" };
+    return { href: "/connect", label: "View provider availability" };
   }
   return intent === "gmail"
     ? { href: "/connect/google", label: "Clean my inbox" }

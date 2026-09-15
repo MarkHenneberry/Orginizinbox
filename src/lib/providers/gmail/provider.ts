@@ -44,7 +44,8 @@ export const gmailImapMetadataAllowlist = [
 export class GmailProvider implements MailboxProcessor {
   constructor(
     private readonly accessToken: string,
-    private readonly userEmail: string
+    private readonly userEmail: string,
+    private readonly beforeRequest?: () => Promise<void>
   ) {
     requireGoogleOAuthConfig();
   }
@@ -53,8 +54,11 @@ export class GmailProvider implements MailboxProcessor {
     this.assertTokenPresent();
     const client = this.createClient();
     try {
+      await this.beforeRequest?.();
       await client.connect();
+      await this.beforeRequest?.();
       const mailboxPath = await resolveGmailAllMail(client);
+      await this.beforeRequest?.();
       const mailbox = await client.mailboxOpen(mailboxPath, { readOnly: true });
       return {
         provider: "gmail",
@@ -74,8 +78,11 @@ export class GmailProvider implements MailboxProcessor {
     const client = this.createClient();
     try {
       throwIfAborted(input.signal);
+      await this.beforeRequest?.();
       await client.connect();
+      await this.beforeRequest?.();
       const mailboxPath = await resolveGmailAllMail(client);
+      await this.beforeRequest?.();
       const mailbox = await client.mailboxOpen(mailboxPath, { readOnly: true });
       if (mailbox.readOnly !== true) {
         throw new Error("Gmail mailbox was not opened read-only.");
@@ -102,6 +109,7 @@ export class GmailProvider implements MailboxProcessor {
         const gmailScalableIdentities = [];
         let subjectProtectionMs = 0;
 
+        await this.beforeRequest?.();
         for await (const message of client.fetch(`${start}:${end}`, gmailFetchQuery, { uid: false })) {
           throwIfAborted(input.signal);
           const subjectProtectionStarted = performance.now();
@@ -143,8 +151,11 @@ export class GmailProvider implements MailboxProcessor {
     const client = this.createClient();
     try {
       throwIfAborted(input.signal);
+      await this.beforeRequest?.();
       await client.connect();
+      await this.beforeRequest?.();
       const mailboxPath = await resolveGmailSent(client);
+      await this.beforeRequest?.();
       const mailbox = await client.mailboxOpen(mailboxPath, { readOnly: true });
       if (mailbox.readOnly !== true) {
         throw new Error("Gmail Sent mailbox was not opened read-only.");
@@ -153,6 +164,7 @@ export class GmailProvider implements MailboxProcessor {
       for (let start = 1; start <= mailbox.exists; start += input.batchSize) {
         throwIfAborted(input.signal);
         const end = Math.min(start + input.batchSize - 1, mailbox.exists);
+        await this.beforeRequest?.();
         for await (const message of client.fetch(`${start}:${end}`, gmailConversationIndexQuery, { uid: false })) {
           throwIfAborted(input.signal);
           indexSentConversation({ isSent: true, conversationId: message.threadId }, conversationIds);

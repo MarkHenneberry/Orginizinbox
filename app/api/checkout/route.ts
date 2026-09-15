@@ -1,8 +1,5 @@
-import { createFullResetCheckoutSession } from "@/lib/billing/stripe";
+import { billingAction } from "@/lib/billing/http";
 
-export async function POST() {
-  const result = await createFullResetCheckoutSession();
-  if (!result.ok) {
-    return Response.json({ error: result.reason }, { status: 503 });
-  }
-}
+export const runtime = "nodejs";
+export const maxDuration = 60;
+export function POST(request: Request) { return billingAction(request, "checkout"); }

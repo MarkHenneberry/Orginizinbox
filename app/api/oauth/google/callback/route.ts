@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { runtimeConfig } from "@/lib/config";
 import {
   exchangeGoogleCode,
   fetchGoogleUserInfo,
@@ -23,6 +24,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
+  if (!runtimeConfig.gmailAvailable) return Response.json({ error: "Gmail is temporarily unavailable." }, { status: 503 });
   const diagnostic = createOAuthCallbackDiagnostic();
   let stateResult: Awaited<ReturnType<typeof consumeOAuthState>>;
   try {

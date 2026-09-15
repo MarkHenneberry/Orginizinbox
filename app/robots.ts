@@ -7,15 +7,7 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "*",
         allow: "/",
-        disallow: ["/app/", "/api/", "/connect/*/callback"]
-      },
-      {
-        userAgent: "OAI-SearchBot",
-        allow: "/"
-      },
-      {
-        userAgent: "PerplexityBot",
-        allow: "/"
+        disallow: ["/app", "/api", "/connect"]
       }
     ],
     sitemap: `${siteConfig.url}/sitemap.xml`

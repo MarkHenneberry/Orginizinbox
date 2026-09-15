@@ -1,4 +1,6 @@
 import "server-only";
+import { createScanRequestFence } from "@/lib/server/provider-work-fence";
+import { createDurableWriteGate } from "@/lib/server/durable-write-gate";
 import { randomUUID } from "node:crypto";
 import { GmailProvider } from "@/lib/providers/gmail/provider";
 import { StreamingReportAggregator } from "@/lib/domain/streaming-aggregator";
@@ -106,6 +108,7 @@ async function executeGmailBenchmark(input: {
   let protectionClassificationMs = 0;
   let aggregationMs = 0;
   let subjectProtectionMs = 0;
+  const writeProgress = createDurableWriteGate(5_000);
 
   try {
     const activeConnection = await getActiveGmailConnection(input.userId, input.providerConnectionId);
@@ -113,7 +116,8 @@ async function executeGmailBenchmark(input: {
       throw new Error("No active Gmail connection is available.");
     }
 
-    const provider = new GmailProvider(activeConnection.accessToken, activeConnection.accountEmail);
+    const provider = new GmailProvider(activeConnection.accessToken, activeConnection.accountEmail,
+      createScanRequestFence(input.progress.scanId, input.lockOwner, "gmail"));
     const conversationIndexStarted = performance.now();
     const participatedConversationIds = await provider.scanParticipatedConversationIds({
       batchSize: input.batchSize,
@@ -129,6 +133,7 @@ async function executeGmailBenchmark(input: {
       onClassified(classified) {
         const identity = identitiesByProviderMessageId.get(classified.providerMessageId);
         if (!identity) return;
+        identitiesByProviderMessageId.delete(classified.providerMessageId);
         const eligible = toGmailScalableEligibleIdentity(identity, classified);
         if (eligible) eligibleIdentities.push(eligible);
       }
@@ -155,7 +160,13 @@ async function executeGmailBenchmark(input: {
       for (const identity of batch.gmailScalableIdentities ?? []) {
         identitiesByProviderMessageId.set(identity.providerMessageId, identity);
       }
-      const timing = aggregator.processBatch(batch.records);
+      input.progress.gmailPeakPendingIdentityCount = Math.max(input.progress.gmailPeakPendingIdentityCount ?? 0, identitiesByProviderMessageId.size);
+      const timing = (() => {
+        try { return aggregator.processBatch(batch.records); }
+        finally { identitiesByProviderMessageId.clear(); }
+      })();
+      input.progress.gmailPendingIdentityCount = identitiesByProviderMessageId.size;
+      input.progress.gmailRetainedEligibleIdentityCount = eligibleIdentities.length;
       protectionClassificationMs += timing.protectionClassificationMs;
       aggregationMs += timing.aggregationMs;
       subjectProtectionMs += batch.subjectProtectionMs ?? 0;
@@ -172,7 +183,7 @@ async function executeGmailBenchmark(input: {
           subjectProtectionMs
       );
       input.progress.approxMemoryMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
-      await setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "gmail", input.lockOwner);
+      await writeProgress(() => setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "gmail", input.lockOwner));
     }
 
     input.progress.status = "completed";
@@ -196,15 +207,16 @@ async function executeGmailBenchmark(input: {
     input.progress.messagesPerMinute = Math.round((input.progress.messagesPerSecond ?? 0) * 60);
 
     const report = aggregator.snapshot("gmail", false);
+    const scalableCleanupTargets = scalableIdentityBridgeAvailable && gmailUidValidity
+      ? buildScalableCleanupTargets(report.senders, eligibleIdentities) : undefined;
+    eligibleIdentities.length = 0;
+    input.progress.gmailRetainedEligibleIdentityCount = 0;
     await setLiveScan(input.userId, {
       progress: input.progress,
       report,
       participatedConversationIds,
       gmailUidValidity,
-      scalableCleanupTargets:
-        scalableIdentityBridgeAvailable && gmailUidValidity
-          ? buildScalableCleanupTargets(report.senders, eligibleIdentities)
-          : undefined,
+      scalableCleanupTargets,
       expiresAt: nextExpiry()
     }, "gmail", input.lockOwner);
   } catch (error) {

@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { BillingPanel } from "@/components/product/BillingPanel";
+import { ProviderUnavailable } from "@/components/product/ProviderUnavailable";
 import { BackToReportAction } from "@/components/product/AppContextActions";
 import { DisconnectGmailConfirmation } from "@/components/product/DisconnectGmailConfirmation";
 import { DisconnectMicrosoftConfirmation } from "@/components/product/DisconnectMicrosoftConfirmation";
@@ -25,10 +27,12 @@ export default async function AccountPage() {
         <p className="eyebrow">Account</p>
         <h1 className="m-0 mt-2 text-4xl font-extrabold text-[var(--navy)]">Account</h1>
         <section className="panel mt-6 p-6">
+          {account.mode === "unavailable" ? <ProviderUnavailable provider={account.provider} /> : null}
           {account.mode === "fixture" ? <FixtureAccount hasActiveReport={account.hasActiveReport} /> : null}
           {account.mode === "connected" ? <ConnectedAccount accountEmail={account.accountEmail} hasActiveReport={account.hasActiveReport} outlookCleanupEnabled={outlookCleanupEnabled} provider={account.provider} /> : null}
           {account.mode === "none" ? <NoProviderAccount /> : null}
         </section>
+        <BillingPanel />
       </div>
     </main>
   );

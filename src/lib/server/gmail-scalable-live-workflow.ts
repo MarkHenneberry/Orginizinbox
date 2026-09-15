@@ -20,6 +20,7 @@ import {
 } from "@/lib/providers/gmail/scalable-targets";
 import { sha256Base64Url } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
+import { retrySerializableTransaction } from "@/lib/server/retry-serializable-transaction";
 import {
   cleanupStateExpiryFor,
   createPrismaGmailScalableCleanupStore,
@@ -79,7 +80,7 @@ export async function acceptDurableGmailScalableCleanup(input: {
   const job = createAcceptedJob({ ...input, groupIndices, allocatedTargets, acceptanceKey, now });
   const prepared = prepareCleanupJobState(job);
   try {
-    await prisma.$transaction(async (transaction) => {
+    await retrySerializableTransaction(() => prisma.$transaction(async (transaction) => {
       await transaction.scan.upsert({
         where: { id: input.scanId },
         update: { status: "completed", completedAt: new Date(now) },
@@ -97,7 +98,7 @@ export async function acceptDurableGmailScalableCleanup(input: {
         data: { id: prepared.job.view.id, scanId: input.scanId, acceptanceKey, status: "pending" }
       });
       await transaction.cleanupJobState.create({ data: prepared.data });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     const existingRow = await prisma.cleanupJob.findUnique({
@@ -144,8 +145,16 @@ export async function getLatestDurableGmailScalableCleanup(userId: string) {
 export async function confirmDurableGmailScalableCleanup(userId: string, jobId: string) {
   const store = createPrismaGmailScalableCleanupStore();
   const current = await requireJob(userId, jobId);
+  const authorized = await prisma.cleanupJob.count({
+    where: {
+      id: jobId, status: { not: "cancelled" },
+      scan: { userId, provider: "gmail", providerConnection: { disconnectedAt: null, encryptedAccessToken: { not: null } } }
+    }
+  });
+  if (authorized !== 1) throw new GmailScalableCleanupError("Cleanup authorization is no longer available.", 409);
   if (current.view.status !== "ready") {
-    if (["mutating", "verifying", "chunk_complete", "safety_checking", "complete"].includes(current.view.status)) {
+    if (await redispatchConfirmedCleanup(current)) return serializeGmailScalableJob(current);
+    if (["safety_checking", "complete"].includes(current.view.status)) {
       return serializeGmailScalableJob(current);
     }
     throw new GmailScalableCleanupError("This scalable cleanup job is not ready to move messages.", 409);
@@ -157,9 +166,20 @@ export async function confirmDurableGmailScalableCleanup(userId: string, jobId: 
     refreshView(job);
     return job;
   });
-  if (!updated) throw new GmailScalableCleanupError("Scalable cleanup state changed. Read the current status and try again.", 409);
+  if (!updated) {
+    const latest = await requireJob(userId, jobId);
+    if (await redispatchConfirmedCleanup(latest)) return serializeGmailScalableJob(latest);
+    throw new GmailScalableCleanupError("Scalable cleanup state changed. Read the current status and try again.", 409);
+  }
   await startGmailScalableCleanupWorkflow(jobId);
   return serializeGmailScalableJob(updated);
+}
+
+async function redispatchConfirmedCleanup(job: GmailScalableStoredJob) {
+  if (!job.payload.confirmedAt || job.view.restoreMode ||
+      !["safety_checking", "mutating", "verifying", "chunk_complete", "paused"].includes(job.view.status)) return false;
+  await startGmailScalableCleanupWorkflow(job.view.id);
+  return true;
 }
 
 export async function undoDurableGmailScalableCleanup(userId: string, jobId: string) {

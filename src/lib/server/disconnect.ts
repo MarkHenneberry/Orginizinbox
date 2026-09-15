@@ -86,6 +86,10 @@ async function disconnectCurrentProviderSessionWithMode(
   }
 
   if (connection) {
+    await prisma.scan.updateMany({
+      where: { userId: session.userId, providerConnectionId: connection.id, status: "running" },
+      data: { status: "cancelled", completedAt: new Date() }
+    });
     await clearLiveScan(session.userId, connection.provider);
   }
   if (connection?.provider === "gmail") {

@@ -1,7 +1,10 @@
 import "server-only";
+import { createCleanupRequestFence } from "@/lib/server/provider-work-fence";
+import { createDurableWriteGate } from "@/lib/server/durable-write-gate";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { runtimeConfig } from "@/lib/config";
+import { requireProductionCleanupAccess, type CleanupAccess } from "@/lib/server/production-cleanup";
 import {
   assertOutlookCleanupDevelopmentRequest,
   createEmptyOutlookCleanupHttpRoundTrips,
@@ -16,6 +19,7 @@ import { MicrosoftProvider } from "@/lib/providers/microsoft/provider";
 import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
 import { sha256Base64Url } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
+import { retrySerializableTransaction } from "@/lib/server/retry-serializable-transaction";
 import { cleanupStateExpiryFor, prepareCleanupJobState } from "@/lib/server/cleanup-job-store";
 import { getLiveScan, markLiveReportStale } from "@/lib/server/live-scan-store";
 import {
@@ -24,6 +28,8 @@ import {
 } from "@/lib/server/microsoft-connection";
 import {
   createPrismaOutlookCleanupStore,
+  getOutlookCleanupLedgers,
+  refreshOutlookRecovery,
   serializeOutlookCleanupJob,
   type OutlookCleanupStoredJob,
   type OutlookCleanupTarget
@@ -139,7 +145,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
   const store = createPrismaOutlookCleanupStore();
   const prepared = prepareCleanupJobState(job);
   try {
-    await prisma.$transaction(async (transaction) => {
+    await retrySerializableTransaction(() => prisma.$transaction(async (transaction) => {
       await transaction.scan.upsert({
         where: { id: liveScan.progress.scanId },
         update: { status: "completed", completedAt: new Date(now) },
@@ -157,7 +163,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
         data: { id: jobId, scanId: liveScan.progress.scanId, acceptanceKey, status: "pending" }
       });
       await transaction.cleanupJobState.create({ data: prepared.data });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     const existingRow = await prisma.cleanupJob.findUnique({
@@ -178,7 +184,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
 
 export async function getOutlookCleanupStatus(jobId: string) {
   assertGate(1);
-  const session = await requireSession();
+  const session = await requireSession("recovery", jobId);
   const job = await createPrismaOutlookCleanupStore().get(session.userId, jobId);
   if (!job || job.provider !== "microsoft") throw new OutlookCleanupError("Outlook cleanup job expired.", 410);
   return serializeOutlookCleanupJob(job);
@@ -207,7 +213,7 @@ export async function getCurrentOutlookCleanup() {
 
 export async function confirmOutlookCleanup(jobId: string) {
   assertGate(1);
-  const session = await requireSession();
+  const session = await requireSession("forward", jobId);
   const store = createPrismaOutlookCleanupStore();
   const current = await store.get(session.userId, jobId);
   if (!current || current.provider !== "microsoft") throw new OutlookCleanupError("Outlook cleanup job expired.", 410);
@@ -234,7 +240,7 @@ export async function confirmOutlookCleanup(jobId: string) {
 
 export async function undoOutlookCleanup(jobId: string) {
   assertGate(1);
-  const session = await requireSession();
+  const session = await requireSession("recovery", jobId);
   const store = createPrismaOutlookCleanupStore();
   const current = await store.get(session.userId, jobId);
   if (!current || current.provider !== "microsoft") throw new OutlookCleanupError("Outlook cleanup job expired.", 410);
@@ -244,14 +250,17 @@ export async function undoOutlookCleanup(jobId: string) {
     return serializeOutlookCleanupJob(current);
   }
   if (current.view.status === "undo_complete") return serializeOutlookCleanupJob(current);
-  if (current.view.uncertain > 0 || current.view.status === "uncertain") {
-    throw new OutlookCleanupError("Undo is blocked because an Outlook mutation result is uncertain.", 409);
-  }
-  const restorable = current.payload.targets.filter((target) => target.state === "moved_verified");
+  if (["uncertain", "failed", "partial"].includes(current.view.status)) markPendingOutlookTargetsUncertain(current);
+  refreshOutlookRecovery(current);
+  const restorable = getOutlookCleanupLedgers(current).verifiedMoved;
   if (!current.view.undoAvailable || restorable.length === 0) {
     throw new OutlookCleanupError("No exact verified Outlook messages are available for Undo.", 409);
   }
   const updated = await store.compareAndSet(session.userId, jobId, current.version, (job) => {
+    if (["uncertain", "failed", "partial"].includes(job.view.status)) markPendingOutlookTargetsUncertain(job);
+    refreshOutlookRecovery(job);
+    job.view.undoMode = current.view.undoMode ?? "full";
+    job.view.recoverableCount = restorable.length;
     job.view.status = "undoing";
     job.view.undoAvailable = false;
     job.view.undoStatus = "running";
@@ -271,13 +280,22 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
   const owner = randomUUID();
   let job = await store.claim(jobId, owner, new Date(), 10 * 60 * 1000);
   if (!job || job.provider !== "microsoft") return { outcome: "stop" as const };
+  const renewLease = createDurableWriteGate(30_000, Date.now, false);
   try {
     normalizeOutlookCleanupMetrics(job);
+    // Re-entry may only need to verify a previously dispatched batch. maxBatches=1
+    // below prevents that recovery unit from proceeding to another forward batch.
+    const verificationOnly = operation === "cleanup" && Boolean(job.payload.activeMoveBatchIndexes?.length);
+    await requireProductionCleanupAccess({ userId: job.userId, providerConnectionId: job.payload.providerConnectionId,
+      provider: "microsoft", access: operation === "undo" || verificationOnly ? "recovery" : "forward", jobId });
     const active = await getActiveMicrosoftConnection(job.userId, job.payload.providerConnectionId);
     if (!active) return await failJob(job, owner);
     const provider = new MicrosoftProvider(active.accessToken, {
       refreshAccessToken: () => forceRefreshMicrosoftConnection(job!.userId, job!.payload.providerConnectionId),
-      requestCoordinator: createProviderRequestCoordinator(active.connection.id)
+      requestCoordinator: createProviderRequestCoordinator(active.connection.id, {
+        // Authorization above covers this unit; allow its verification to finish during rollback.
+        beforeRequest: createCleanupRequestFence(active.connection, jobId, owner, undefined, "recovery")
+      })
     });
     const baseRequests = job.view.httpRoundTrips;
     const baseSubrequests = job.view.graphSubrequests;
@@ -297,7 +315,11 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
       if (!next) throw new OutlookCleanupError("Outlook cleanup state changed during execution.", 409);
       currentJob.version = next.version;
       job = currentJob;
-      await store.refreshLock(jobId, owner, new Date(), 10 * 60 * 1000);
+      await renewLease(async () => {
+        if (!await store.refreshLock(jobId, owner, new Date(), 10 * 60 * 1000)) {
+          throw new OutlookCleanupError("Outlook cleanup lease was lost.", 409);
+        }
+      });
     };
 
     const result = operation === "prepare"
@@ -312,19 +334,16 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
     return result;
   } catch {
     if (job) {
-      const ambiguous = job.payload.targets.some((target) =>
-        ["move_dispatching", "move_dispatched", "restore_dispatching", "restore_dispatched"].includes(target.state)
-      );
-      job.view.status = ambiguous ? "uncertain" : "failed";
-      if (ambiguous) job.view.uncertain += 1;
-      const recoverable = job.payload.targets.filter((target) => target.state === "moved_verified").length;
-      job.view.undoAvailable = !ambiguous && recoverable > 0;
-      job.view.undoStatus = ambiguous ? "uncertain" : job.view.undoAvailable ? "available" : "not_available";
-      await store.compareAndSet(job.userId, jobId, job.version, (value) => {
+      markPendingOutlookTargetsUncertain(job);
+      job.view.status = getOutlookCleanupLedgers(job).uncertain.length > 0 ? "uncertain" : "failed";
+      refreshOutlookRecovery(job);
+      job.view.undoStatus = job.view.uncertain > 0 ? "uncertain" : job.view.undoAvailable ? "available" : "not_available";
+      job.view.expiresAt = cleanupStateExpiryFor({ now: Date.now(), undoAvailable: job.view.undoAvailable, terminal: !job.view.undoAvailable });
+      const committed = await store.compareAndSet(job.userId, jobId, job.version, (value) => {
         void value;
         return job!;
       }, new Date(), owner).catch(() => undefined);
-      await updateAggregateCleanupRow(job).catch(() => undefined);
+      if (committed) await updateAggregateCleanupRow(committed).catch(() => undefined);
     }
     return { outcome: "stop" as const };
   } finally {
@@ -381,16 +400,14 @@ export async function executeOutlookMoves(
 ) {
   if (job.view.status !== "running") return { outcome: "stop" as const };
   normalizeOutlookCleanupMetrics(job);
+  if (job.payload.forwardCleanupStopped || job.view.uncertain > 0 || getOutlookCleanupLedgers(job).uncertain.length > 0) {
+    return stopOutlookUncertain(job, save);
+  }
   for (const target of job.payload.targets) {
     if (target.state === "move_dispatching" && target.movedMessageId) target.state = "move_dispatched";
   }
   if (job.payload.targets.some((target) => target.state === "move_dispatching" && !target.movedMessageId)) {
-    job.view.status = "uncertain";
-    job.view.uncertain += 1;
-    job.view.undoAvailable = false;
-    job.view.undoStatus = "uncertain";
-    await save();
-    return { outcome: "stop" as const };
+    return stopOutlookUncertain(job, save);
   }
   const selected = new Map(job.payload.selectedSenders.map((sender) => [sender.senderKey.toLowerCase(), sender.groupIndex]));
   if (!job.payload.cleanupSafetyContext) {
@@ -434,11 +451,7 @@ export async function executeOutlookMoves(
         job.view.uncertain += 1;
       }
       job.view.checked += targetChunk.length;
-      job.view.status = "uncertain";
-      job.view.undoAvailable = false;
-      job.view.undoStatus = "uncertain";
-      await save();
-      return { outcome: "stop" as const };
+      return stopOutlookUncertain(job, save);
     }
 
     const approvedTargets: OutlookCleanupTarget[] = [];
@@ -488,11 +501,7 @@ export async function executeOutlookMoves(
         target.state = "move_uncertain";
         job.view.uncertain += 1;
       }
-      job.view.status = "uncertain";
-      job.view.undoAvailable = false;
-      job.view.undoStatus = "uncertain";
-      await save();
-      return { outcome: "stop" as const };
+      return stopOutlookUncertain(job, save);
     }
 
     const movedTargets: OutlookCleanupTarget[] = [];
@@ -533,11 +542,7 @@ export async function executeOutlookUndo(
     if (target.state === "restore_dispatching" && target.restoredMessageId) target.state = "restore_dispatched";
   }
   if (job.payload.targets.some((target) => target.state === "restore_dispatching" && !target.restoredMessageId)) {
-    job.view.status = "uncertain";
-    job.view.undoStatus = "uncertain";
-    job.view.uncertain += 1;
-    await save();
-    return { outcome: "stop" as const };
+    return stopOutlookUncertain(job, save);
   }
   let advancedBatches = 0;
   if (job.view.undoTotalBatches === 0) {
@@ -551,9 +556,7 @@ export async function executeOutlookUndo(
       advancedBatches += 1;
       continue;
     }
-    const targetChunk = job.payload.targets.filter((target) =>
-      target.state === "moved_verified" && Boolean(target.movedMessageId) && Boolean(target.originalFolderId)
-    ).slice(0, job.view.effectiveBatchSize);
+    const targetChunk = getOutlookCleanupLedgers(job).verifiedMoved.slice(0, job.view.effectiveBatchSize);
     if (targetChunk.length === 0) return await finishOutlookUndo(job, save);
     job.payload.activeUndoBatchIndexes = targetChunk.map((target) => job.payload.targets.indexOf(target));
     for (const target of targetChunk) target.state = "restore_dispatching";
@@ -574,11 +577,7 @@ export async function executeOutlookUndo(
         target.state = "restore_uncertain";
         job.view.uncertain += 1;
       }
-      job.view.status = "uncertain";
-      job.view.undoAvailable = false;
-      job.view.undoStatus = "uncertain";
-      await save();
-      return { outcome: "stop" as const };
+      return stopOutlookUncertain(job, save);
     }
 
     const restoredTargets: OutlookCleanupTarget[] = [];
@@ -645,10 +644,7 @@ async function verifyActiveMoveBatch(
     }
   }
   if (job.view.uncertain > 0) {
-    job.view.status = "uncertain";
-    job.view.undoAvailable = false;
-    job.view.undoStatus = "uncertain";
-    await save();
+    await stopOutlookUncertain(job, save);
     return false;
   }
   completeMoveBatch(job);
@@ -663,9 +659,9 @@ function completeMoveBatch(job: OutlookCleanupStoredJob) {
 }
 
 async function finishOutlookCleanup(job: OutlookCleanupStoredJob, save: () => Promise<void>) {
-  job.view.undoAvailable = job.view.movedVerified > 0 && job.view.uncertain === 0;
-  job.view.undoStatus = job.view.uncertain > 0 ? "uncertain" : job.view.undoAvailable ? "available" : "not_available";
   job.view.status = job.view.uncertain > 0 ? "uncertain" : job.view.failed > 0 ? "partial" : "complete";
+  refreshOutlookRecovery(job);
+  job.view.undoStatus = job.view.uncertain > 0 ? "uncertain" : job.view.undoAvailable ? "available" : "not_available";
   job.view.expiresAt = cleanupStateExpiryFor({ now: Date.now(), undoAvailable: job.view.undoAvailable, terminal: false });
   refreshCleanupProgress(job);
   await save();
@@ -708,11 +704,8 @@ async function verifyActiveUndoBatch(
       }
     }
   }
-  if (job.view.uncertain > 0) {
-    job.view.status = "uncertain";
-    job.view.undoAvailable = false;
-    job.view.undoStatus = "uncertain";
-    await save();
+  if (activeTargets.some((target) => target.state === "restore_uncertain")) {
+    await stopOutlookUncertain(job, save);
     return false;
   }
   job.payload.activeUndoBatchIndexes = undefined;
@@ -722,15 +715,36 @@ async function verifyActiveUndoBatch(
 }
 
 async function finishOutlookUndo(job: OutlookCleanupStoredJob, save: () => Promise<void>) {
-  const remaining = job.payload.targets.filter((target) => target.state === "moved_verified").length;
-  job.view.undoAvailable = remaining > 0 && job.view.uncertain === 0;
+  refreshOutlookRecovery(job);
+  const remaining = getOutlookCleanupLedgers(job).verifiedMoved.length;
   job.view.undoStatus = job.view.uncertain > 0
     ? "uncertain"
     : job.view.restoredVerified === job.view.movedVerified
       ? "complete"
       : "partial";
   job.view.status = job.view.undoStatus === "complete" ? "undo_complete" : job.view.uncertain > 0 ? "uncertain" : "partial";
+  refreshOutlookRecovery(job);
   job.view.expiresAt = cleanupStateExpiryFor({ now: Date.now(), undoAvailable: remaining > 0, terminal: remaining === 0 });
+  await save();
+  return { outcome: "stop" as const };
+}
+
+function markPendingOutlookTargetsUncertain(job: OutlookCleanupStoredJob) {
+  for (const target of job.payload.targets) {
+    if (target.state === "move_dispatching" || target.state === "move_dispatched") target.state = "move_uncertain";
+    if (target.state === "restore_dispatching" || target.state === "restore_dispatched") target.state = "restore_uncertain";
+  }
+  job.payload.forwardCleanupStopped = true;
+  job.payload.activeMoveBatchIndexes = undefined;
+  job.payload.activeUndoBatchIndexes = undefined;
+}
+
+async function stopOutlookUncertain(job: OutlookCleanupStoredJob, save: () => Promise<void>) {
+  markPendingOutlookTargetsUncertain(job);
+  job.view.status = "uncertain";
+  refreshOutlookRecovery(job);
+  job.view.undoStatus = "uncertain";
+  job.view.expiresAt = cleanupStateExpiryFor({ now: Date.now(), undoAvailable: job.view.undoAvailable, terminal: !job.view.undoAvailable });
   await save();
   return { outcome: "stop" as const };
 }
@@ -811,7 +825,7 @@ async function updateAggregateCleanupRow(job: OutlookCleanupStoredJob) {
         : "running";
   const terminal = ["complete", "partial", "uncertain", "failed", "undo_complete"].includes(job.view.status);
   await prisma.cleanupJob.updateMany({
-    where: { id: job.view.id },
+    where: { id: job.view.id, status: { not: "cancelled" } },
     data: {
       status,
       startedAt: new Date(job.payload.confirmedAt ?? job.view.createdAt),
@@ -828,11 +842,10 @@ async function updateAggregateCleanupRow(job: OutlookCleanupStoredJob) {
 async function failJob(job: OutlookCleanupStoredJob, owner: string) {
   const store = createPrismaOutlookCleanupStore();
   job.view.status = "failed";
-  const unprocessed = job.payload.targets.filter((target) => target.state === "frozen").length;
-  job.view.failed = Math.max(job.view.failed, unprocessed);
-  const recoverable = job.payload.targets.filter((target) => target.state === "moved_verified").length;
-  job.view.undoAvailable = recoverable > 0 && job.view.uncertain === 0;
-  job.view.undoStatus = job.view.undoAvailable ? "available" : "not_available";
+  markPendingOutlookTargetsUncertain(job);
+  refreshOutlookRecovery(job);
+  if (job.view.uncertain > 0) job.view.status = "uncertain";
+  job.view.undoStatus = job.view.uncertain > 0 ? "uncertain" : job.view.undoAvailable ? "available" : "not_available";
   await store.compareAndSet(job.userId, job.view.id, job.version, () => job, new Date(), owner);
   await updateAggregateCleanupRow(job);
   return { outcome: "stop" as const };
@@ -857,6 +870,12 @@ function isOutlookCleanupEnabled() {
 }
 
 function assertGate(requestedCount: unknown) {
+  if (process.env.NODE_ENV === "production") {
+    if (typeof requestedCount !== "number" || !Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 500) {
+      throw new OutlookCleanupError("Choose between 1 and 500 messages.", 400);
+    }
+    return requestedCount;
+  }
   try {
     return assertOutlookCleanupDevelopmentRequest({
       enabled: runtimeConfig.microsoftOAuthDevEnabled && runtimeConfig.outlookCleanupDevEnabled,
@@ -869,8 +888,10 @@ function assertGate(requestedCount: unknown) {
   }
 }
 
-async function requireSession() {
+async function requireSession(access: CleanupAccess = "forward", jobId?: string) {
   const session = await getSession();
   if (!session?.userId) throw new OutlookCleanupError("Connect Microsoft before cleanup.", 401);
+  await requireProductionCleanupAccess({ userId: session.userId, providerConnectionId: session.providerConnectionId,
+    provider: "microsoft", access, jobId });
   return session;
 }

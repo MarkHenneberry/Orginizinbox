@@ -73,6 +73,8 @@ export type OutlookCleanupJobView = {
   timingMs: OutlookCleanupTimingMs;
   groupIndices: number[];
   undoAvailable: boolean;
+  undoMode?: "full" | "recovery";
+  recoverableCount?: number;
   undoStatus: OutlookCleanupUndoStatus;
   createdAt: number;
   updatedAt: number;
@@ -125,7 +127,7 @@ export function assertOutlookCleanupDevelopmentRequest(input: {
   return Number(input.requestedCount);
 }
 
-export function shouldPollOutlookCleanup(job: OutlookCleanupJobView) {
+export function shouldPollOutlookCleanup(job: Pick<OutlookCleanupJobView, "status">) {
   return ["created", "resolving", "running", "undoing"].includes(job.status);
 }
 
@@ -166,6 +168,8 @@ export function formatOutlookCleanupDiagnostic(job: OutlookCleanupJobView) {
     `Undo verification: ${job.timingMs?.undoVerification ?? 0} ms`,
     "",
     `Job status: ${job.status}`,
-    `Undo status: ${job.undoStatus}`
+    `Undo status: ${job.undoStatus}`,
+    `Undo mode: ${job.undoMode ?? "full"}`,
+    `Verified messages available for recovery: ${job.recoverableCount ?? 0}`
   ].join("\n");
 }

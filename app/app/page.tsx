@@ -1,10 +1,13 @@
 import Link from "next/link";
+import { ProviderUnavailable } from "@/components/product/ProviderUnavailable";
 import { runtimeConfig } from "@/lib/config";
 import { isOutlookCleanupDevelopmentEnabled } from "@/lib/domain/outlook-cleanup";
 import { getAppHomeState } from "@/lib/server/app-state";
+import { getProductionCleanupUiState } from "@/lib/server/production-cleanup-ui";
 
 export default async function AppIndexPage() {
   const state = await getAppHomeState();
+  const cleanup = process.env.NODE_ENV === "production" ? await getProductionCleanupUiState() : undefined;
   const outlookCleanupEnabled = isOutlookCleanupDevelopmentEnabled({
     microsoftOAuthEnabled: runtimeConfig.microsoftOAuthDevEnabled,
     outlookCleanupEnabled: runtimeConfig.outlookCleanupDevEnabled,
@@ -17,7 +20,9 @@ export default async function AppIndexPage() {
       <div className="container max-w-5xl">
         <p className="eyebrow">Organizinbox</p>
         <h1 className="m-0 mt-2 text-4xl font-extrabold text-[var(--navy)]">See what&apos;s filling your inbox</h1>
-        <p className="muted mt-3 max-w-3xl">Scan your inbox, review the recommendations, and move unwanted email to Trash.</p>
+        <p className="muted mt-3 max-w-3xl">{runtimeConfig.development ? "Scan your inbox, review the recommendations, and move unwanted email to Trash." : "Scan your inbox and review the email you may want to clean. Scanning never moves messages."}</p>
+        {cleanup?.hasJob ? <Link className="btn btn-secondary focus-ring mt-4" href="/app/cleanup">View cleanup and Undo</Link> : null}
+        {state.mode === "unavailable" ? <ProviderUnavailable provider={state.provider} /> : null}
 
         {state.mode === "fixture" ? (
           <section className="panel mt-6 p-6">
@@ -65,7 +70,7 @@ export default async function AppIndexPage() {
             <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">Ready to scan Outlook</h2>
             <p className="muted">
               {state.accountEmail ? `${state.accountEmail} is connected. ` : "Your Microsoft account is connected. "}
-              {outlookCleanupEnabled
+              {process.env.NODE_ENV === "production" ? "Scanning is read-only. Review your report before choosing any cleanup." : outlookCleanupEnabled
                 ? "Scanning is read-only. Development cleanup can move up to 500 reviewed messages to Deleted Items."
                 : "Scanning is read-only. Outlook cleanup is not available yet."}
             </p>

@@ -159,7 +159,7 @@ class PrismaGmailScalableAggregateJobWriter implements GmailScalableAggregateJob
       formatGmailScalableDevelopmentSummary(serialized)
     );
     await prisma.cleanupJob.updateMany({
-      where: { id: job.view.id },
+      where: { id: job.view.id, status: { not: "cancelled" } },
       data: {
         status,
         startedAt: status === "running" ? new Date(job.view.createdAt) : undefined,

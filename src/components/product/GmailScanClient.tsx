@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { OperationStatus } from "@/components/product/OperationStatus";
+import { startAdaptivePolling } from "@/lib/adaptive-polling";
 
 type ScanProgress = {
   scanId: string;
@@ -51,6 +52,7 @@ function MailboxScanClient({
 }) {
   const [progress, setProgress] = useState<ScanProgress | null>(initialProgress);
   const [pending, setPending] = useState(false);
+  const [pollError, setPollError] = useState(false);
   const [operationMode, setOperationMode] = useState<"scan" | "rescan">("scan");
   const [operationStartedAt, setOperationStartedAt] = useState<number | undefined>(initialProgress?.startedAt);
   const pendingRef = useRef(false);
@@ -69,14 +71,16 @@ function MailboxScanClient({
 
   useEffect(() => {
     if (!isRunning) return;
-    const interval = window.setInterval(async () => {
-      const response = await fetch(`${endpoint}/status`, { cache: "no-store" });
-      if (!response.ok) return;
+    return startAdaptivePolling(async (signal) => {
+      const response = await fetch(`${endpoint}/status`, { cache: "no-store", signal });
+      if (!response.ok) throw new Error("Status unavailable");
       const payload = (await response.json()) as { progress: ScanProgress | null };
+      if (signal.aborted) return false;
+      setPollError(false);
       setProgress(payload.progress);
-    }, 1000);
-    return () => window.clearInterval(interval);
-  }, [endpoint, isRunning]);
+      return payload.progress?.status === "running";
+    }, () => setPollError(true));
+  }, [endpoint, isRunning, progress?.scanId]);
 
   async function startScan(mode: "scan" | "rescan") {
     if (pendingRef.current || isRunning) return;
@@ -111,6 +115,7 @@ function MailboxScanClient({
 
   return (
     <section aria-busy={working} className="panel mt-6 p-6">
+      {pollError ? <p role="alert">Status could not be refreshed. Retrying...</p> : null}
       <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">
         {isRunning
           ? outlook ? "Scanning Outlook inbox..." : "Scanning your inbox..."

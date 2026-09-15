@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ConfigurationError, requireGoogleOAuthConfig } from "@/lib/config";
+import { ConfigurationError, requireGoogleOAuthConfig, runtimeConfig } from "@/lib/config";
 import { buildGoogleAuthorizationUrl } from "@/lib/server/google-oauth";
 import { createOAuthState } from "@/lib/server/session";
 
@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
+  if (!runtimeConfig.gmailAvailable) return Response.json({ error: "Gmail is temporarily unavailable." }, { status: 503 });
   try {
     requireGoogleOAuthConfig();
     const state = await createOAuthState("/app/scan", { provider: "google" });

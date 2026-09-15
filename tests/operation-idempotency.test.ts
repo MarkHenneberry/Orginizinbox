@@ -1,5 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { UndoAction } from "@/components/product/UndoAction";
+import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
+import type { GmailCleanupUiJob } from "@/lib/domain/cleanup-ui";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 vi.mock("@/lib/server/crypto", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/server/crypto")>();
@@ -146,7 +153,17 @@ describe("working-state contracts", () => {
 
     expect(client).toMatch(/if \(activeOperationRef\.current\) return false/);
     expect(client).toMatch(/activeOperationRef\.current = operation[\s\S]+setActiveOperation\(operation\)/);
-    expect(client).toMatch(/title=\{`Checking \$\{requestedCount\.toLocaleString\(\)\} messages\.\.\.`\}/);
+    const checkingJob = { id: "checking", status: "created", requestedCount: 500, groupIndices: [],
+      chunks: [], suggestedDeltas: [], verifiedCount: 0, verifiedRestoredCount: 0, failedRestoreCount: 0,
+      uncertainRestoreCount: 0, verifiedProcessedCount: 0, createdAt: Date.now(), expiresAt: Date.now() + 60_000 } as unknown as GmailCleanupUiJob;
+    const html = renderToStaticMarkup(createElement(GmailCleanupClient, {
+      groups: [], provider: "gmail", bulkUndoProofEnabled: false, cleanupEnabled: true, legacyCleanupMaximum: 100,
+      scalableCleanupEnabled: true, countOptions: [500], fixtureMode: false, developmentMode: true,
+      reportStale: false, initialScalableJob: checkingJob
+    }));
+    expect(html).toContain("Checking your selected messages");
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-busy="true"');
     expect(client).toContain("Running safety benchmark...");
     expect(client).toContain("Messages moved. Verifying cleanup...");
     expect(client).toContain("Restoring ");
@@ -181,7 +198,20 @@ describe("working-state contracts", () => {
     const undoResult = client.slice(client.indexOf("function UndoResult"), client.indexOf("function CleanupOperationStatus"));
 
     expect(store).toMatch(/job\.status === "completed"[\s\S]+job\.verifiedCount === job\.attemptedCount/);
-    expect(client).toMatch(/job\.undoAvailable \? <button[\s\S]+>Undo<\/button> : null/);
+    const expiresAt = Date.now() + 60_000;
+    const onUndo = vi.fn();
+    const renderUndo = (props: Partial<Parameters<typeof UndoAction>[0]>) => renderToStaticMarkup(createElement(UndoAction, {
+      available: true, expiresAt, onUndo, ...props
+    }));
+    expect(renderUndo({})).toContain(">Undo</button>");
+    expect(renderUndo({ busy: true })).toMatch(/<button[^>]*disabled=""/);
+    for (const props of [{ available: false }, { completed: true }, { expiresAt: Date.now() - 1 }]) {
+      expect(renderUndo(props)).not.toContain("<button");
+    }
+    const recovery = renderUndo({ recovery: true });
+    expect(recovery).toContain(">Recovery Undo</button>");
+    expect(recovery).toContain("Uncertain messages are not included");
+    expect(onUndo).not.toHaveBeenCalled();
     expect(undoResult).not.toContain("onUndo");
     expect(undoResult).toContain("Restore verification was not complete.");
   });

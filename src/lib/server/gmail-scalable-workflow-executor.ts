@@ -1,5 +1,8 @@
 import "server-only";
+import { createCleanupRequestFence } from "@/lib/server/provider-work-fence";
+import { prisma } from "@/lib/server/db";
 import { runtimeConfig } from "@/lib/config";
+import { requireProductionCleanupAccess } from "@/lib/server/production-cleanup";
 import {
   gmailScalableProgressLabel,
   summarizeGmailScalableChunks,
@@ -23,7 +26,7 @@ const quotaWindowMs = 60_000;
 
 export class GmailScalableProviderWorkflowExecutor implements GmailScalableWorkflowOperationExecutor {
   constructor(
-    private readonly providerForJob: (job: GmailScalableStoredJob) => Promise<GmailScalableCleanupProviderPort> = createProvider,
+    private readonly providerForJob: (job: GmailScalableStoredJob, operation?: GmailScalableWorkflowOperation) => Promise<GmailScalableCleanupProviderPort> = createProvider,
     private readonly now: () => number = Date.now
   ) {}
 
@@ -31,7 +34,7 @@ export class GmailScalableProviderWorkflowExecutor implements GmailScalableWorkf
     const job = structuredClone(input.job);
     try {
       restorePausedState(job);
-      const provider = await this.providerForJob(job);
+      const provider = await this.providerForJob(job, input.operation);
       const reserve = createQuotaReservation(job, this.now);
       switch (input.operation) {
         case "preflight_safety":
@@ -174,18 +177,29 @@ function restorePausedState(job: GmailScalableStoredJob) {
   job.view.nextEligibleRunAt = undefined;
 }
 
-async function createProvider(job: GmailScalableStoredJob) {
+async function createProvider(job: GmailScalableStoredJob, operation?: GmailScalableWorkflowOperation) {
+  if (process.env.NODE_ENV === "production" && job.payload.fixture?.enabled) throw new Error("Fixture cleanup is not available in production.");
   if (
-    process.env.NODE_ENV !== "production" &&
     runtimeConfig.fixtureMode &&
     runtimeConfig.gmailScalableWorkflowFixtureEnabled &&
     job.payload.fixture?.enabled
   ) {
     return new GmailScalableWorkflowFixtureProvider(job);
   }
-  const connection = await getActiveGmailConnection(job.userId);
+  const aggregate = await prisma.cleanupJob.findFirst({
+    where: { id: job.view.id, status: { not: "cancelled" }, scan: { userId: job.userId, provider: "gmail" } },
+    select: { scan: { select: { providerConnectionId: true } } }
+  });
+  if (!aggregate) throw new Error("Cleanup authorization is no longer available.");
+  const access = operation === "verify_trash" || operation === "checkpoint_undo" ||
+    operation === "dispatch_undo" || operation === "verify_undo" ? "recovery" : "forward";
+  await requireProductionCleanupAccess({ userId: job.userId, providerConnectionId: aggregate.scan.providerConnectionId,
+    provider: "gmail", jobId: job.view.id, access });
+  const connection = await getActiveGmailConnection(job.userId, aggregate.scan.providerConnectionId);
   if (!connection) throw new Error("An active Gmail connection is required for scalable cleanup.");
-  return new GmailScalableCleanupProvider(connection.accessToken, connection.accountEmail);
+  return new GmailScalableCleanupProvider(connection.accessToken, connection.accountEmail, {
+    beforeRequest: createCleanupRequestFence(connection.connection, job.view.id, undefined, job.version, access)
+  });
 }
 
 async function runSafetyCheck(

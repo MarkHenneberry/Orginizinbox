@@ -37,6 +37,7 @@ type OutlookFolderRole = "sent" | "draft" | "deleted";
 type OutlookFolder = ListResponse & { role?: OutlookFolderRole };
 
 type OutlookImapProviderOptions = {
+  beforeRequest?: () => Promise<void>;
   clientFactory?: () => ImapFlow;
 };
 
@@ -79,11 +80,13 @@ export class OutlookImapProvider {
       const evidence = new Set<string>();
       for (const folder of folders.filter((candidate) => candidate.role === "sent")) {
         throwIfAborted(input.signal);
+        await this.options.beforeRequest?.();
         const mailbox = await client.mailboxOpen(folder.path, { readOnly: true });
         if (mailbox.readOnly !== true) throw new Error("Outlook IMAP Sent folder was not opened read-only.");
         for (let start = 1; start <= mailbox.exists; start += input.batchSize) {
           const end = Math.min(start + input.batchSize - 1, mailbox.exists);
           this.metrics.metadataBatches += 1;
+          await this.options.beforeRequest?.();
           for await (const message of client.fetch(`${start}:${end}`, outlookImapParticipationFetchQuery, { uid: false })) {
             throwIfAborted(input.signal);
             for (const identity of deriveThreadEvidence(message.headers)) evidence.add(identity);
@@ -110,6 +113,7 @@ export class OutlookImapProvider {
       for (const folder of folders) {
         if (numericLimit !== undefined && processed >= numericLimit) break;
         throwIfAborted(input.signal);
+        await this.options.beforeRequest?.();
         const mailbox = await client.mailboxOpen(folder.path, { readOnly: true });
         if (mailbox.readOnly !== true) throw new Error("Outlook IMAP folder was not opened read-only.");
         this.metrics.folders += 1;
@@ -119,6 +123,7 @@ export class OutlookImapProvider {
           const records: NormalizedMailboxRecord[] = [];
           let subjectProtectionMs = 0;
           this.metrics.metadataBatches += 1;
+          await this.options.beforeRequest?.();
           for await (const message of client.fetch(`${start}:${end}`, outlookImapFetchQuery, { uid: false })) {
             throwIfAborted(input.signal);
             if (numericLimit !== undefined && processed >= numericLimit) break;
@@ -175,6 +180,7 @@ export class OutlookImapProvider {
         this.metrics.commands += 1;
       }
     });
+    await this.options.beforeRequest?.();
     await client.connect();
     this.client = client;
     return client;
@@ -182,6 +188,7 @@ export class OutlookImapProvider {
 
   private async getFolders(client: ImapFlow) {
     if (this.folders) return this.folders;
+    await this.options.beforeRequest?.();
     const listed = await client.list();
     const selectable = listed.filter((folder) => !hasFlag(folder.flags, "\\NOSELECT"));
     const roots = selectable

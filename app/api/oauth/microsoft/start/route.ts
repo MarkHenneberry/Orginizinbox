@@ -11,7 +11,7 @@ export const revalidate = 0;
 
 export async function GET() {
   try {
-    if (process.env.NODE_ENV === "production" || !runtimeConfig.microsoftOAuthDevEnabled) {
+    if (!runtimeConfig.microsoftAvailable) {
       return Response.json({ error: "Microsoft OAuth is not enabled for normal product navigation." }, { status: 404 });
     }
     requireMicrosoftOAuthConfig();

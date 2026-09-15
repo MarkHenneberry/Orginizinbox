@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { runtimeConfig } from "@/lib/config";
+import { requireProductionCleanupAccess, type CleanupAccess } from "@/lib/server/production-cleanup";
 import { getGmailCleanupRequestMode } from "@/lib/domain/gmail-cleanup-request-mode";
 import {
   assertGmailScalableTransition,
@@ -787,7 +788,7 @@ export async function startGmailScalableCleanup(input: { groupIndices: unknown; 
 }
 
 export async function getGmailScalableCleanupStatus(jobId: string) {
-  const { userId } = await requireScalableSession();
+  const { userId } = await requireScalableSession("recovery", jobId);
   const { getDurableGmailScalableCleanupStatus } = await import("@/lib/server/gmail-scalable-live-workflow");
   return getDurableGmailScalableCleanupStatus(userId, jobId);
 }
@@ -801,19 +802,19 @@ export async function getCurrentGmailScalableCleanup() {
 }
 
 export async function confirmGmailScalableCleanup(jobId: string) {
-  const { userId } = await requireScalableSession();
+  const { userId } = await requireScalableSession("forward", jobId);
   const { confirmDurableGmailScalableCleanup } = await import("@/lib/server/gmail-scalable-live-workflow");
   return confirmDurableGmailScalableCleanup(userId, jobId);
 }
 
 export async function undoGmailScalableCleanup(jobId: string) {
-  const { userId } = await requireScalableSession();
+  const { userId } = await requireScalableSession("recovery", jobId);
   const { undoDurableGmailScalableCleanup } = await import("@/lib/server/gmail-scalable-live-workflow");
   return undoDurableGmailScalableCleanup(userId, jobId);
 }
 
 export async function discardGmailScalableCleanup(jobId: string) {
-  const { userId } = await requireScalableSession();
+  const { userId } = await requireScalableSession("recovery", jobId);
   const { discardDurableGmailScalableCleanup } = await import("@/lib/server/gmail-scalable-live-workflow");
   return discardDurableGmailScalableCleanup(userId, jobId);
 }
@@ -824,7 +825,14 @@ export function parseScalableCount(value: unknown) {
   return count;
 }
 
-async function requireScalableSession() {
+async function requireScalableSession(access: CleanupAccess = "forward", jobId?: string) {
+  if (process.env.NODE_ENV === "production") {
+    const session = await getSession();
+    if (!session?.userId) throw new GmailScalableCleanupError("Connect Gmail before cleanup.", 401);
+    await requireProductionCleanupAccess({ userId: session.userId, providerConnectionId: session.providerConnectionId,
+      provider: "gmail", access, jobId });
+    return session;
+  }
   try {
     assertGmailScalableDevelopmentGate({
       enabled: runtimeConfig.gmailScalableCleanupDevEnabled,

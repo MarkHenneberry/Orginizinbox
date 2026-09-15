@@ -13,6 +13,7 @@ import {
 } from "@/lib/providers/gmail/bulk-undo-proof";
 import { createBulkUndoRecoveryPlan } from "@/lib/server/gmail-cleanup-adjustments";
 import { runOrJoinGmailCleanupOperation } from "@/lib/server/gmail-cleanup-store";
+import { cleanupPageConfig, cleanupPagePresentation } from "./fixtures/cleanup-page-presentation";
 
 const ids = Array.from({ length: 25 }, (_, index) => `id-${index}`);
 
@@ -81,13 +82,21 @@ describe("25-message Gmail bulk Undo proof gates", () => {
     expect(route).toMatch(/job\.apiCandidates\.map\(\(candidate\) => candidate\.apiMessageId\)/);
   });
 
-  it("rejects client-supplied IDs and exposes the action only behind both server flags", () => {
+  it("rejects client-supplied IDs and exposes the action only behind both server flags", async () => {
     for (const field of ["ids", "targetIds", "messageIds"]) {
       expect(() => parseGmailBulkUndoProofRequest({ jobId: "job", approved: true, [field]: ids })).toThrow(/Invalid/);
     }
-    const page = readFileSync("app/app/cleanup/page.tsx", "utf8");
     const client = readFileSync("src/components/product/GmailCleanupClient.tsx", "utf8");
-    expect(page).toMatch(/gmailBulkUndoProofEnabled[\s\S]+gmailBulkUndoHistoryShadowEnabled[\s\S]+NODE_ENV !== "production"/);
+    try {
+      for (const mode of ["development", "production"]) {
+        vi.stubEnv("NODE_ENV", mode);
+        for (const proof of [false, true]) for (const shadow of [false, true]) {
+          cleanupPageConfig.gmailBulkUndoProofEnabled = proof;
+          cleanupPageConfig.gmailBulkUndoHistoryShadowEnabled = shadow;
+          expect((await cleanupPagePresentation()).bulkUndoProofEnabled).toBe(mode === "development" && proof && shadow);
+        }
+      }
+    } finally { vi.unstubAllEnvs(); cleanupPageConfig.gmailBulkUndoProofEnabled = false; cleanupPageConfig.gmailBulkUndoHistoryShadowEnabled = false; }
     expect(client).toMatch(/job\.attemptedCount === 25[\s\S]+job\.verifiedCount === 25[\s\S]+job\.failedCount === 0[\s\S]+job\.uncertainCount === 0/);
     expect(client).toContain('body: JSON.stringify({ jobId: job.id, approved: true })');
   });

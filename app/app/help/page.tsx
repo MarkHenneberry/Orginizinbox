@@ -18,14 +18,15 @@ export default async function AppHelpPage() {
           </section>
           <section className="panel p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">What is protected</h2>
-            <p className="muted">Recent, personal, account, billing, starred, flagged, and important messages stay out of cleanup recommendations. When we&apos;re unsure, we leave a message alone.</p>
+            <p className="muted">We protect recent, starred, flagged, and important messages, plus messages showing signs of personal, account, or billing information. These checks cannot determine the value of every email. Review your selection; when we&apos;re unsure, we leave a message alone.</p>
           </section>
           <section className="panel p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">What cleanup will do</h2>
-            <p className="muted">Cleanup moves only messages you approve to Trash. Nothing is permanently deleted.</p>
+            <p className="muted">When available, cleanup moves only messages you approve to Gmail Trash or Outlook Deleted Items. Organizinbox never permanently deletes email. Your provider&apos;s retention rules still apply.</p>
           </section>
           <section className="panel p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Disconnecting Gmail</h2>
+            <p className="muted">For Gmail and Outlook, use any available Undo or Recovery Undo before disconnecting. It needs temporary restoration state, which disconnect removes. Reconnecting will not bring it back. The cleanup result shows your actual Undo deadline.</p>
             <p className="muted">
               Disconnect Gmail destroys Organizinbox&apos;s saved credentials and temporary inbox state. To remove Organizinbox from Google Account connected apps after disconnecting, manage the connection directly at Google.
             </p>

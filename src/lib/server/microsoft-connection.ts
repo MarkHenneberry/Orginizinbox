@@ -1,4 +1,5 @@
 import "server-only";
+import { runtimeConfig } from "@/lib/config";
 import { randomUUID } from "node:crypto";
 import {
   hasRequiredMicrosoftImapScope,
@@ -17,6 +18,7 @@ import { refreshProviderConnectionSingleFlight } from "@/lib/server/provider-tok
 const refreshSkewMs = 60_000;
 
 export async function getActiveMicrosoftConnection(userId: string, providerConnectionId?: string) {
+  if (process.env.NODE_ENV === "production" && !runtimeConfig.microsoftAvailable) return null;
   let connection = await prisma.providerConnection.findFirst({
     where: {
       ...(providerConnectionId ? { id: providerConnectionId } : {}),
@@ -68,6 +70,7 @@ export async function getActiveMicrosoftConnection(userId: string, providerConne
 }
 
 export async function forceRefreshMicrosoftConnection(userId: string, providerConnectionId?: string) {
+  if (process.env.NODE_ENV === "production" && !runtimeConfig.microsoftAvailable) throw new Error("Outlook is temporarily unavailable.");
   const connection = await prisma.providerConnection.findFirst({
     where: {
       ...(providerConnectionId ? { id: providerConnectionId } : {}),
@@ -110,6 +113,7 @@ export async function forceRefreshMicrosoftConnection(userId: string, providerCo
 }
 
 export async function getActiveMicrosoftImapConnection(userId: string, providerConnectionId?: string) {
+  if (process.env.NODE_ENV === "production") throw new Error("Outlook IMAP benchmark is not enabled.");
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const connection = await prisma.providerConnection.findFirst({
       where: {

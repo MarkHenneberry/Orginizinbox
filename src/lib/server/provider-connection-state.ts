@@ -8,6 +8,7 @@ import { getActiveMicrosoftConnection } from "@/lib/server/microsoft-connection"
 import { getSession } from "@/lib/server/session";
 
 export type CurrentProviderConnection =
+  | { mode: "unavailable"; userId?: string; provider?: "gmail" | "microsoft" }
   | {
       mode: "fixture";
       userId?: string;
@@ -34,6 +35,9 @@ export type CurrentProviderConnection =
     };
 
 export async function getCurrentProviderConnection(): Promise<CurrentProviderConnection> {
+  if (process.env.NODE_ENV === "production" && !runtimeConfig.gmailAvailable && !runtimeConfig.microsoftAvailable) {
+    return { mode: "unavailable" };
+  }
   const session = await getSession();
   if (!session?.userId) {
     if (runtimeConfig.fixtureMode) {
@@ -53,6 +57,10 @@ export async function getCurrentProviderConnection(): Promise<CurrentProviderCon
     }
   });
 
+  if (connection && process.env.NODE_ENV === "production" &&
+      !(connection.provider === "gmail" ? runtimeConfig.gmailAvailable : runtimeConfig.microsoftAvailable)) {
+    return { mode: "unavailable", userId: session.userId, provider: connection.provider };
+  }
   if (!connection?.encryptedAccessToken || (connection.provider === "gmail" && !connection.encryptedAccountEmail)) {
     if (runtimeConfig.fixtureMode) {
       return { mode: "fixture", userId: session.userId };

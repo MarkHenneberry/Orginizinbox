@@ -10,7 +10,7 @@ describe("product copy and contextual navigation", () => {
     expect(spec).toMatch(/## Product Copy System/);
     expect(spec).toMatch(/See what's clogging your inbox/);
     expect(spec).toMatch(/Clean thousands of unwanted emails safely/);
-    expect(spec).toMatch(/Nothing is permanently deleted/);
+    expect(spec).toMatch(/Organizinbox never permanently deletes email/);
     expect(spec).toMatch(/When we're unsure, we leave it alone/);
     expect(spec).toMatch(/Primary:[\s\S]+Secondary:[\s\S]+Tertiary:/);
   });
@@ -30,8 +30,8 @@ describe("product copy and contextual navigation", () => {
 
     expect(home).toMatch(/See what&apos;s clogging your inbox/);
     expect(home).toMatch(/finds the senders and old email taking over your inbox/);
-    expect(home).toMatch(/Nothing is permanently deleted/);
-    expect(home).toMatch(/Connect Gmail securely/);
+    expect(home).toMatch(/Organizinbox never permanently deletes email/);
+    expect(home).toMatch(/Connect an enabled provider securely/);
     expect(home).toMatch(/See what&apos;s filling your inbox/);
     expect(home).toMatch(/Check what Organizinbox recommends cleaning/);
     expect(home).toMatch(/Move unwanted email to Trash in a few clicks/);
@@ -85,9 +85,9 @@ describe("product copy and contextual navigation", () => {
     expect(cleanup).toMatch(/Move \{job\.resolvedCount\.toLocaleString\(\)\} messages to Trash/);
     expect(cleanup).toMatch(/We rechecked these messages and left protected email out/);
     expect(cleanup).toMatch(/Move \{job\.resolvedCount\.toLocaleString\(\)\} to Trash/);
-    expect(cleanup).toMatch(/Nothing will be permanently deleted/);
+    expect(cleanup).toMatch(/Organizinbox never permanently deletes email/);
     expect(cleanup).toMatch(/emails moved to Trash/);
-    expect(cleanup).toMatch(/still recoverable in Gmail Trash/);
+    expect(cleanup).toMatch(/retention rules still apply/);
     expect(cleanup).toMatch(/<summary[^>]*>Development cleanup details<\/summary>/);
     expect(cleanup).not.toMatch(/Resolve exact candidates|Trash-only test/);
   });

@@ -21,11 +21,36 @@ import {
   type OutlookCleanupProviderPort
 } from "@/lib/server/outlook-cleanup";
 import {
+  getOutlookCleanupLedgers,
   serializeOutlookCleanupJob,
   type OutlookCleanupStoredJob
 } from "@/lib/server/outlook-cleanup-store";
 
 describe("Outlook durable cleanup", () => {
+  it("retains all 155 encrypted recovery checkpoints for 500 moves and Undo", async () => {
+    const job = storedJob(500, "created");
+    const checkpoints: OutlookCleanupStoredJob[] = [];
+    const save = async () => { checkpoints.push(structuredClone(job)); };
+    const provider = fakeProvider({
+      async *scanMetadata() {
+        yield { records: Array.from({ length: 500 }, (_, index) => record(`id-${index + 1}`)) };
+      }
+    });
+    await prepareOutlookJob(job, provider, save);
+    expect(checkpoints).toHaveLength(2);
+    job.view.status = "running";
+    await executeOutlookMoves(job, provider, save);
+    expect(checkpoints).toHaveLength(79);
+    expect(job.view.movedVerified).toBe(500);
+    job.view.status = "undoing";
+    job.view.undoStatus = "running";
+    await executeOutlookUndo(job, provider, save);
+    expect(checkpoints).toHaveLength(155);
+    expect(job.view.restoredVerified).toBe(500);
+    // Each dispatched batch and its returned IDs still have their own recovery boundary.
+    expect(checkpoints.filter((snapshot) => snapshot.payload.targets.some((target) => target.state === "move_dispatched"))).toHaveLength(25);
+  });
+
   it("is development-only and caps requests at 500", () => {
     expect(outlookCleanupMaximum).toBe(500);
     expect(outlookCleanupCountOptions).toEqual([5, 10, 25, 500]);
@@ -210,7 +235,7 @@ describe("Outlook durable cleanup", () => {
       movedVerified: 1,
       uncertain: 1,
       status: "uncertain",
-      undoAvailable: false,
+      undoAvailable: true,
       undoStatus: "uncertain"
     });
   });
@@ -234,7 +259,7 @@ describe("Outlook durable cleanup", () => {
     expect(job.payload.targets[1].state).toBe("move_uncertain");
     expect(job.payload.targets[4].state).toBe("moved_verified");
     expect(job.payload.targets[5].state).toBe("frozen");
-    expect(job.view).toMatchObject({ movedVerified: 4, failed: 0, uncertain: 1, status: "uncertain", undoAvailable: false });
+    expect(job.view).toMatchObject({ movedVerified: 4, failed: 0, uncertain: 1, status: "uncertain", undoAvailable: true });
   });
 
   it("stops before the next Undo chunk after an unverified restore", async () => {
@@ -257,7 +282,7 @@ describe("Outlook durable cleanup", () => {
       restoredVerified: 4,
       uncertain: 1,
       status: "uncertain",
-      undoAvailable: false,
+      undoAvailable: true,
       undoStatus: "uncertain"
     });
   });
@@ -547,6 +572,143 @@ describe("Outlook durable cleanup", () => {
     expect(job.payload.targets.slice(5).every((target) => target.state === "frozen")).toBe(true);
   });
 
+  it("recovers only verified moves across batches while failed and uncertain targets remain excluded", async () => {
+    const job = frozenJob(16);
+    const provider = fakeProvider({
+      async moveCleanupMessages(inputs) {
+        return inputs.map(({ messageId }) => messageId === "id-13"
+          ? { outcome: "uncertain" as const }
+          : messageId === "id-14"
+            ? { outcome: "rejected" as const }
+            : { outcome: "success" as const, messageId: `moved-${messageId}` });
+      }
+    });
+    await executeOutlookMoves(job, provider, async () => undefined);
+    expect(job.view).toMatchObject({ status: "uncertain", movedVerified: 13, failed: 1, uncertain: 1, undoAvailable: true });
+    expect(getOutlookCleanupLedgers(job).verifiedMoved).toHaveLength(13);
+    expect(job.payload.targets[15].state).toBe("frozen");
+    const forward = vi.fn();
+    job.view.status = "running";
+    await executeOutlookMoves(job, fakeProvider({ moveCleanupMessages: forward }), async () => undefined);
+    expect(forward).not.toHaveBeenCalled();
+
+    const exact = getOutlookCleanupLedgers(job).verifiedMoved.map((target) => ({
+      messageId: target.movedMessageId!, destinationFolderId: target.originalFolderId!
+    }));
+    const restore = vi.fn(async (inputs: readonly { messageId: string }[]) =>
+      inputs.map(({ messageId }) => ({ outcome: "success" as const, messageId: `restored-${messageId}` })));
+    job.view.status = "undoing";
+    let result;
+    do {
+      result = await executeOutlookUndo(job, fakeProvider({ moveCleanupMessages: restore }), async () => undefined, 1);
+    } while (result.outcome === "continue");
+    expect(restore.mock.calls.flatMap(([inputs]) => inputs)).toEqual(exact);
+    expect(restore).toHaveBeenCalledTimes(3);
+    expect(job.view).toMatchObject({
+      status: "uncertain", undoStatus: "uncertain", restoredVerified: 13, movedVerified: 13,
+      failed: 1, uncertain: 1, recoverableCount: 0, undoAvailable: false, undoMode: "recovery"
+    });
+    expect(job.payload.targets[12].state).toBe("move_uncertain");
+    expect(job.payload.targets[13].state).toBe("move_failed");
+    expect(job.payload.targets[15].state).toBe("frozen");
+    const browser = serializeOutlookCleanupJob(job);
+    const summary = formatOutlookCleanupDiagnostic(browser);
+    expect(summary).toContain("Undo mode: recovery");
+    expect(summary).toContain("Verified messages available for recovery: 0");
+    expect(summary).toContain("Uncertain: 1");
+    expect(summary).toContain("Undo status: uncertain");
+    expect(JSON.stringify(browser) + summary).not.toMatch(/moved-id|original-folder|sender@example|originalMessageId|movedMessageId/);
+  });
+
+  it("resumes encrypted recovery after response persistence without repeating restore mutations", async () => {
+    const job = frozenJob(12);
+    await executeOutlookMoves(job, fakeProvider(), async () => undefined);
+    job.payload.targets[11].state = "move_uncertain";
+    job.view.uncertain = 1;
+    job.view.status = "undoing";
+    job.view.undoMode = "recovery";
+    const key = Buffer.alloc(32, 19);
+    const codec = createCleanupJobStateCodec<OutlookCleanupStoredJob>({
+      encrypt: (value) => encryptCleanupStateWithKey(value, key),
+      decrypt: (value) => decryptCleanupStateWithKey(value, key)
+    });
+    let persisted = codec.encode(job);
+    const restore = vi.fn(async (inputs: readonly { messageId: string }[]) =>
+      inputs.map(({ messageId }) => ({ outcome: "success" as const, messageId: `restored-${messageId}` })));
+    const verify = vi.fn(async (inputs: readonly { messageId: string }[]) => inputs.map(() => true));
+    const provider = fakeProvider({ moveCleanupMessages: restore, verifyCleanupMessageLocations: verify });
+    await expect(executeOutlookUndo(job, provider, async () => {
+      persisted = codec.encode(job);
+      if (job.payload.targets.some((target) => target.state === "restore_dispatched")) throw new Error("process replaced");
+    })).rejects.toThrow("process replaced");
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(verify).not.toHaveBeenCalled();
+    expect(persisted).not.toMatch(/moved-id|original-folder|sender@example/);
+    let replacement = codec.decode(persisted);
+    let result;
+    do {
+      result = await executeOutlookUndo(replacement, provider, async () => {
+        persisted = codec.encode(replacement);
+      }, 1);
+      replacement = codec.decode(persisted);
+    } while (result.outcome === "continue");
+    expect(restore.mock.calls.flatMap(([inputs]) => inputs.map((input) => input.messageId)))
+      .toEqual(Array.from({ length: 11 }, (_, index) => `moved-id-${index + 1}`));
+    expect(verify.mock.calls[0][0]).toEqual(Array.from({ length: 5 }, (_, index) => ({
+      messageId: `restored-moved-id-${index + 1}`, destinationFolderId: `original-folder-id-${index + 1}`
+    })));
+    expect(replacement.view).toMatchObject({ status: "uncertain", undoStatus: "uncertain", restoredVerified: 11, uncertain: 1 });
+    await executeOutlookUndo(replacement, provider, async () => undefined);
+    expect(restore).toHaveBeenCalledTimes(3);
+  });
+
+  it("never replays uncertain restore dispatch and allows later explicit recovery of untouched verified targets", async () => {
+    const job = frozenJob(12);
+    await executeOutlookMoves(job, fakeProvider(), async () => undefined);
+    job.payload.targets[11].state = "move_uncertain";
+    job.view.uncertain = 1;
+    job.view.status = "undoing";
+    const restore = vi.fn();
+    await expect(executeOutlookUndo(job, fakeProvider({ moveCleanupMessages: restore }), async () => {
+      if (job.payload.targets.some((target) => target.state === "restore_dispatching")) throw new Error("process replaced");
+    })).rejects.toThrow("process replaced");
+    const replacement = structuredClone(job);
+    await executeOutlookUndo(replacement, fakeProvider({ moveCleanupMessages: restore }), async () => undefined);
+    expect(restore).not.toHaveBeenCalled();
+    expect(replacement.view).toMatchObject({ status: "uncertain", uncertain: 6, recoverableCount: 6, undoAvailable: true });
+    // An explicit subsequent Recovery Undo never includes the ambiguous first batch.
+    replacement.view.status = "undoing";
+    const exactRestore = vi.fn(async (inputs: readonly { messageId: string }[]) =>
+      inputs.map(({ messageId }) => ({ outcome: "success" as const, messageId: `restored-${messageId}` })));
+    await executeOutlookUndo(replacement, fakeProvider({ moveCleanupMessages: exactRestore }), async () => undefined);
+    expect(exactRestore.mock.calls.flatMap(([inputs]) => inputs.map((input) => input.messageId)))
+      .toEqual(Array.from({ length: 6 }, (_, index) => `moved-id-${index + 6}`));
+    expect(replacement.view).toMatchObject({ status: "uncertain", undoStatus: "uncertain", uncertain: 6, restoredVerified: 6, undoAvailable: false });
+    expect(replacement.payload.targets.slice(0, 5).every((target) => target.state === "restore_uncertain")).toBe(true);
+  });
+
+  it.each([false, true])("reports partial restore rejection truthfully with prior uncertainty=%s", async (priorUncertainty) => {
+    const job = frozenJob(8);
+    await executeOutlookMoves(job, fakeProvider(), async () => undefined);
+    if (priorUncertainty) {
+      job.payload.targets[7].state = "move_uncertain";
+      job.view.uncertain = 1;
+    }
+    job.view.status = "undoing";
+    const restore = vi.fn(async (inputs: readonly { messageId: string }[]) =>
+      inputs.map(({ messageId }) => messageId === "moved-id-2"
+        ? { outcome: "rejected" as const }
+        : { outcome: "success" as const, messageId: `restored-${messageId}` }));
+    await executeOutlookUndo(job, fakeProvider({ moveCleanupMessages: restore }), async () => undefined);
+    expect(job.view).toMatchObject({
+      status: priorUncertainty ? "uncertain" : "partial", undoStatus: priorUncertainty ? "uncertain" : "partial",
+      restoredVerified: priorUncertainty ? 6 : 7, failed: 1, uncertain: priorUncertainty ? 1 : 0, undoAvailable: false
+    });
+    expect(getOutlookCleanupLedgers(job).failed.map((target) => target.originalMessageId)).toEqual(["id-2"]);
+    await executeOutlookUndo(job, fakeProvider({ moveCleanupMessages: restore }), async () => undefined);
+    expect(restore).toHaveBeenCalledTimes(2);
+  });
+
   it("encrypts provider IDs, original folders, and sender identity in transient state", () => {
     const key = Buffer.alloc(32, 11);
     const codec = createCleanupJobStateCodec<OutlookCleanupStoredJob>({
@@ -641,8 +803,8 @@ describe("Outlook durable cleanup", () => {
     expect(provider).toContain("/move`");
     expect(provider).not.toMatch(/permanentDelete|\/delete`/);
     expect(route).not.toMatch(/messageId|folderId|parentFolderId|senderAddress/);
-    expect(client).toContain("/api/dev/outlook-cleanup/start");
-    expect(client).toContain("/api/dev/outlook-cleanup/undo");
+    expect(client).toContain('cleanupEndpoint(provider, outlook || scalable ? "start" : "resolve", developmentMode, scalable)');
+    expect(client).toContain('cleanupEndpoint(provider, "undo", developmentMode, Boolean(scalableJob))');
     expect(client).toContain("Copy Outlook cleanup summary");
   });
 
@@ -674,10 +836,13 @@ describe("Outlook durable cleanup", () => {
     expect(outlookWorkspace).toContain("Move up to {job.requested.toLocaleString()} to Deleted Items");
     expect(outlookWorkspace).toContain("Move up to {job.requested.toLocaleString()} messages to Deleted Items?");
     expect(outlookWorkspace).toContain("We will recheck these messages and leave protected email out.");
-    expect(outlookWorkspace).toContain("Nothing will be permanently deleted.");
-    expect(outlookWorkspace).toContain("They&apos;re still recoverable in Outlook Deleted Items.");
-    expect(outlookWorkspace).toContain(">Undo</button>");
-    expect(outlookWorkspace).toContain("Outlook cleanup batch progress");
+    expect(outlookWorkspace).toContain("Organizinbox never permanently deletes email.");
+    expect(outlookWorkspace).not.toContain("They&apos;re still recoverable in Outlook Deleted Items.");
+    expect(outlookWorkspace).toContain('recovery={job.undoMode === "recovery"}');
+    expect(outlookWorkspace).toContain('expiresAt={job.expiresAt}');
+    expect(outlookWorkspace).toContain("Available for recovery");
+    expect(outlookWorkspace).toContain("Some messages remain unresolved and are excluded from Recovery Undo.");
+    expect(outlookWorkspace).toContain("Outlook cleanup progress");
     expect(outlookWorkspace).toContain("Messages checked");
     expect(outlookWorkspace).toContain("Current chunk");
     expect(outlookWorkspace).toContain("Current batch");

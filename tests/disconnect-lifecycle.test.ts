@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   revokeGoogleToken: vi.fn(),
   update: vi.fn(),
-  updateManyCleanupJobs: vi.fn()
+  updateManyCleanupJobs: vi.fn(),
+  cancelScans: vi.fn()
 }));
 
 vi.mock("server-only", () => ({}));
@@ -20,7 +21,8 @@ vi.mock("@/lib/server/crypto", () => ({ decryptSecret: mocks.decryptSecret }));
 vi.mock("@/lib/server/db", () => ({
   prisma: {
     providerConnection: { findFirst: mocks.findFirst, update: mocks.update },
-    cleanupJob: { updateMany: mocks.updateManyCleanupJobs }
+    cleanupJob: { updateMany: mocks.updateManyCleanupJobs },
+    scan: { updateMany: mocks.cancelScans }
   }
 }));
 vi.mock("@/lib/server/gmail-cleanup-store", () => ({ clearGmailCleanupJobsForUser: mocks.clearGmailCleanupJobsForUser }));
@@ -75,6 +77,7 @@ describe("Gmail disconnect lifecycle", () => {
     });
     mocks.update.mockResolvedValue({});
     mocks.updateManyCleanupJobs.mockResolvedValue({ count: 0 });
+    mocks.cancelScans.mockResolvedValue({ count: 1 });
     mocks.clearDurableProviderCleanupStateForUser.mockResolvedValue(0);
     mocks.revokeGoogleToken.mockResolvedValue({ succeeded: true, status: 200 });
   });
@@ -96,6 +99,12 @@ describe("Gmail disconnect lifecycle", () => {
     expect(mocks.decryptSecret).not.toHaveBeenCalled();
     expect(mocks.revokeGoogleToken).not.toHaveBeenCalled();
     expect(mocks.update).toHaveBeenCalledWith({ where: { id: "connection-1" }, data: clearedConnectionData });
+    expect(mocks.cancelScans).toHaveBeenCalledWith({
+      where: { userId: "user-1", providerConnectionId: "connection-1", status: "running" },
+      data: { status: "cancelled", completedAt: expect.any(Date) }
+    });
+    expect(mocks.update.mock.invocationCallOrder[0]).toBeLessThan(mocks.cancelScans.mock.invocationCallOrder[0]);
+    expect(mocks.cancelScans.mock.invocationCallOrder[0]).toBeLessThan(mocks.clearLiveScan.mock.invocationCallOrder[0]);
     expect(mocks.clearOAuthStateCookie).toHaveBeenCalledOnce();
     expect(mocks.clearLiveScan).toHaveBeenCalledWith("user-1", "gmail");
     expect(mocks.clearGmailCleanupJobsForUser).toHaveBeenCalledWith("user-1");

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/config", () => ({
   runtimeConfig: {
+    microsoftAvailable: true,
     microsoftOAuthDevEnabled: true,
     outlookImapBenchmarkDevEnabled: true
   }

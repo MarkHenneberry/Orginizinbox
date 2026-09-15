@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { cleanupPagePresentation } from "./fixtures/cleanup-page-presentation";
 import {
   formatDevelopmentCleanupSummary,
   type GmailCleanupJobView
@@ -436,11 +437,15 @@ describe("development cleanup summary", () => {
     }
   });
 
-  it("gates the copyable summary with the server-provided development mode", () => {
-    const page = readFileSync("app/app/cleanup/page.tsx", "utf8");
+  it("gates the copyable summary with the server-provided development mode", async () => {
     const client = readFileSync("src/components/product/GmailCleanupClient.tsx", "utf8");
 
-    expect(page).toMatch(/developmentMode=\{process\.env\.NODE_ENV !== "production"\}/);
+    try {
+      for (const mode of ["development", "production"]) {
+        vi.stubEnv("NODE_ENV", mode);
+        expect((await cleanupPagePresentation()).developmentMode).toBe(mode === "development");
+      }
+    } finally { vi.unstubAllEnvs(); }
     expect(client).toMatch(/developmentMode \? <DevelopmentCleanupDetails job=\{job\} \/> : null/);
     expect(client).toContain("Copy cleanup summary");
     expect(client).toContain("Copied");

@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { runtimeConfig } from "@/lib/config";
+import { ProviderUnavailable } from "@/components/product/ProviderUnavailable";
 import { Footer } from "@/components/marketing/Footer";
 import { Header } from "@/components/marketing/Header";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
@@ -50,13 +52,13 @@ export default async function GoogleOAuthErrorPage({ searchParams }: { searchPar
               Development error: <code>{developmentErrorCode}</code>
             </p>
           ) : null}
-          <div className="mt-8 flex flex-wrap gap-3">
+          {!runtimeConfig.gmailAvailable ? <ProviderUnavailable provider="gmail" /> : <div className="mt-8 flex flex-wrap gap-3">
             <form action="/api/oauth/google/start" method="get">
               <button className="btn btn-primary focus-ring" type="submit">
                 Try connecting Gmail again
               </button>
             </form>
-          </div>
+          </div>}
         </div>
       </main>
       <Footer />

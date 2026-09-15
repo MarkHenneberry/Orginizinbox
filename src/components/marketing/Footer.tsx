@@ -45,7 +45,7 @@ export function Footer() {
             {siteConfig.name}
           </Link>
           <p className="muted mt-2 max-w-2xl">
-            See what&apos;s clogging your inbox, then move unwanted email to Trash. Nothing is permanently deleted.
+            See what&apos;s clogging your inbox. Clean thousands of unwanted emails safely. Organizinbox never permanently deletes email.
           </p>
         </div>
         <nav className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4" aria-label="Footer navigation">

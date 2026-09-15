@@ -580,7 +580,7 @@ describe("scalable route and UI boundaries", () => {
     const client = fs.readFileSync(path.join(root, "src/components/product/GmailCleanupClient.tsx"), "utf8");
     const schema = fs.readFileSync(path.join(root, "prisma/schema.prisma"), "utf8");
     expect(statusRoute).not.toMatch(/batchModify|history\.list|ImapFlow|moveToTrash|removeTrashLabel/);
-    expect(client).toMatch(/gmail-scalable-cleanup\/status/);
+    expect(client).toContain('cleanupEndpoint("gmail", "status", developmentMode)');
     expect(client).toContain("shouldPollGmailScalableJob(scalableJob)");
     expect(client).toContain('status === "chunk_complete"');
     expect(client).toContain("messages moved so far");
@@ -599,7 +599,7 @@ describe("scalable route and UI boundaries", () => {
     expect(client).toMatch(/Messages checked[\s\S]+Left alone after the final safety check/);
     expect(client).toMatch(/Messages checked[\s\S]+Currently approved[\s\S]+Currently left alone/);
     expect(client).toMatch(/Move up to \{job\.safeCount\.toLocaleString\(\)\} to Trash/);
-    expect(client).toMatch(/Undo \{job\.verifiedCount\.toLocaleString\(\)\} messages/);
+    expect(client).toContain('<UndoAction available={job.undoAvailable} expiresAt={job.expiresAt} busy={busy} onUndo={onUndo} />');
     expect(client).not.toMatch(/verifiedProcessedCount\.toLocaleString\(\)[\s\S]{0,80}requestedCount\.toLocaleString\(\)/);
     expect(`${runner}\n${undoRoute}`).not.toMatch(/gmailBulkUndoProofEnabled|gmailBulkUndoHistoryShadowEnabled/);
   });

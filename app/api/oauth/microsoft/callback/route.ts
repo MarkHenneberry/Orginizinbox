@@ -30,7 +30,7 @@ type MicrosoftCallbackReason =
   | "session_failed";
 
 export async function GET(request: NextRequest) {
-  if (process.env.NODE_ENV === "production" || !runtimeConfig.microsoftOAuthDevEnabled) {
+  if (!runtimeConfig.microsoftAvailable) {
     return Response.json({ error: "Microsoft OAuth is not enabled." }, { status: 404 });
   }
   let stateResult: Awaited<ReturnType<typeof consumeOAuthState>>;
@@ -40,6 +40,9 @@ export async function GET(request: NextRequest) {
     return errorRedirect(request, "state_invalid");
   }
   if (!stateResult.ok || !stateResult.codeVerifier || !stateResult.nonce) return errorRedirect(request, "state_invalid");
+  if (stateResult.microsoftFlow === "imap" && !runtimeConfig.outlookImapBenchmarkDevEnabled) {
+    return Response.json({ error: "Outlook IMAP benchmark is not enabled." }, { status: 404 });
+  }
   if (request.nextUrl.searchParams.get("error")) return errorRedirect(request, "oauth_denied");
   const code = request.nextUrl.searchParams.get("code");
   if (!code) return errorRedirect(request, "missing_code");

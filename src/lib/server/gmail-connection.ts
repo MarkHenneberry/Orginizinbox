@@ -1,4 +1,5 @@
 import "server-only";
+import { runtimeConfig } from "@/lib/config";
 import { decryptSecret } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
 import { gmailMissingImapScopeMessage, hasRequiredGmailImapScope, refreshGoogleAccessToken } from "@/lib/server/google-oauth";
@@ -7,6 +8,7 @@ import { refreshProviderConnectionSingleFlight } from "@/lib/server/provider-tok
 const refreshSkewMs = 60 * 1000;
 
 export async function getActiveGmailConnection(userId: string, providerConnectionId?: string) {
+  if (process.env.NODE_ENV === "production" && !runtimeConfig.gmailAvailable) return null;
   let connection = await prisma.providerConnection.findFirst({
     where: {
       id: providerConnectionId,

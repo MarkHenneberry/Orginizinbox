@@ -304,7 +304,7 @@ const pollingJobStatuses = new Set<GmailScalableJobStatus>([
   "undoing"
 ]);
 
-export function getGmailScalableJobProgress(job: GmailScalableJobView) {
+export function getGmailScalableJobProgress(job: Pick<GmailScalableJobView, "status" | "chunksComplete"> & { chunks: Pick<GmailScalableChunkView, "index" | "status">[] }) {
   const chunksComplete = job.chunksComplete ?? job.chunks.filter((chunk) => ["complete", "undo_complete"].includes(chunk.status)).length;
   const next = job.chunks.find((chunk) =>
     ["pending", "safety_checking", "ready", "mutating", "verifying", "undoing"].includes(chunk.status)
@@ -318,7 +318,7 @@ export function getGmailScalableJobProgress(job: GmailScalableJobView) {
   };
 }
 
-export function shouldPollGmailScalableJob(job: GmailScalableJobView) {
+export function shouldPollGmailScalableJob(job: Parameters<typeof getGmailScalableJobProgress>[0]) {
   return getGmailScalableJobProgress(job).workflowContinuationExpected;
 }
 

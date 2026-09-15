@@ -1,10 +1,12 @@
 import "server-only";
+import { stoppedProviderWork } from "@/lib/server/provider-work-fence";
 import { scanStateTtlMs } from "@/lib/domain/transient-retention";
 import { Prisma, type EmailProviderName, type PrismaClient, type ScanState } from "@prisma/client";
 import type { InboxReport } from "@/lib/domain/types";
 import type { GmailScalableCleanupTarget } from "@/lib/providers/gmail/scalable-targets";
 import { decryptCleanupState, encryptCleanupState } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
+import { retrySerializableTransaction } from "@/lib/server/retry-serializable-transaction";
 
 export type BenchmarkLimit = 5000 | 10000 | 25000 | 50000 | 100000 | "full";
 export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
@@ -32,6 +34,9 @@ export type BenchmarkProgress = {
   messagesPerMinute?: number;
   approxMemoryMb?: number;
   peakParticipatedConversationCount?: number;
+  gmailPendingIdentityCount?: number;
+  gmailPeakPendingIdentityCount?: number;
+  gmailRetainedEligibleIdentityCount?: number;
   graphPages?: number;
   graphRequests?: number;
   graphScanMode?: "full" | "delta";
@@ -191,6 +196,8 @@ export class DurableLiveScanStore {
       const row = await this.repository.find(userId, provider);
       if (!row || row.scanId !== session.progress.scanId) return undefined;
       if (row.lockOwner && row.lockOwner !== lockOwner) return undefined;
+      if (lockOwner && (row.status !== "running" || row.lockOwner !== lockOwner ||
+          row.expiresAt <= new Date() || !row.lockExpiresAt || row.lockExpiresAt <= new Date())) return undefined;
       const stored = normalizeSession(session);
       const replaced = await this.repository.replace({
         userId,
@@ -309,14 +316,19 @@ export class PrismaScanStateRepository implements ScanStateRepository {
     expiresAt: Date;
     lockOwner?: string;
   }) {
-    return this.client.$transaction(async (transaction) => {
+    return retrySerializableTransaction(() => this.client.$transaction(async (transaction) => {
       const result = await transaction.scanState.updateMany({
         where: {
           userId: input.userId,
           provider: input.provider,
           scanId: input.scanId,
           version: input.expectedVersion,
-          ...(input.lockOwner ? { lockOwner: input.lockOwner } : {})
+          ...(input.lockOwner ? {
+            lockOwner: input.lockOwner, status: "running",
+            expiresAt: { gt: new Date() }, lockExpiresAt: { gt: new Date() },
+            scan: { status: "running" },
+            providerConnection: { disconnectedAt: null, encryptedAccessToken: { not: null } }
+          } : {})
         },
         data: {
           encryptedPayload: input.encryptedPayload,
@@ -335,7 +347,7 @@ export class PrismaScanStateRepository implements ScanStateRepository {
         }
       });
       return true;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   }
 
   async claim(input: { scanId: string; owner: string; now: Date; lockExpiresAt: Date }) {
@@ -406,6 +418,8 @@ export class MemoryScanStateRepository implements ScanStateRepository {
     const row = this.rows.get(key);
     if (!row || row.scanId !== input.scanId || row.version !== input.expectedVersion) return false;
     if (input.lockOwner && row.lockOwner !== input.lockOwner) return false;
+    if (input.lockOwner && (row.status !== "running" || row.expiresAt <= new Date() ||
+        !row.lockExpiresAt || row.lockExpiresAt <= new Date())) return false;
     this.rows.set(key, {
       ...row,
       encryptedPayload: input.encryptedPayload,
@@ -455,13 +469,15 @@ const defaultStore = new DurableLiveScanStore();
 export function acceptLiveScan(input: { userId: string; providerConnectionId: string; session: LiveScanSession }) {
   return defaultStore.accept(input);
 }
-export function setLiveScan(
+export async function setLiveScan(
   userId: string,
   session: LiveScanSession,
   provider?: LiveScanProvider,
   lockOwner?: string
 ) {
-  return defaultStore.set(userId, session, provider, lockOwner);
+  const saved = await defaultStore.set(userId, session, provider, lockOwner);
+  if (lockOwner && !saved) throw stoppedProviderWork();
+  return saved;
 }
 export function getLiveScan(userId: string, provider?: LiveScanProvider) {
   return defaultStore.get(userId, provider);
@@ -658,4 +674,16 @@ export function serializeBenchmark(progress: BenchmarkProgress) {
   };
 }
 
-export const serializeScanProgress = serializeBenchmark;
+export function serializeScanProgress(progress: BenchmarkProgress) {
+  if (process.env.NODE_ENV !== "production") return serializeBenchmark(progress);
+  return {
+    scanId: progress.scanId,
+    provider: progress.provider,
+    status: progress.status,
+    processed: progress.processed,
+    mailboxExists: progress.mailboxExists,
+    startedAt: progress.startedAt,
+    completedAt: progress.completedAt,
+    errors: progress.errors.length ? ["The scan could not be completed. Try again later."] : []
+  };
+}

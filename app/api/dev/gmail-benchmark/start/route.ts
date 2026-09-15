@@ -11,6 +11,7 @@ const startSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   try {
     assertDevBenchmarkEnabled(runtimeConfig.gmailBenchmarkEnabled);
     const session = await getSession();

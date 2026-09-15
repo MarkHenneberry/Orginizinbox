@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { DisconnectUndoWarning } from "@/components/product/DisconnectUndoWarning";
 
 export function DisconnectMicrosoftConfirmation() {
   const [confirming, setConfirming] = useState(false);
@@ -20,6 +21,7 @@ export function DisconnectMicrosoftConfirmation() {
       </h3>
       <p className="muted mt-2 text-sm">This removes Organizinbox&apos;s saved Microsoft access from this connection.</p>
       <p className="muted mt-2 text-sm">You can reconnect anytime.</p>
+      <DisconnectUndoWarning />
       <div className="mt-4 flex flex-wrap gap-3">
         <button className="btn btn-secondary focus-ring" onClick={() => setConfirming(false)} type="button">
           Cancel

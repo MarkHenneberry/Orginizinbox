@@ -4,7 +4,6 @@ import { DisconnectMicrosoftConfirmation } from "@/components/product/Disconnect
 import { ProviderConnectShell } from "@/components/product/ProviderConnectShell";
 import { runtimeConfig } from "@/lib/config";
 import { isOutlookCleanupDevelopmentEnabled } from "@/lib/domain/outlook-cleanup";
-import { isMicrosoftOAuthDevelopmentUiEnabled } from "@/lib/providers/microsoft/development-access";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 
 const errorCopy = {
@@ -24,10 +23,7 @@ export default async function MicrosoftConnectPage({
 }: {
   searchParams: Promise<{ reason?: string }>;
 }) {
-  const showDevOAuth = isMicrosoftOAuthDevelopmentUiEnabled(
-    process.env.NODE_ENV,
-    runtimeConfig.microsoftOAuthDevEnabled
-  );
+  const showDevOAuth = runtimeConfig.microsoftAvailable;
   const connection = await getCurrentProviderConnection();
   const outlookCleanupEnabled = isOutlookCleanupDevelopmentEnabled({
     microsoftOAuthEnabled: runtimeConfig.microsoftOAuthDevEnabled,
@@ -40,7 +36,7 @@ export default async function MicrosoftConnectPage({
 
   return (
     <ProviderConnectShell
-      description={showDevOAuth
+      description={!runtimeConfig.development && showDevOAuth ? "Connect Outlook for a read-only Inbox Report. Cleanup is not available." : showDevOAuth
         ? outlookCleanupEnabled
           ? "Microsoft connection, read-only Outlook scanning, and cleanup of up to 500 reviewed messages are available for development testing."
           : "Microsoft connection and read-only Outlook scanning are available for development testing. Outlook cleanup is not enabled yet."
@@ -64,7 +60,7 @@ export default async function MicrosoftConnectPage({
           </>
         ) : (
           <>
-            <p className="eyebrow">Development connection</p>
+            <p className="eyebrow">{runtimeConfig.development ? "Development connection" : "Microsoft connection"}</p>
             <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">Continue securely with Microsoft</h2>
             <p className="muted mt-3">This connects your account only. It does not read messages or change your mailbox.</p>
             {error ? (
@@ -83,10 +79,10 @@ export default async function MicrosoftConnectPage({
         <>
           <p className="eyebrow">Coming soon</p>
           <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">Outlook connection is not available yet</h2>
-          <p className="muted mt-3">Learn how Outlook cleanup will work, or use Organizinbox with Gmail today.</p>
+          <p className="muted mt-3">Outlook connection and scanning are currently unavailable.</p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Link className="btn btn-primary focus-ring" href="/outlook-cleaner">Outlook cleanup</Link>
-            <Link className="btn btn-secondary focus-ring" href="/gmail-cleaner">Clean Gmail instead</Link>
+            <Link className="btn btn-secondary focus-ring" href="/connect">View provider availability</Link>
           </div>
         </>
       )}

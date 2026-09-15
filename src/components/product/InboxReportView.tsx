@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
+import { useCleanupAvailability } from "@/components/product/useCleanupAvailability";
+import type { CleanupUiAccess } from "@/lib/domain/cleanup-ui";
 import { Fragment, useMemo, useReducer, useRef } from "react";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import {
@@ -59,7 +62,9 @@ export function InboxReportView({
   backHref,
   scanPerformance,
   outlookScanDiagnostic,
-  outlookCleanupEnabled
+  outlookCleanupEnabled,
+  productionCleanupAccess = "unavailable",
+  existingCleanup = false
 }: {
   report: InboxReport;
   reportStale: boolean;
@@ -70,8 +75,13 @@ export function InboxReportView({
   scanPerformance?: ClassifierScanPerformance;
   outlookScanDiagnostic?: OutlookScanDiagnostic;
   outlookCleanupEnabled?: boolean;
+  productionCleanupAccess?: CleanupUiAccess;
+  existingCleanup?: boolean;
 }) {
-  const cleanupAvailable = source !== "microsoft-live" || outlookCleanupEnabled === true;
+  const production = process.env.NODE_ENV === "production";
+  const availability = useCleanupAvailability(productionCleanupAccess, production, source === "microsoft-live" ? "microsoft" : "gmail", existingCleanup);
+  const cleanupAvailable = production ? availability.access === "available" && !reportStale
+    : (source !== "microsoft-live" || outlookCleanupEnabled === true);
   const sizeAvailable = source !== "microsoft-live";
   return (
     <main className="py-8">
@@ -88,7 +98,7 @@ export function InboxReportView({
             </p>
           </div>
           {!cleanupAvailable ? (
-            <span className="muted text-sm font-bold">Outlook cleanup is not available yet</span>
+            production ? <CleanupAccessNotice access={availability.access} /> : <span className="muted text-sm font-bold">Cleanup is not available yet</span>
           ) : report.totals.cleanupCandidates > 0 ? (
             <Link href="/app/cleanup" className="btn btn-primary focus-ring">
               Review cleanup
@@ -97,6 +107,8 @@ export function InboxReportView({
             <span className="muted text-sm font-bold">Nothing recommended for cleanup</span>
           )}
         </div>
+
+        {production && availability.hasJob ? <Link className="btn btn-secondary focus-ring mb-6" href="/app/cleanup">View cleanup and Undo</Link> : null}
 
         {recentCleanupAction ? (
           <PostUndoReportNotice action={recentCleanupAction} />
@@ -110,11 +122,11 @@ export function InboxReportView({
           </section>
         ) : null}
 
-        <DevelopmentMailboxClassifierSummary
+        {!production ? <DevelopmentMailboxClassifierSummary
           outlookDiagnostic={outlookScanDiagnostic}
           performance={scanPerformance}
           report={report}
-        />
+        /> : null}
 
         <nav className="mb-6 flex flex-wrap gap-2" aria-label="Inbox report views">
           {viewLinks.map((item) => (
@@ -560,7 +572,7 @@ function SenderDetail({
       </div>
       {!cleanupAvailable ? (
         <div className="mt-6 rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-center">
-          <p className="m-0 font-extrabold text-[var(--navy)]">Outlook cleanup is not available yet</p>
+          <p className="m-0 font-extrabold text-[var(--navy)]">Cleanup is not available yet</p>
           <p className="muted m-0 mt-1 text-sm">This Inbox Report is read-only.</p>
         </div>
       ) : canCleanSender(sender) ? (

@@ -1,14 +1,53 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { NextRequest } from "next/server";
+import { describe, expect, it, vi } from "vitest";
+
+const oauthBoundary = vi.hoisted(() => ({
+  runtime: { microsoftAvailable: false },
+  configuration: vi.fn(), state: vi.fn(async () => "test-state"),
+  consume: vi.fn(async () => ({ ok: false })),
+  authorizationUrl: vi.fn(() => "https://example.test/authorize")
+}));
+vi.mock("@/lib/config", () => ({ runtimeConfig: oauthBoundary.runtime,
+  requireMicrosoftOAuthConfig: oauthBoundary.configuration, ConfigurationError: class extends Error {} }));
+vi.mock("@/lib/server/session", () => ({ createOAuthState: oauthBoundary.state, consumeOAuthState: oauthBoundary.consume,
+  getSession: vi.fn(), setSessionCookie: vi.fn() }));
+vi.mock("@/lib/server/microsoft-oauth", () => ({
+  buildMicrosoftAuthorizationUrl: oauthBoundary.authorizationUrl,
+  createMicrosoftOAuthAttemptSecrets: () => ({ codeVerifier: "verifier", codeChallenge: "challenge", nonce: "nonce" }),
+  exchangeMicrosoftCode: vi.fn(), saveMicrosoftImapCredentials: vi.fn(), upsertMicrosoftConnection: vi.fn(),
+  verifyMicrosoftImapTokenResponse: vi.fn(), verifyMicrosoftTokenResponse: vi.fn(),
+  MicrosoftImapScopeNotGrantedError: class extends Error {}, MicrosoftIdentityValidationError: class extends Error {},
+  MicrosoftRefreshTokenMissingError: class extends Error {}, MicrosoftScopeNotGrantedError: class extends Error {},
+  MicrosoftTokenResponseError: class extends Error {}
+}));
 
 describe("Microsoft OAuth product boundaries", () => {
-  it("keeps OAuth development-gated and uses full browser navigation without prefetch", () => {
-    const start = readFileSync("app/api/oauth/microsoft/start/route.ts", "utf8");
-    const callback = readFileSync("app/api/oauth/microsoft/callback/route.ts", "utf8");
+  it("uses resolved provider availability and full browser navigation without prefetch", async () => {
+    const { GET: start } = await import("../app/api/oauth/microsoft/start/route");
+    const { GET: callback } = await import("../app/api/oauth/microsoft/callback/route");
     const connect = readFileSync("app/connect/microsoft/page.tsx", "utf8");
-    expect(start).toMatch(/NODE_ENV === "production"[\s\S]+microsoftOAuthDevEnabled/);
-    expect(callback).toMatch(/NODE_ENV === "production"[\s\S]+microsoftOAuthDevEnabled/);
-    expect(start).toMatch(/createOAuthState\("\/app\/account"[\s\S]+provider: "microsoft"[\s\S]+codeVerifier[\s\S]+nonce/);
+    const request = new NextRequest("https://example.test/api/oauth/microsoft/callback");
+    try {
+      for (const mode of ["development", "production"]) {
+        vi.stubEnv("NODE_ENV", mode);
+        vi.clearAllMocks();
+        oauthBoundary.runtime.microsoftAvailable = false;
+        expect((await start()).status).toBe(404);
+        expect((await callback(request)).status).toBe(404);
+        expect(oauthBoundary.state).not.toHaveBeenCalled();
+        expect(oauthBoundary.consume).not.toHaveBeenCalled();
+        oauthBoundary.runtime.microsoftAvailable = true;
+        expect((await start()).headers.get("location")).toBe("https://example.test/authorize");
+        expect(oauthBoundary.configuration).toHaveBeenCalledOnce();
+        expect(oauthBoundary.state).toHaveBeenCalledWith("/app/account", {
+          provider: "microsoft", codeVerifier: "verifier", nonce: "nonce", microsoftFlow: "graph"
+        });
+        expect(oauthBoundary.authorizationUrl).toHaveBeenCalledWith({ state: "test-state", codeChallenge: "challenge", nonce: "nonce", flow: "graph" });
+        expect((await callback(request)).headers.get("location")).toContain("reason=state_invalid");
+        expect(oauthBoundary.consume).toHaveBeenCalledWith(null, "microsoft");
+      }
+    } finally { vi.unstubAllEnvs(); oauthBoundary.runtime.microsoftAvailable = false; }
     expect(connect).toMatch(/<form action="\/api\/oauth\/microsoft\/start"[\s\S]+method="get">/);
     expect(connect).not.toMatch(/<Link[^>]+href="\/api\/oauth\/microsoft\/start"/);
   });

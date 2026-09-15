@@ -2,6 +2,7 @@ import { getGmailScalableCleanupStatus } from "@/lib/server/gmail-scalable-clean
 import { scalableCleanupResponse } from "@/lib/server/gmail-scalable-cleanup-route";
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   try {
     const body = (await request.json()) as { jobId?: unknown };
     if (typeof body.jobId !== "string" || !body.jobId) throw new Error("Scalable cleanup job id is required.");

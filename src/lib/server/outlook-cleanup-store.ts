@@ -53,6 +53,7 @@ export type OutlookCleanupStoredJob = {
     activeMoveBatchIndexes?: number[];
     activeUndoBatchIndexes?: number[];
     confirmedAt?: number;
+    forwardCleanupStopped?: boolean;
   };
 };
 
@@ -60,6 +61,29 @@ export type OutlookCleanupStore = DurableCleanupStore<OutlookCleanupStoredJob>;
 
 export function createPrismaOutlookCleanupStore(): OutlookCleanupStore {
   return new PrismaCleanupJobStore<OutlookCleanupStoredJob>();
+}
+
+export function getOutlookCleanupLedgers(job: OutlookCleanupStoredJob) {
+  return {
+    verifiedMoved: job.payload.targets.filter((target) =>
+      target.state === "moved_verified" && Boolean(target.movedMessageId) && Boolean(target.originalFolderId)),
+    failed: job.payload.targets.filter((target) => target.state === "move_failed" || target.state === "restore_failed"),
+    uncertain: job.payload.targets.filter((target) => target.state.endsWith("_uncertain"))
+  };
+}
+
+export function refreshOutlookRecovery(job: OutlookCleanupStoredJob) {
+  const ledgers = getOutlookCleanupLedgers(job);
+  job.view.uncertain = ledgers.uncertain.length;
+  job.view.failed = ledgers.failed.length;
+  job.view.movedVerified = job.payload.targets.filter((target) =>
+    target.state === "moved_verified" || target.state.startsWith("restore")
+  ).length;
+  job.view.restoredVerified = job.payload.targets.filter((target) => target.state === "restored_verified").length;
+  job.view.recoverableCount = ledgers.verifiedMoved.length;
+  if (job.view.uncertain > 0 || job.view.status === "partial" || job.view.status === "failed") job.view.undoMode = "recovery";
+  job.view.undoAvailable = ledgers.verifiedMoved.length > 0 &&
+    ["complete", "partial", "uncertain", "failed"].includes(job.view.status) && job.view.expiresAt > Date.now();
 }
 
 export function serializeOutlookCleanupJob(job: OutlookCleanupStoredJob | OutlookCleanupJobView) {
@@ -73,6 +97,12 @@ export function serializeOutlookCleanupJob(job: OutlookCleanupStoredJob | Outloo
   );
   return structuredClone({
     ...view,
+    ...("payload" in job ? {
+      recoverableCount: getOutlookCleanupLedgers(job).verifiedMoved.length,
+      undoAvailable: ["complete", "partial", "uncertain", "failed"].includes(view.status) &&
+        view.expiresAt > Date.now() && getOutlookCleanupLedgers(job).verifiedMoved.length > 0,
+      undoMode: view.undoMode ?? (view.uncertain > 0 || view.status === "partial" || view.status === "failed" ? "recovery" : "full")
+    } : {}),
     checked: view.checked ?? view.approved + view.excludedBySafety,
     chunksCompleted: view.chunksCompleted ?? 0,
     totalChunks: view.totalChunks ?? Math.ceil(view.requested / outlookCleanupChunkSize),

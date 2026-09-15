@@ -2,6 +2,7 @@ import { getOutlookCleanupStatus } from "@/lib/server/outlook-cleanup";
 import { outlookCleanupResponse } from "@/lib/server/outlook-cleanup-route";
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   try {
     const body = await request.json() as { jobId?: unknown };
     if (typeof body.jobId !== "string" || !body.jobId) throw new Error("Cleanup job ID is required.");

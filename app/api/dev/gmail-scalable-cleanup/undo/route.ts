@@ -2,6 +2,7 @@ import { undoGmailScalableCleanup } from "@/lib/server/gmail-scalable-cleanup-ru
 import { scalableCleanupResponse } from "@/lib/server/gmail-scalable-cleanup-route";
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   try {
     const body = (await request.json()) as { jobId?: unknown; confirmation?: unknown };
     if (typeof body.jobId !== "string" || body.confirmation !== "RESTORE_FROM_TRASH") {

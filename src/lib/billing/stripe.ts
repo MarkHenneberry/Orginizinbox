@@ -1,15 +1,7 @@
-import { env, pricingConfig } from "@/lib/config";
+import "server-only";
+import Stripe from "stripe";
+import { requireBillingConfig, stripeApiVersion } from "@/lib/billing/config";
 
-export async function createFullResetCheckoutSession() {
-  if (!env.STRIPE_SECRET_KEY || !env.STRIPE_PRICE_FULL_RESET_USD) {
-    return {
-      ok: false as const,
-      reason: "Stripe checkout is not configured. Add STRIPE_SECRET_KEY and STRIPE_PRICE_FULL_RESET_USD."
-    };
-  }
-
-  return {
-    ok: false as const,
-    reason: `${pricingConfig.fullReset.label} checkout boundary is prepared, but live Stripe session creation is not implemented yet.`
-  };
+export function createStripeClient() {
+  return new Stripe(requireBillingConfig().secretKey, { apiVersion: stripeApiVersion, timeout: 8_000, maxNetworkRetries: 1 });
 }

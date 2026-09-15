@@ -54,6 +54,7 @@ export function ProviderConnectShell({
                   </li>
                 ))}
               </ul>
+              <p className="muted mt-4 text-sm leading-6">Subject lines are used temporarily for protection, then discarded. Your report and required restoration details are stored temporarily in encrypted form. Use available Undo before disconnecting.</p>
               <Link className="focus-ring mt-6 inline-flex rounded-md py-2 text-sm font-bold text-[var(--teal-dark)] hover:underline" href="/data-access">
                 How data access works
               </Link>

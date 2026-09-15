@@ -30,6 +30,7 @@ import {
 import { getSession } from "@/lib/server/session";
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Authentication required." }, { status: 401 });

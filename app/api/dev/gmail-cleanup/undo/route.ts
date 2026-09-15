@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { GmailCleanupError, undoGmailCleanup } from "@/lib/server/gmail-cleanup";
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   try {
     const body = (await request.json()) as { jobId?: string };
     if (!body.jobId) {

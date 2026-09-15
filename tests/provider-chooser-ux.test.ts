@@ -18,7 +18,8 @@ describe("provider chooser onboarding", () => {
     expect(chooser).toMatch(/href="\/connect\/google"[\s\S]+Continue with Google/);
     expect(chooser).toMatch(/microsoftDevelopmentEnabled[\s\S]+href="\/connect\/microsoft"[\s\S]+Continue with Microsoft/);
     expect(chooser).toMatch(/Coming soon/);
-    expect(chooser).toMatch(/isMicrosoftOAuthDevelopmentUiEnabled/);
+    expect(chooser).toMatch(/runtimeConfig.microsoftAvailable/);
+    expect(chooser).toMatch(/runtimeConfig.gmailAvailable/);
     expect(isMicrosoftOAuthDevelopmentUiEnabled("development", true)).toBe(true);
     expect(isMicrosoftOAuthDevelopmentUiEnabled("development", false)).toBe(false);
     expect(isMicrosoftOAuthDevelopmentUiEnabled("production", true)).toBe(false);

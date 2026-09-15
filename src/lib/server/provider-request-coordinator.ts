@@ -11,6 +11,7 @@ export function createProviderRequestCoordinator(
     now?: () => Date;
     sleep?: (milliseconds: number) => Promise<void>;
     random?: () => number;
+    beforeRequest?: () => Promise<void>;
   } = {}
 ) {
   const limit = Math.max(1, Math.min(4, input.limit ?? 2));
@@ -36,6 +37,7 @@ export function createProviderRequestCoordinator(
     await ensureSlots();
 
     for (let attempt = 0; attempt < 200; attempt += 1) {
+      await input.beforeRequest?.();
       const claimedAt = now();
       for (let slot = 0; slot < limit; slot += 1) {
         const claimed = await client.providerRequestLease.updateMany({
@@ -52,6 +54,7 @@ export function createProviderRequestCoordinator(
         });
         if (claimed.count !== 1) continue;
         try {
+          await input.beforeRequest?.();
           return await request();
         } finally {
           await client.providerRequestLease.updateMany({

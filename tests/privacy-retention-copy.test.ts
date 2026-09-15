@@ -8,6 +8,7 @@ import { PrivacyContent } from "@/components/product/PrivacyContent";
 import { retentionDuration, scanStateTtlMs, legacyCleanupTtlMs } from "@/lib/domain/transient-retention";
 
 const config = vi.hoisted(() => ({
+  development: true,
   cleanupStateActiveTtlSeconds: 1800,
   cleanupStateUndoTtlSeconds: 1800,
   cleanupStateTerminalTtlSeconds: 60
@@ -24,9 +25,9 @@ describe("customer-facing encrypted retention disclosure", () => {
       expect(html).toContain("temporarily in encrypted form in our database");
       expect(html).toContain("1 hour without a saved update");
       expect(html).toContain("30 minutes active window");
-      expect(html).toContain("30 minutes Undo window");
-      expect(html).toContain("1 minute final-state window");
-      expect(html).toContain("keeps temporary state for 10 minutes");
+      expect(html).toContain("configured window is 30 minutes");
+      expect(html).toContain("Final details without Undo expire after 1 minute");
+      expect(html).toContain("keep temporary state for 10 minutes");
       expect(html).toContain("scheduled deletion runs every minute");
       expect(html).toContain("Service outages may delay deletion");
       expect(html).toContain("Database backup retention is separate");
@@ -38,8 +39,8 @@ describe("customer-facing encrypted retention disclosure", () => {
     Object.assign(config, { cleanupStateActiveTtlSeconds: 600, cleanupStateUndoTtlSeconds: 900, cleanupStateTerminalTtlSeconds: 30 });
     const html = renderToStaticMarkup(createElement(RetentionDisclosure));
     expect(html).toContain("10 minutes active window");
-    expect(html).toContain("15 minutes Undo window");
-    expect(html).toContain("30 seconds final-state window");
+    expect(html).toContain("configured window is 15 minutes");
+    expect(html).toContain("Final details without Undo expire after 30 seconds");
     expect(html).not.toContain("30 minutes");
   });
 

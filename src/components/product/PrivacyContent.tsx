@@ -29,7 +29,7 @@ export function PrivacyContent({ appContext = false, primaryCta }: { appContext?
           {[
             ["No inbox sale", "Mailbox-derived data is never sold or used for advertising."],
             ["No AI training", "Scan and cleanup flows do not send mailbox data to AI training systems."],
-            ["Disconnect clears saved access", "Disconnect destroys Organizinbox's saved credentials and clears your current Inbox Report and cleanup progress."]
+            ["Disconnect clears saved access", "Disconnect destroys Organizinbox's saved access and removes your current report and restoration state for that provider. Use available Undo first; reconnecting will not bring it back."]
           ].map(([title, body]) => (
             <section className="panel p-5" key={title}>
               <h2 className="m-0 text-xl font-extrabold text-[var(--navy)]">{title}</h2>

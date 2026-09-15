@@ -108,7 +108,7 @@ describe("cleanup stage UI contracts", () => {
   });
 
   it("preserves working and completed states without restoring Check controls", () => {
-    expect(client).toContain("We're rechecking them against Gmail before anything is moved.");
+    expect(client).toContain("We're checking your selected messages before anything is moved.");
     expect(client).toContain("Moving ");
     expect(client).toContain("Messages moved. Verifying cleanup...");
     expect(reviewStage).toContain("CompletedResult");

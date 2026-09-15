@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ProviderUnavailable } from "@/components/product/ProviderUnavailable";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { GmailScanClient, OutlookScanClient } from "@/components/product/GmailScanClient";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
@@ -19,6 +20,7 @@ export default async function ScanPage() {
         <p className="eyebrow">Scan</p>
         <h1 className="m-0 mt-2 text-4xl font-extrabold text-[var(--navy)]">Scan your inbox</h1>
         <p className="muted mt-3 max-w-2xl">We&apos;ll look at basic email details to find recurring senders, old mail, and likely clutter.</p>
+        {connection.mode === "unavailable" ? <ProviderUnavailable provider={connection.provider} /> : null}
 
         {connection.mode === "fixture" ? (
           <section className="panel mt-6 p-6">
@@ -33,10 +35,10 @@ export default async function ScanPage() {
 
         {connection.mode === "none" ? (
           <section className="panel mt-6 p-6">
-            <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Connect Gmail first</h2>
-            <p className="muted">A Gmail connection is required before scanning.</p>
-            <Link className="btn btn-primary focus-ring mt-4" href="/connect/google">
-              Connect Gmail
+            <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Connect an available inbox first</h2>
+            <p className="muted">Choose an enabled provider before scanning.</p>
+            <Link className="btn btn-primary focus-ring mt-4" href="/connect">
+              View provider availability
             </Link>
           </section>
         ) : null}
@@ -56,7 +58,7 @@ export default async function ScanPage() {
         {connection.mode === "needs_reconnect" && connection.provider === "microsoft" ? (
           <section className="panel mt-6 p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Microsoft connection needs attention</h2>
-            <p className="muted">Reconnect Microsoft from the development connection page.</p>
+            <p className="muted">Reconnect Microsoft from the connection page.</p>
             <Link className="btn btn-primary focus-ring mt-4" href="/connect/microsoft">
               Reconnect Microsoft
             </Link>
