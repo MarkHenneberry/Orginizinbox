@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/cron/purge-transient-state",
-      "schedule": "* * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
