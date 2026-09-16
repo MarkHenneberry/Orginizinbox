@@ -14,6 +14,8 @@ Code review: 2026-09-10. This is a deployment checklist, not proof that deployed
 
 Set secrets in the deployment's server environment, not source control or client-exposed variables. Do not copy local fixture settings into production.
 
+Staging/Hobby only: the checked-in `vercel.json` schedules `/api/cron/purge-transient-state` once daily (`0 0 * * *`, UTC). This is not the production retention cadence. Before a real production launch, restore frequent purge execution (every minute) using Vercel Pro or an equivalent external scheduler. Endpoint logic and TTLs are unchanged; daily staging purges can leave expired state awaiting deletion until the next run.
+
 | Area | Required configuration/check |
 | --- | --- |
 | Runtime | Production build with `NODE_ENV=production`; `NEXT_PUBLIC_APP_URL` is the canonical HTTPS origin. |
@@ -23,7 +25,7 @@ Set secrets in the deployment's server environment, not source control or client
 | Microsoft | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_REDIRECT_URI=<origin>/api/oauth/microsoft/callback`; valid `MICROSOFT_TENANT_ID` (`common` by default), matching account types and existing approved scopes. No scope changes in this pass. |
 | Availability | `GMAIL_PRODUCTION_ENABLED=false`, `MICROSOFT_PRODUCTION_ENABLED=false` until that provider's deployment checks pass. Explicit `true` enables only connection/read-only scanning. |
 | Workflow | `next.config.ts` must retain `withWorkflow`. Deploy the compiled Workflow integration and verify execution/re-entry. `CLEANUP_WORKFLOW_ENABLED` is the default-off production cleanup infrastructure switch, not a health probe; it must remain enabled through outstanding Undo deadlines. `GMAIL_SCALABLE_WORKFLOW_ENABLED` remains development-only. |
-| Retention Cron | Strong server-only `CRON_SECRET`. Deploy the existing `vercel.json` minute schedule for `/api/cron/purge-transient-state` on a plan supporting it; confirm authenticated scheduled execution, not merely a manual invocation. Missing secret refuses purge; absent/misconfigured scheduler must block operational sign-off. |
+| Retention Cron | Strong server-only `CRON_SECRET`. Production requires the minute schedule (`* * * * *`) for `/api/cron/purge-transient-state` on Vercel Pro or an equivalent external scheduler; confirm authenticated scheduled execution, not merely a manual invocation. Missing secret refuses purge; absent/misconfigured scheduler must block operational sign-off. |
 | Retention values | Preserve configured `CLEANUP_STATE_ACTIVE_TTL_SECONDS`, `CLEANUP_STATE_UNDO_TTL_SECONDS`, `CLEANUP_STATE_TERMINAL_TTL_SECONDS`, `CLEANUP_STATE_LOCK_TTL_SECONDS` (defaults 1800/1800/60/60). Scan state has a fixed one-hour TTL. Purge every minute is physical deletion cadence, not additional Undo time. |
 | Stripe | `STRIPE_BILLING_MODE=test` for staging, `live` only for a reviewed live billing rollout; matching `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_10000_CREDITS`, `STRIPE_PRICE_50000_CREDITS`, `STRIPE_PRICE_100000_CREDITS`, plus DB, HTTPS app origin and session encryption. Keep `STRIPE_BILLING_ENABLED=false` for this release. Missing/invalid config disables billing and paid access; it need not disable free read-only scanning. |
 | Development | Set `ORGANIZINBOX_FIXTURE_MODE=false` and all proof/benchmark/cleanup development flags false. Production independently forces these off even if set incorrectly. Only the separate production cleanup flags can authorize the production cleanup API. |
