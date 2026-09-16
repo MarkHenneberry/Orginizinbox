@@ -6,171 +6,114 @@ import { StripeBillingService } from "@/lib/billing/service";
 import { POST as webhook } from "../app/api/webhooks/stripe/route";
 import { POST as checkout } from "../app/api/checkout/route";
 import { POST as portal } from "../app/api/billing/portal/route";
-import { requirePaidCleanupEntitlement } from "@/lib/billing/entitlements";
 import { POST as reconcile } from "../app/api/billing/reconcile/route";
+import { requirePaidCleanupEntitlement } from "@/lib/billing/entitlements";
+import { environment } from "./fixtures/credit-billing";
 
-const mocks = vi.hoisted(() => ({ session: vi.fn(), account: vi.fn() }));
+const mocks = vi.hoisted(() => ({ session: vi.fn(), account: vi.fn(), jobs: vi.fn(), job: vi.fn(), user: vi.fn() }));
 vi.mock("@/lib/server/session", () => ({ getSession: mocks.session }));
-vi.mock("@/lib/server/db", () => ({ prisma: { billingAccount: { findUnique: mocks.account } } }));
+vi.mock("@/lib/server/db", () => ({ prisma: { billingAccount: { findUnique: mocks.account },
+  user: { findUniqueOrThrow: mocks.user, count: async () => 1 }, creditJobAccounting: { findMany: mocks.jobs, findUnique: mocks.job } } }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
-const origin = "https://example.test";
-const secret = "whsec_fixture";
+const origin = environment.NEXT_PUBLIC_APP_URL;
 const sdk = new Stripe("sk_test_fixture");
-const payload = JSON.stringify({ id: "evt_fixture", type: "customer.subscription.updated", livemode: false,
-  data: { object: { customer: "cus_fixture" } } });
-
+const payload = JSON.stringify({ id: "evt_fixture", type: "checkout.session.completed", livemode: false, data: { object: { id: "cs_fixture" } } });
 function signedRequest(body = payload, signature?: string) {
   return new Request(`${origin}/api/webhooks/stripe`, { method: "POST", body,
-    headers: { "stripe-signature": signature ?? sdk.webhooks.generateTestHeaderString({ payload, secret }) } });
+    headers: { "stripe-signature": signature ?? sdk.webhooks.generateTestHeaderString({ payload, secret: environment.STRIPE_WEBHOOK_SECRET }) } });
 }
-function actionRequest(path: string, from = origin) {
-  return new Request(`${origin}${path}`, { method: "POST", headers: { origin: from, accept: "application/json" },
-    body: JSON.stringify({ userId: "attacker", customer: "cus_attacker", priceId: "price_attacker", return_url: "https://attacker.test" }) });
-}
-
+const actionRequest = (from = origin, pack = "small") => new Request(`${origin}/api/checkout`, {
+  method: "POST", headers: { origin: from, accept: "application/json" },
+  body: JSON.stringify({ pack, userId: "attacker", customer: "cus_attacker", priceId: "price_attacker", amount: 1, return_url: "https://attacker.test" })
+});
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  vi.stubEnv("NODE_ENV", "test");
-  vi.stubEnv("STRIPE_BILLING_ENABLED", "true");
-  vi.stubEnv("STRIPE_BILLING_MODE", "test");
-  vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_fixture");
-  vi.stubEnv("STRIPE_WEBHOOK_SECRET", secret);
-  vi.stubEnv("STRIPE_SUBSCRIPTION_PRICE_ID", "price_fixture");
-  vi.stubEnv("NEXT_PUBLIC_APP_URL", origin);
-  vi.stubEnv("DATABASE_URL", "postgresql://localhost/fixture");
-  mocks.session.mockResolvedValue({ userId: "user-1" });
-  mocks.account.mockResolvedValue(null);
+  for (const [key, value] of Object.entries(environment)) vi.stubEnv(key, value);
+  mocks.session.mockResolvedValue({ userId: "linked-inbox" });
+  mocks.user.mockResolvedValue({ creditOwnerId: "owner" });
+  mocks.account.mockResolvedValue(null); mocks.jobs.mockResolvedValue([]);
+  mocks.job.mockResolvedValue(null);
 });
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllEnvs(); });
 
-describe("Stripe webhook HTTP boundary", () => {
-  it("verifies the original raw payload before processing", async () => {
+describe("signed webhook boundary", () => {
+  it("validates the original raw payload before processing", async () => {
     const process = vi.spyOn(StripeBillingService.prototype, "webhook").mockResolvedValue({ result: "processed" });
     const response = await webhook(signedRequest());
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
     expect(process).toHaveBeenCalledExactlyOnceWith(JSON.parse(payload));
   });
-  it("rejects tampering, incorrect secrets, stale signatures and missing signatures before processing", async () => {
+  it("rejects tampering, bad/stale/missing signatures and oversized payloads", async () => {
     const process = vi.spyOn(StripeBillingService.prototype, "webhook");
-    const requests = [signedRequest(payload + " "),
-      signedRequest(payload, sdk.webhooks.generateTestHeaderString({ payload, secret: "whsec_wrong" })),
-      signedRequest(payload, sdk.webhooks.generateTestHeaderString({ payload, secret, timestamp: Math.floor(Date.now() / 1000) - 1000 })),
-      new Request(`${origin}/api/webhooks/stripe`, { method: "POST", body: payload })];
-    for (const request of requests) {
-      const response = await webhook(request);
-      expect(response.status).toBe(400);
-      expect(await response.text()).not.toMatch(/cus_fixture|evt_fixture|whsec_|customer.subscription/);
+    for (const request of [signedRequest(payload + " "), signedRequest(payload, "invalid"),
+      signedRequest(payload, sdk.webhooks.generateTestHeaderString({ payload, secret: environment.STRIPE_WEBHOOK_SECRET, timestamp: Math.floor(Date.now() / 1000) - 1000 })),
+      new Request(`${origin}/api/webhooks/stripe`, { method: "POST", body: payload })]) {
+      expect((await webhook(request)).status).toBe(400);
     }
-    expect(process).not.toHaveBeenCalled();
-  });
-  it("limits raw payload size and sanitizes retriable processing errors", async () => {
-    const process = vi.spyOn(StripeBillingService.prototype, "webhook").mockRejectedValue(new Error("secret provider response cus_private"));
     expect((await webhook(signedRequest("x".repeat(1_000_001)))).status).toBe(413);
     expect(process).not.toHaveBeenCalled();
+  });
+  it("sanitizes failures and operational logs", async () => {
+    vi.spyOn(StripeBillingService.prototype, "webhook").mockRejectedValue(new Error("sk_live_private cus_private card mailbox"));
     const response = await webhook(signedRequest());
     expect(response.status).toBe(503);
-    expect(await response.text()).not.toMatch(/secret|cus_private|provider/);
+    expect(await response.text()).not.toMatch(/sk_live|cus_|card|mailbox/);
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toMatch(/sk_live|cus_|card|mailbox/);
   });
 });
 
-describe("billing session and entitlement boundary", () => {
-  it.each([checkout, portal, reconcile])("requires same-origin authenticated requests", async (handler) => {
-    expect((await handler(actionRequest("/api/checkout", "https://attacker.test"))).status).toBe(403);
-    expect(mocks.session).not.toHaveBeenCalled();
+describe("account-level checkout and UI", () => {
+  it.each([checkout, reconcile])("requires same-origin authentication", async (handler) => {
+    expect((await handler(actionRequest("https://attacker.test"))).status).toBe(403);
     mocks.session.mockResolvedValue(null);
-    expect((await handler(actionRequest("/api/checkout"))).status).toBe(401);
+    expect((await handler(actionRequest())).status).toBe(401);
   });
-  it("uses the validated session, never client prices, ownership or redirect parameters", async () => {
+  it("uses the shared account and allowlisted pack, not submitted price/customer/amount", async () => {
     const create = vi.spyOn(StripeBillingService.prototype, "checkout").mockResolvedValue("https://checkout.stripe.com/c/pay/fixture");
-    const manage = vi.spyOn(StripeBillingService.prototype, "portal").mockResolvedValue("https://billing.stripe.com/p/session/fixture");
-    expect((await checkout(actionRequest("/api/checkout"))).status).toBe(200);
-    expect((await portal(actionRequest("/api/billing/portal"))).status).toBe(200);
-    expect(create).toHaveBeenCalledExactlyOnceWith("user-1");
-    expect(manage).toHaveBeenCalledExactlyOnceWith("user-1");
+    expect((await checkout(actionRequest())).status).toBe(200);
+    expect(create).toHaveBeenCalledExactlyOnceWith("owner", "small");
+    expect((await checkout(actionRequest(origin, "price_attacker"))).status).toBe(400);
+    expect((await portal(actionRequest())).status).toBe(404);
   });
-  it("fails closed with missing configuration, missing entitlement, expiry or database failure", async () => {
-    vi.stubEnv("STRIPE_SECRET_KEY", "");
-    expect((await checkout(actionRequest("/api/checkout"))).status).toBe(503);
-    await expect(requirePaidCleanupEntitlement("user-1")).rejects.toThrow("Paid access is inactive");
-    expect(mocks.account).not.toHaveBeenCalled();
-    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_fixture");
-    await expect(requirePaidCleanupEntitlement("user-1")).rejects.toThrow("active paid subscription");
-    const row = { stripeCustomerId: "cus_fixture", syncedAt: new Date(), stripeSubscriptionId: "sub_fixture", stripePriceId: "price_fixture", livemode: false,
-      subscriptionStatus: "active", latestInvoicePaid: true, currentPeriodEnd: new Date(Date.now() + 60_000) };
-    mocks.account.mockResolvedValue(row);
-    expect((await requirePaidCleanupEntitlement("user-1")).paidAccess).toBe(true);
-    expect(mocks.account).toHaveBeenLastCalledWith({ where: { userId: "user-1" } });
-    mocks.account.mockResolvedValue({ ...row, currentPeriodEnd: new Date(0) });
-    await expect(requirePaidCleanupEntitlement("user-1")).rejects.toThrow("Paid access is inactive");
-    mocks.account.mockRejectedValue(new Error("database unavailable"));
-    await expect(requirePaidCleanupEntitlement("user-1")).rejects.toThrow("could not be verified");
-  });
-});
-
-describe("minimal account billing UI", () => {
-  it("shows free subscription action without exposing server configuration or enabling cleanup", async () => {
-    const html = renderToStaticMarkup(await BillingPanel());
-    expect(html).toContain("Upgrade");
-    expect(html).toContain("Free / no paid access");
-    expect(html).toContain("paid access where cleanup is available for your inbox");
-    expect(html).not.toMatch(/sk_test_|whsec_|price_fixture|cus_fixture|user-1/);
-  });
-  it("shows subscribed status and Portal only, retaining cancellation-period wording", async () => {
-    mocks.account.mockResolvedValue({ stripeCustomerId: "cus_fixture", stripeSubscriptionId: "sub_fixture",
-      stripePriceId: "price_fixture", livemode: false, subscriptionStatus: "active", latestInvoicePaid: true,
-      cancelAtPeriodEnd: true, currentPeriodEnd: new Date(Date.now() + 3600_000), syncedAt: new Date() });
-    const html = renderToStaticMarkup(await BillingPanel());
-    expect(html).toContain("Cancelled / paid access until period end");
-    expect(html).toContain("Manage billing");
-    expect(html).not.toContain("Upgrade");
-    expect(html).toContain("Refresh billing status");
-    expect(html).not.toMatch(/cus_fixture|sub_fixture|price_fixture/);
-  });
-  it("hides purchase actions when disabled, signed out, or unavailable", async () => {
-    vi.stubEnv("STRIPE_BILLING_ENABLED", "false");
-    expect(renderToStaticMarkup(await BillingPanel())).not.toContain("Upgrade");
-    mocks.session.mockResolvedValue(null);
-    expect(renderToStaticMarkup(await BillingPanel())).toContain("Sign in to manage billing");
-    mocks.session.mockResolvedValue({ userId: "user-1" });
-    mocks.account.mockRejectedValue(new Error("private database error"));
-    const html = renderToStaticMarkup(await BillingPanel());
-    expect(html).toContain("Billing is temporarily unavailable");
-    expect(html).not.toContain("private database error");
-  });
-});
-
-describe("billing recovery and monitoring boundary", () => {
-  it("refreshes only the signed-in account and returns only the safe entitlement projection", async () => {
+  it("returns only aggregate balance fields after explicit reconciliation", async () => {
     const recover = vi.spyOn(StripeBillingService.prototype, "reconcile").mockResolvedValue(null);
-    const response = await reconcile(actionRequest("/api/billing/reconcile"));
-    expect(response.status).toBe(200);
-    expect(recover).toHaveBeenCalledExactlyOnceWith("user-1", true);
-    expect(await response.json()).toEqual({ entitlement: { state: "free", paidAccess: false, periodEnd: null } });
+    const response = await reconcile(actionRequest());
+    expect(recover).toHaveBeenCalledExactlyOnceWith("owner", true);
+    expect(await response.json()).toEqual({ entitlement: { state: "free", paidAccess: false, periodEnd: null, balance: 0, reserved: 0, available: 0 } });
   });
-  it("keeps Portal accessible when reconciliation fails and does not show stale paid access", async () => {
-    mocks.account.mockResolvedValue({ stripeCustomerId: "cus_fixture", stripeSubscriptionId: "sub_fixture",
-      stripePriceId: "price_fixture", livemode: false, subscriptionStatus: "active", latestInvoicePaid: true,
-      currentPeriodEnd: new Date(Date.now() + 3600_000), syncedAt: new Date(0) });
-    vi.spyOn(StripeBillingService.prototype, "reconcile").mockRejectedValue(new Error("private response"));
+  it("requires credits and rejects missing config or mode mismatches", async () => {
+    await expect(requirePaidCleanupEntitlement("linked-inbox")).rejects.toThrow("Available cleanup credits");
+    mocks.account.mockResolvedValue({ livemode: false, creditBalance: 10000 });
+    expect((await requirePaidCleanupEntitlement("linked-inbox")).paidAccess).toBe(true);
+    mocks.jobs.mockResolvedValue([{ requested: 10000, moved: 0 }]);
+    await expect(requirePaidCleanupEntitlement("linked-inbox")).rejects.toThrow();
+    vi.stubEnv("STRIPE_SECRET_KEY", "");
+    expect((await checkout(actionRequest())).status).toBe(503);
+  });
+  it("lets an already-reserved job finish with no spare credits, without authorizing a new or unrelated job", async () => {
+    mocks.account.mockResolvedValue({ livemode: false, creditBalance: 500 });
+    mocks.jobs.mockResolvedValue([{ requested: 500, moved: 0 }]);
+    mocks.job.mockResolvedValue({ userId: "owner", activeStateJobId: "job-1" });
+    await expect(requirePaidCleanupEntitlement("linked-inbox", "job-1")).resolves.toMatchObject({ available: 0 });
+    await expect(requirePaidCleanupEntitlement("linked-inbox")).rejects.toThrow();
+    await expect(requirePaidCleanupEntitlement("linked-inbox", "job-other")).rejects.toThrow();
+    mocks.account.mockResolvedValue({ livemode: false, creditBalance: 0 }); mocks.jobs.mockResolvedValue([]);
+    await expect(requirePaidCleanupEntitlement("linked-inbox", "job-1")).resolves.toMatchObject({ balance: 0 });
+    mocks.account.mockResolvedValue({ livemode: true, creditBalance: 1000 });
+    await expect(requirePaidCleanupEntitlement("linked-inbox", "job-1")).rejects.toThrow();
+  });
+  it("renders all three packs, non-expiring copy and explicit linking without secrets or subscription actions", async () => {
+    mocks.account.mockResolvedValue({ livemode: false, creditBalance: 10000, stripeCustomerId: "cus_fixture", syncedAt: new Date() });
     const html = renderToStaticMarkup(await BillingPanel());
-    expect(html).toContain("Billing access could not be verified");
-    expect(html).toContain("Manage billing");
-    expect(html).toContain("Refresh billing status");
-    expect(html).not.toMatch(/Active paid subscription|private response|cus_fixture|sub_fixture/);
+    for (const text of ["10,000", "50,000", "100,000", "$10", "$15", "$20", "No subscription", "Link another inbox", "Check payment status"]) expect(html).toContain(text);
+    expect(html).not.toMatch(/sk_test_|whsec_|price_small|cus_fixture|owner|Manage billing|Active paid subscription/);
   });
-  it("emits only fixed operational event names, never exceptions or payment identifiers", async () => {
-    vi.spyOn(StripeBillingService.prototype, "checkout").mockRejectedValue(new Error("sk_live_secret cus_private card payment mailbox"));
-    await checkout(actionRequest("/api/checkout"));
-    await webhook(signedRequest(payload + " "));
-    vi.spyOn(StripeBillingService.prototype, "webhook").mockRejectedValue(new Error("private response"));
-    await webhook(signedRequest());
-    await expect(requirePaidCleanupEntitlement("user-1")).rejects.toThrow();
-    const entries = vi.mocked(console.warn).mock.calls.map(([value]) => JSON.parse(String(value)));
-    expect(entries.map((entry) => entry.event)).toEqual(expect.arrayContaining([
-      "checkout_failed", "webhook_signature_failed", "webhook_processing_failed", "entitlement_denied"
-    ]));
-    for (const entry of entries) expect(Object.keys(entry).sort()).toEqual(["component", "event"]);
-    expect(JSON.stringify(entries)).not.toMatch(/sk_live_|cus_|private|mailbox|user-1|card/);
+  it("hides purchases when sales are off or old recurring arrangements need review", async () => {
+    vi.stubEnv("STRIPE_BILLING_ENABLED", "false");
+    expect(renderToStaticMarkup(await BillingPanel())).not.toContain("$10 USD");
+    vi.stubEnv("STRIPE_BILLING_ENABLED", "true");
+    mocks.account.mockResolvedValue({ stripeSubscriptionId: "sub_old", livemode: false, creditBalance: 0 });
+    const html = renderToStaticMarkup(await BillingPanel());
+    expect(html).toContain("previous billing arrangement needs review"); expect(html).not.toContain("$10 USD");
   });
 });

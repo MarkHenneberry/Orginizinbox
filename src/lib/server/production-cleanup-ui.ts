@@ -44,7 +44,7 @@ export async function getProductionCleanupUiState(loadJob = false): Promise<Clea
       assertProductionCleanupInfrastructure(connection.provider, "forward");
       const entitlement = await getUserEntitlement(connection.userId);
       state.access = entitlement.paidAccess ? "available" : entitlement.state === "free" ? "upgrade"
-        : entitlement.state === "past_due" ? "past_due" : "inactive";
+        : "inactive";
       if (state.access === "available") await requireProductionCleanupAccess({ userId: connection.userId,
         provider: connection.provider, providerConnectionId: connection.providerConnectionId, access: "forward" });
     } catch { state.access = "unavailable"; }

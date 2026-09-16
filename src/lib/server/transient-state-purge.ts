@@ -36,12 +36,15 @@ async function sweep(input: {
 }
 
 export async function purgeExpiredTransientState(
-  client: Pick<PrismaClient, "scanState" | "cleanupJobState"> = prisma,
+  client: Pick<PrismaClient, "scanState" | "cleanupJobState"> & Partial<Pick<PrismaClient, "inboxLinkIntent">> = prisma,
   now = new Date()
 ) {
   const startedAt = Date.now();
   const where = expiredUnlockedStateWhere(now);
   const deferredWhere = { expiresAt: { lte: now }, lockExpiresAt: { gt: now } };
+  let linksPurged = true;
+  try { await client.inboxLinkIntent?.deleteMany({ where: { expiresAt: { lte: now } } }); }
+  catch { linksPurged = false; }
   const scans = await sweep({
     find: async () => (await client.scanState.findMany({
       where, select: { scanId: true }, orderBy: { expiresAt: "asc" }, take: batchSize
@@ -59,7 +62,7 @@ export async function purgeExpiredTransientState(
     deferred: () => client.cleanupJobState.count({ where: deferredWhere })
   });
   return {
-    status: scans.status === "success" && cleanup.status === "success" ? "success" as const : "failed" as const,
+    status: linksPurged && scans.status === "success" && cleanup.status === "success" ? "success" as const : "failed" as const,
     scans,
     cleanup,
     durationMs: Math.max(0, Date.now() - startedAt)

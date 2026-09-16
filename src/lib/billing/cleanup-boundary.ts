@@ -10,7 +10,7 @@ export async function productionCleanupBoundary(request: Request, operation?: {
   if (process.env.NODE_ENV !== "production") return null;
   const headers = { "Cache-Control": "no-store" };
   try {
-    // Recovery does not require working Stripe configuration or a paid subscription.
+    // Recovery does not require working Stripe configuration or unspent credits.
     const origin = operation?.access === "recovery"
       ? new URL(process.env.NEXT_PUBLIC_APP_URL ?? "").origin : requireBillingConfig().origin;
     if (request.headers.get("origin") !== origin || new URL(request.url).origin !== origin) {

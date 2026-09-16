@@ -17,7 +17,7 @@ export function UndoAction({ available, expiresAt, recovery = false, completed =
   const presentation = undoPresentation({ available, expiresAt, recovery, completed }, isExpired ? expiresAt : 0);
   const deadline = Number.isFinite(expiresAt) && expiresAt > 0 ? new Date(expiresAt) : null;
   return (
-    <div className="mt-3 grid gap-2 text-sm" aria-live="polite">
+    <div className="undo-action mt-3 grid gap-2 text-sm" data-recovery={recovery} aria-live="polite">
       {presentation.state === "available" ? (
         <>
           <p className="m-0 font-bold">

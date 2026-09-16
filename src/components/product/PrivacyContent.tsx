@@ -10,7 +10,7 @@ export function PrivacyContent({ appContext = false, primaryCta }: { appContext?
   const cta = primaryCta ?? { href: "/connect", label: "Clean my inbox" };
 
   return (
-    <main>
+    <main className="reading-content">
       <section className="section">
         <div className="container">
           <p className="eyebrow">Privacy</p>

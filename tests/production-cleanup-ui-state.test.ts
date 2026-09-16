@@ -49,10 +49,10 @@ describe("server-resolved cleanup presentation", () => {
     expect(mocks.access).toHaveBeenCalledWith({ userId: "owner", provider, providerConnectionId: "connection", access: "forward" });
     expect(fetch).not.toHaveBeenCalled();
   });
-  it.each(["free", "past_due", "inactive", "cancelled_active"])("maps %s from durable billing state", async (state) => {
-    mocks.entitlement.mockResolvedValue({ state, paidAccess: state === "cancelled_active" });
-    expect((await getProductionCleanupUiState()).access).toBe(state === "free" ? "upgrade" : state === "cancelled_active" ? "available" : state);
-    if (state !== "cancelled_active") expect(mocks.access).not.toHaveBeenCalled();
+  it.each(["free", "inactive", "active"])("maps %s from durable credit state", async (state) => {
+    mocks.entitlement.mockResolvedValue({ state, paidAccess: state === "active" });
+    expect((await getProductionCleanupUiState()).access).toBe(state === "free" ? "upgrade" : state === "active" ? "available" : state);
+    if (state !== "active") expect(mocks.access).not.toHaveBeenCalled();
   });
   it("retains owned recovery when forward flags or billing verification fail", async () => {
     mocks.find.mockResolvedValue({ jobId: "job", job: { scanId: "scan" } });
@@ -103,7 +103,7 @@ describe("server-resolved cleanup presentation", () => {
   it("renders the appropriate disabled or Upgrade state on direct page entry", async () => {
     mocks.entitlement.mockResolvedValue({ paidAccess: false, state: "free" });
     const html = renderToStaticMarkup(createElement("div", null, await CleanupPage()));
-    expect(html).toContain(">Upgrade</a>");
+    expect(html).toContain(">Buy credits</a>");
     expect(html).not.toContain("Check 500 messages");
     expect(mocks.redirectReport).not.toHaveBeenCalled();
   });

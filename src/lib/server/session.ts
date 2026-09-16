@@ -18,6 +18,7 @@ const sessionSchema = z.object({
 type SessionPayload = z.infer<typeof sessionSchema>;
 
 type OAuthStatePayload = {
+  linkIntentId?: string;
   state: string;
   createdAt: number;
   returnTo?: string;
@@ -27,7 +28,7 @@ type OAuthStatePayload = {
   microsoftFlow?: "graph" | "imap";
 };
 
-type OAuthStateOptions = Pick<OAuthStatePayload, "provider" | "codeVerifier" | "nonce" | "microsoftFlow">;
+type OAuthStateOptions = Pick<OAuthStatePayload, "provider" | "codeVerifier" | "nonce" | "microsoftFlow" | "linkIntentId">;
 
 const oauthStateTtlMs = 10 * 60 * 1000;
 const sessionTtlSeconds = 60 * 60 * 24 * 7;
@@ -150,6 +151,7 @@ export async function consumeOAuthState(
   expectedProvider?: OAuthStatePayload["provider"]
 ): Promise<{
   ok: true;
+  linkIntentId?: string;
   returnTo?: string;
   codeVerifier?: string;
   nonce?: string;
@@ -173,6 +175,7 @@ export async function consumeOAuthState(
     return {
       ok: true,
       returnTo: payload.returnTo,
+      ...(payload.linkIntentId ? { linkIntentId: payload.linkIntentId } : {}),
       ...(payload.codeVerifier ? { codeVerifier: payload.codeVerifier } : {}),
       ...(payload.nonce ? { nonce: payload.nonce } : {}),
       ...(payload.microsoftFlow ? { microsoftFlow: payload.microsoftFlow } : {})

@@ -4,9 +4,9 @@ import type { OutlookCleanupJobView } from "@/lib/domain/outlook-cleanup";
 export type CleanupUiAccess = "available" | "upgrade" | "past_due" | "inactive" | "unavailable" | "reconnect";
 export const cleanupAccessCopy: Record<CleanupUiAccess, { text: string; action?: string; href?: string }> = {
   available: { text: "Review your selection before moving any messages." },
-  upgrade: { text: "Upgrade to clean your inbox. Your report is still available.", action: "Upgrade", href: "/app/account" },
+  upgrade: { text: "Buy cleanup credits when you are ready. Your report is free.", action: "Buy credits", href: "/app/account" },
   past_due: { text: "Your payment needs attention before starting another cleanup.", action: "Manage billing", href: "/app/account" },
-  inactive: { text: "Your paid access is inactive. Existing cleanup recovery is still available.", action: "Manage billing", href: "/app/account" },
+  inactive: { text: "Your credit account needs attention. Existing cleanup recovery is still available.", action: "View credits", href: "/app/account" },
   unavailable: { text: "New cleanup is temporarily unavailable. You can still check an existing cleanup or undo eligible moves." },
   reconnect: { text: "Connect your inbox from Account to continue.", action: "Open Account", href: "/app/account" }
 };

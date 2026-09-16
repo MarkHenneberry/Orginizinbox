@@ -59,13 +59,7 @@ export const siteConfig = {
 export const pricingConfig = {
   freeScan: {
     label: "Free Inbox Scan",
-    priceCents: 0,
-    cleanupAllowance: 500
-  },
-  fullReset: {
-    label: "Full Inbox Reset",
-    priceCents: 999,
-    currency: "USD"
+    priceCents: 0
   }
 };
 

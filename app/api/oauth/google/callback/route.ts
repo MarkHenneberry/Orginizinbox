@@ -117,6 +117,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    if (stateResult.linkIntentId) {
+      const { completeInboxLink } = await import("@/lib/billing/inbox-link");
+      await completeInboxLink(stateResult.linkIntentId, savedConnection.user.id, "gmail");
+    }
     await setSessionCookie({
       userId: savedConnection.user.id,
       providerConnectionId: savedConnection.connection.id,

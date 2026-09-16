@@ -3,6 +3,7 @@ import { CleanupGuideContent } from "@/components/product/CleanupGuideContent";
 import { RetentionDisclosure } from "@/components/product/RetentionDisclosure";
 import { cleanupGuides } from "@/lib/cleanup-guides";
 import { getBillingConfig } from "@/lib/billing/config";
+import { creditPacks } from "@/lib/billing/packs";
 import { runtimeConfig } from "@/lib/config";
 import { providerAvailability } from "@/lib/providers/availability";
 import { getMarketingPagesBySlugs } from "@/lib/marketing-pages";
@@ -12,17 +13,17 @@ import type { PublicPrimaryCta } from "@/lib/server/app-state";
 export function MarketingInfoContent({ page, appContext = false, primaryCta }: { page: MarketingPage; appContext?: boolean; primaryCta?: PublicPrimaryCta }) {
   const cta = appContext ? { href: "/app/data-access", label: "Data access" } : (primaryCta ?? { href: "/connect", label: page.cta });
   const relatedPages = getMarketingPagesBySlugs(page.relatedSlugs);
-  const subscriptionAvailable = page.slug === "pricing" && getBillingConfig()?.checkoutEnabled;
+  const creditSalesAvailable = page.slug === "pricing" && getBillingConfig()?.checkoutEnabled;
   const outlookUnavailable = page.providerIntent === "outlook" && providerAvailability.microsoft.status === "comingSoon";
   const outlookDevelopmentConnection = page.providerIntent === "outlook" && runtimeConfig.microsoftOAuthDevEnabled;
   const providerUnavailable = page.providerIntent === "gmail" ? !runtimeConfig.gmailAvailable : outlookUnavailable;
   const hasGuide = Boolean(cleanupGuides[page.slug]);
-  const preserveExplanation = hasGuide || page.contentCluster === "trust";
+  const preserveExplanation = hasGuide || page.contentCluster === "trust" || page.slug === "pricing";
 
   return (
-    <main>
+    <main className="reading-content">
       <section className="section">
-        <div className="container grid gap-10 md:grid-cols-[1.1fr_0.9fr] md:items-center">
+        <div className={page.slug === "pricing" ? "container max-w-3xl" : "container grid gap-10 md:grid-cols-[1.1fr_0.9fr] md:items-center"}>
           <div>
             <p className="eyebrow">{page.eyebrow}</p>
             <h1 className="section-title mt-3">{page.h1}</h1>
@@ -31,7 +32,7 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
               : page.body}</p>
             {hasGuide ? <p className="mt-4 text-sm font-bold">{page.providerIntent === "gmail" || page.providerIntent === "outlook"
               ? providerUnavailable ? "Connection and scanning are currently unavailable for this provider. " : "Read-only Inbox Reports are available for enabled accounts. "
-              : "These steps work directly in Gmail. "}Production cleanup is not available yet.</p> : null}
+              : "These steps describe Organizinbox. Check connection and scan availability before you begin. "}Production cleanup is not available yet.</p> : null}
             {page.slug === "security" ? <RetentionDisclosure /> : null}
             {outlookUnavailable ? (
               <div className="mt-6 rounded-md border border-[var(--line)] bg-white p-5">
@@ -46,7 +47,7 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
               </div>
             ) : null}
             <div className="mt-8 flex flex-wrap gap-3">
-              {subscriptionAvailable ? <Link href="/app/account" className="btn btn-secondary focus-ring">Subscription and billing</Link> : null}
+              {creditSalesAvailable ? <Link href="/app/account" className="btn btn-secondary focus-ring">Buy cleanup credits</Link> : null}
               <Link href={cta.href} className="btn btn-primary focus-ring">
                 {cta.label}
               </Link>
@@ -60,9 +61,9 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
                 </Link>
               ) : null}
             </div>
-            {subscriptionAvailable ? <p className="muted mt-3 text-sm">One recurring subscription, with price and interval shown before payment. Production cleanup is not available yet.</p> : null}
+            {page.slug === "pricing" ? <p className="muted mt-3 text-sm">Pay once. No subscription. No recurring charge. Credits don&apos;t expire.</p> : null}
           </div>
-          <div className="panel p-6">
+          {page.slug !== "pricing" ? <div className="panel p-6">
             <p className="m-0 text-sm font-extrabold text-[var(--navy)]">Product facts</p>
             <dl className="mt-5 grid gap-4 text-sm">
               <div className="flex justify-between gap-4 border-b border-[var(--line)] pb-3">
@@ -82,14 +83,27 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
                 <dd className="m-0 font-bold">{runtimeConfig.development ? "Trash / Deleted Items" : "Cleanup unavailable"}</dd>
               </div>
             </dl>
-          </div>
+          </div> : null}
         </div>
       </section>
+      {page.slug === "pricing" ? <section className="section bg-white"><div className="container">
+        <h2 className="text-3xl font-bold">Credit packs</h2>
+        <div className="pack-terms"><span>No subscription</span><span>Credits don&apos;t expire</span><span>Same features in every pack</span></div>
+        <div className="credit-packs">{Object.entries(creditPacks).map(([key, pack]) => <article key={key} className="credit-pack" data-recommended={pack.credits === 50000}>
+          <p className="pack-label">{pack.credits === 50000 ? "Recommended" : "One-time purchase"}</p>
+          <h3 className="text-xl font-bold">{pack.credits.toLocaleString("en-US")} credits</h3>
+          <p className="pack-price">${pack.amountCents / 100} <small>USD, once</small></p>
+          <p className="muted text-sm">Gmail and Outlook. Pay only for verified moves.</p>
+        </article>)}</div>
+        <p className="mt-5">Use credits across your linked Gmail and Outlook inboxes. One credit pays for one email verified as moved to Trash or Deleted Items. Verified Undo returns that credit.</p>
+        <p className="muted">Scanning and reviewing are free. Protected, excluded, failed and uncertain moves cost no credits. Purchases add to your balance. Cleanup and Undo remain subject to provider availability and the displayed Undo deadline.</p>
+        {!creditSalesAvailable ? <p className="font-bold">Credit purchases are not available yet.</p> : null}
+      </div></section> : null}
       <section className="section bg-white">
         <div className="container">
           <h2 className="m-0 text-3xl font-extrabold text-[var(--navy)]">What you can do</h2>
           <div className="mt-8 grid gap-4 md:grid-cols-3">
-            {(!runtimeConfig.development && page.contentCluster !== "trust" && page.providerIntent
+            {(!runtimeConfig.development && page.contentCluster !== "trust" && page.slug !== "pricing" && page.providerIntent
               ? [providerUnavailable ? "Provider currently unavailable" : "Read-only Inbox Report", "Cleanup is not available", "No permanent deletion"]
               : page.bullets).map((bullet) => (
               <div className="panel p-5" key={bullet}>

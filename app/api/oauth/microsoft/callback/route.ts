@@ -95,6 +95,10 @@ export async function GET(request: NextRequest) {
     return errorRedirect(request, "connection_save_failed");
   }
   try {
+    if (stateResult.linkIntentId) {
+      const { completeInboxLink } = await import("@/lib/billing/inbox-link");
+      await completeInboxLink(stateResult.linkIntentId, saved.user.id, "microsoft");
+    }
     await setSessionCookie({
       userId: saved.user.id,
       providerConnectionId: saved.connection.id,

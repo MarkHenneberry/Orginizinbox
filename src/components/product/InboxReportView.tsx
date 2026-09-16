@@ -128,13 +128,14 @@ export function InboxReportView({
           report={report}
         /> : null}
 
-        <nav className="mb-6 flex flex-wrap gap-2" aria-label="Inbox report views">
+        <nav className="report-tabs mb-6 flex flex-wrap gap-2" aria-label="Inbox report views">
           {viewLinks.map((item) => (
             <Link
               className={`rounded-md border px-4 py-2 text-sm font-bold ${
                 view === item.view ? "border-[var(--teal)] bg-[var(--soft)] text-[var(--navy)]" : "border-[var(--line)] bg-white text-[var(--muted)]"
               }`}
               href={item.view === "overview" ? "/app/report" : `/app/report?view=${item.view}`}
+              aria-current={view === item.view ? "page" : undefined}
               key={item.view}
             >
               {item.label}
@@ -192,11 +193,13 @@ function PostUndoReportNotice({ action }: { action: ReportRecentCleanupAction })
 function OverviewView({ report, sizeAvailable }: { report: InboxReport; sizeAvailable: boolean }) {
   return (
     <>
-      <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-4" aria-label="Inbox report summary">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Inbox report summary">
         <Summary label="Emails" value={report.totals.messages.toLocaleString()} />
-        <Summary label="Emails you may want to clean" value={report.totals.cleanupCandidates.toLocaleString()} />
-        <Summary label="Review" value={report.totals.reviewMessages.toLocaleString()} />
-        <Summary label="Protected" value={report.totals.protectedMessages.toLocaleString()} />
+        <Summary label="Suggested" bucket="suggested" detail="Emails you may want to clean" value={report.totals.cleanupCandidates.toLocaleString()} />
+        <Summary label="Review" bucket="review" detail="Not included in suggested cleanup" value={report.totals.reviewMessages.toLocaleString()} />
+        <Summary label="Protected" bucket="protected" detail="Kept out of cleanup" value={report.totals.protectedMessages.toLocaleString()} />
+      </section>
+      <section className="secondary-metrics mt-4 grid gap-4 sm:grid-cols-3" aria-label="Additional inbox details">
         <Summary label="Unread older than one year" value={report.totals.unreadOlderThanOneYear.toLocaleString()} />
         <Summary label="Recurring senders" value={report.totals.recurringSenders.toLocaleString()} />
         <Summary
@@ -306,7 +309,7 @@ function SendersView({
           data-scroll-region="sender-list"
           tabIndex={0}
         >
-          <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+          <table className="report-table w-full min-w-[740px] border-collapse text-left text-sm">
             <thead className="sticky top-0 z-10 bg-[var(--soft)] text-[var(--navy)]">
               <tr>
                 <th className="p-4">Sender</th>
@@ -409,7 +412,7 @@ function SenderMobileRow({
           Selected
         </span>
       </span>
-      <span className="grid grid-cols-4 gap-2 text-center text-xs">
+      <span className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
         <CompactMetric label="Total" value={sender.totalMessages} />
         <CompactMetric label="Suggested" value={sender.cleanupCandidateCount} />
         <CompactMetric label="Review" value={sender.reviewMessages} />
@@ -507,11 +510,12 @@ function CategoryCard({ category, sizeAvailable }: { category: CategoryAggregate
   );
 }
 
-function Summary({ label, value }: { label: string; value: string }) {
+function Summary({ label, value, bucket, detail }: { label: string; value: string; bucket?: "suggested" | "review" | "protected"; detail?: string }) {
   return (
-    <div className="panel p-5">
-      <p className="muted m-0 text-sm">{label}</p>
-      <p className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{value}</p>
+    <div className="report-bucket panel p-5" data-bucket={bucket}>
+      <p className="m-0 text-sm font-bold text-[var(--navy)]">{label}</p>
+      <p className="metric-value m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{value}</p>
+      {detail ? <p className="muted m-0 mt-2 text-xs">{detail}</p> : null}
     </div>
   );
 }
@@ -533,7 +537,7 @@ function SenderDetail({
       data-mobile-detail={embedded ? "inline" : undefined}
     >
       <p className="eyebrow">Sender detail</p>
-      <h2 className="m-0 mt-2 text-3xl font-extrabold text-[var(--navy)]">{sender.displayName}</h2>
+      <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{sender.displayName}</h2>
       <p className="muted">
         {sender.senderSecondaryLabel ?? sender.domain ?? "Sender"} - {sender.totalMessages.toLocaleString()} emails
       </p>
@@ -559,7 +563,7 @@ function SenderDetail({
           sender={sender}
         />
       ) : null}
-      <div className="mt-6 rounded-lg border border-[var(--line)] bg-[var(--soft)] p-4">
+      <div className="mt-6 border-l-2 border-[var(--blue)] pl-4">
         <p className="m-0 font-extrabold text-[var(--navy)]">Protected</p>
         <p className="m-0 mt-2 text-3xl font-extrabold text-[var(--navy)]">{sender.protectedMessages.toLocaleString()}</p>
         <p className="muted m-0 mt-2 text-sm">
@@ -671,7 +675,7 @@ function DiagnosticRow({ label, value }: { label: string; value: number }) {
 
 function SenderMetric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-md border border-[var(--line)] p-2">
+    <div className="sender-metric">
       <dt className="muted">{label}</dt>
       <dd className="m-0 mt-1 font-extrabold text-[var(--navy)]">{value.toLocaleString()}</dd>
     </div>

@@ -14,7 +14,8 @@ export default async function AppHelpPage() {
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <section className="panel p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">What Organizinbox is doing</h2>
-            <p className="muted">The scan uses basic email details to find recurring senders, old mail, and likely clutter. Subject lines are processed temporarily only to protect messages that may be important. It does not read email bodies or download attachments.</p>
+            <p className="muted">Connect Gmail or Outlook and scan the whole inbox first. You do not need to choose senders or a date range. Scanning does not move or delete anything. Your Inbox Report shows Suggested, Review and Protected messages, so you can see where the clutter comes from and choose what to clean.</p>
+            <p className="muted">The scan uses basic email details. Subject lines are used temporarily to protect messages that may be important. It does not read email bodies or download attachments.</p>
           </section>
           <section className="panel p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">What is protected</h2>
@@ -22,7 +23,8 @@ export default async function AppHelpPage() {
           </section>
           <section className="panel p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">What cleanup will do</h2>
-            <p className="muted">When available, cleanup moves only messages you approve to Gmail Trash or Outlook Deleted Items. Organizinbox never permanently deletes email. Your provider&apos;s retention rules still apply.</p>
+            <p className="muted">Review suggested sender groups and messages, then choose what you want moved. Where cleanup is available, open Review Cleanup and confirm your selection. Organizinbox runs final safety checks and moves only approved messages to Gmail Trash or Outlook Deleted Items.</p>
+            <p className="muted">Check the result. Use Undo within the displayed deadline if needed, or scan again to see what remains. Organizinbox never permanently deletes email. Your provider&apos;s retention rules still apply.</p>
           </section>
           <section className="panel p-6">
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Disconnecting Gmail</h2>

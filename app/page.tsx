@@ -42,7 +42,7 @@ export default async function HomePage() {
       <StructuredData />
       <Header />
       <main>
-        <section className="border-b border-[var(--line)] bg-[var(--soft)] py-16 md:py-20">
+        <section className="home-hero border-b border-[var(--line)] bg-[var(--soft)]">
           <div className="container grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
             <div>
               <p className="eyebrow">{runtimeConfig.development ? "Gmail + Outlook cleanup" : "Read-only Inbox Reports"}</p>
@@ -96,8 +96,8 @@ export default async function HomePage() {
 
         <section className="section">
           <div className="container">
-            <p className="eyebrow">Start here</p>
-            <h2 className="section-title mt-3">Choose the path that matches your inbox.</h2>
+            <p className="eyebrow">Learn more</p>
+            <h2 className="section-title mt-3">Explore Organizinbox.</h2>
             <div className="mt-8 grid gap-4 md:grid-cols-5">
               {productPaths.map((path) => (
                 <Link className="panel focus-ring block p-5 hover:border-[var(--teal)]" href={path.href} key={path.href}>
@@ -112,18 +112,19 @@ export default async function HomePage() {
         <section id="how-it-works" className="section">
           <div className="container">
             <p className="eyebrow">How it works</p>
-            <h2 className="section-title mt-3">Four simple steps.</h2>
-            <div className="mt-8 grid gap-4 md:grid-cols-4">
-              {["Connect", "Scan", "Review", "Clean"].map((step, index) => (
+            <h2 className="section-title mt-3">Scan first. Choose what to clean after.</h2>
+            <div className="journey-steps mt-8 grid gap-6 md:grid-cols-5">
+              {["Scan your inbox", "Review your Inbox Report", "Choose what to clean", "Confirm cleanup", "Review the result"].map((step, index) => (
                 <div className="panel p-5" key={step}>
                   <p className="badge">{index + 1}</p>
                   <h3 className="mt-5 text-xl font-extrabold text-[var(--navy)]">{step}</h3>
                   <p className="muted text-sm">
                     {[
-                      "Connect an enabled provider securely.",
-                      "See what's filling your inbox.",
-                      "Check what Organizinbox recommends cleaning.",
-                      runtimeConfig.development ? "Move unwanted email to Trash in a few clicks." : "Cleanup is not available."
+                      "Connect Gmail or Outlook when available and scan the whole inbox. Scanning does not move or delete anything.",
+                      "See Suggested, Review and Protected messages, and where the clutter comes from.",
+                      "Review suggested sender groups and messages, then choose what you want moved.",
+                      runtimeConfig.development ? "Organizinbox runs final safety checks and moves only approved messages to Trash or Deleted Items." : "Where cleanup is available, Organizinbox runs final safety checks and moves only approved messages to Trash or Deleted Items. Production cleanup is not available yet.",
+                      "Check the result. Use Undo within the displayed deadline if needed, before disconnecting. Or scan again to see what remains."
                     ][index]}
                   </p>
                 </div>
@@ -170,7 +171,8 @@ export default async function HomePage() {
             <div>
               <p className="eyebrow">Pricing</p>
               <h2 className="mt-3 text-3xl font-extrabold text-[var(--navy)]">{pricingConfig.freeScan.label}.</h2>
-              <p className="muted">See what&apos;s filling your inbox before deciding what to clean.</p>
+              <p className="muted">See what&apos;s filling your inbox for free. Cleanup credits start at $10 USD for 10,000 verified moves. Pay once. No subscription. Credits don&apos;t expire.</p>
+              <Link className="focus-ring font-bold underline" href="/pricing">Compare one-time credit packs</Link>
             </div>
           </div>
         </section>

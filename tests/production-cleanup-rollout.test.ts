@@ -31,7 +31,7 @@ const configured = {
   GMAIL_PRODUCTION_ENABLED: "true", MICROSOFT_PRODUCTION_ENABLED: "true", CLEANUP_WORKFLOW_ENABLED: "true",
   GMAIL_PRODUCTION_CLEANUP_ENABLED: "true", MICROSOFT_PRODUCTION_CLEANUP_ENABLED: "true",
   STRIPE_BILLING_MODE: "test", STRIPE_SECRET_KEY: "sk_test_fixture", STRIPE_WEBHOOK_SECRET: "whsec_fixture",
-  STRIPE_SUBSCRIPTION_PRICE_ID: "price_fixture"
+  STRIPE_PRICE_10000_CREDITS: "price_small", STRIPE_PRICE_50000_CREDITS: "price_medium", STRIPE_PRICE_100000_CREDITS: "price_large"
 };
 const connection = { id: "connection", userId: "owner", encryptedAccessToken: "encrypted", encryptedRefreshToken: "encrypted",
   encryptedAccountEmail: "encrypted", disconnectedAt: null, scope: "https://mail.google.com/ Mail.ReadWrite" };
@@ -69,7 +69,7 @@ describe("production cleanup rollout authorization", () => {
     const result = await call(provider, "start", { paidAccess: true, userId: "attacker" });
     expect(result.status).toBe(402);
     expect(await result.json()).toMatchObject({ code: "PAID_ACCESS_REQUIRED", href: "/app/account" });
-    expect(mocks.paid).toHaveBeenCalledExactlyOnceWith("owner");
+    expect(mocks.paid).toHaveBeenCalledExactlyOnceWith("owner", undefined);
     expect(mocks.start).not.toHaveBeenCalled();
   });
   it.each(["gmail", "microsoft"])("keeps a paid %s user blocked while its cleanup gate is off", async (provider) => {

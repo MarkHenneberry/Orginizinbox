@@ -2,7 +2,7 @@ import type { InboxReport } from "@/lib/domain/types";
 
 export function ReportPreview({ report }: { report: InboxReport }) {
   return (
-    <div className="panel p-5 shadow-sm">
+    <div className="report-preview panel p-5">
       <div className="flex items-center justify-between gap-4 border-b border-[var(--line)] pb-4">
         <div>
           <p className="eyebrow">Fixture report</p>
@@ -10,7 +10,7 @@ export function ReportPreview({ report }: { report: InboxReport }) {
         </div>
         <span className="badge">Demo data</span>
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+      <div className="mt-5 grid grid-cols-2 gap-x-5 gap-y-1">
         <Metric label="Emails" value={report.totals.messages.toLocaleString()} />
         <Metric label="You may want to clean" value={report.totals.cleanupCandidates.toLocaleString()} />
         <Metric label="Review" value={report.totals.reviewMessages.toLocaleString()} />
@@ -36,7 +36,7 @@ export function ReportPreview({ report }: { report: InboxReport }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-[var(--soft)] p-4">
+    <div className="preview-metric">
       <p className="muted m-0 text-sm">{label}</p>
       <p className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{value}</p>
     </div>

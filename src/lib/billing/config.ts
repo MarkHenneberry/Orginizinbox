@@ -1,4 +1,5 @@
 import "server-only";
+import { creditPacks, type CreditPack } from "@/lib/billing/packs";
 
 export const stripeApiVersion = "2026-08-26.dahlia" as const;
 
@@ -7,9 +8,10 @@ export function resolveBillingConfig(input: Record<string, string | undefined>) 
   if (mode !== "test" && mode !== "live") return null;
   const secretKey = input.STRIPE_SECRET_KEY ?? "";
   const webhookSecret = input.STRIPE_WEBHOOK_SECRET ?? "";
-  const priceId = input.STRIPE_SUBSCRIPTION_PRICE_ID ?? "";
+  const prices = Object.fromEntries(Object.entries(creditPacks).map(([key, pack]) => [key, input[pack.env] ?? ""])) as Record<CreditPack, string>;
   if (!new RegExp(`^sk_${mode}_[A-Za-z0-9]+$`).test(secretKey) ||
-      !/^whsec_[A-Za-z0-9]+$/.test(webhookSecret) || !/^price_[A-Za-z0-9]+$/.test(priceId) || !input.DATABASE_URL) return null;
+      !/^whsec_[A-Za-z0-9]+$/.test(webhookSecret) || !Object.values(prices).every((id) => /^price_[A-Za-z0-9]+$/.test(id)) ||
+      new Set(Object.values(prices)).size !== 3 || !input.DATABASE_URL) return null;
   try {
     const database = new URL(input.DATABASE_URL ?? "");
     if (!["postgres:", "postgresql:", "prisma:", "prisma+postgres:"].includes(database.protocol) || !database.hostname) return null;
@@ -22,7 +24,7 @@ export function resolveBillingConfig(input: Record<string, string | undefined>) 
     if (url.protocol !== "https:" && !(mode === "test" && input.NODE_ENV !== "production" &&
         url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) return null;
     if (mode === "live" && input.NODE_ENV !== "production") return null;
-    return { secretKey, webhookSecret, priceId, origin: url.origin, livemode: mode === "live",
+    return { secretKey, webhookSecret, prices, origin: url.origin, livemode: mode === "live",
       checkoutEnabled: input.STRIPE_BILLING_ENABLED === "true" };
   } catch { return null; }
 }

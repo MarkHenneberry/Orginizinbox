@@ -52,8 +52,9 @@ describe("shared production cleanup presentation", () => {
     for (const provider of ["gmail", "microsoft"] as const) {
       const html = render(provider, access);
       expect(html).not.toMatch(/Check 500|Select sender groups|Move up to|402|503/);
-      if (access === "upgrade") expect(html).toContain(">Upgrade</a>");
-      if (access === "past_due" || access === "inactive") expect(html).toContain(">Manage billing</a>");
+      if (access === "upgrade") expect(html).toContain(">Buy credits</a>");
+      if (access === "past_due") expect(html).toContain(">Manage billing</a>");
+      if (access === "inactive") expect(html).toContain(">View credits</a>");
       if (access === "unavailable") expect(html).toContain("temporarily unavailable");
     }
   });

@@ -104,6 +104,19 @@ describe("four useful existing SEO pages", () => {
     const html = renderToStaticMarkup(createElement(MarketingInfoContent, { page,
       primaryCta: { href: "/connect", label: "View provider availability" } }));
     expect(html).toContain("<ol");
+    const steps = cleanupGuides[slug].steps;
+    expect(steps).toHaveLength(5);
+    for (const [index, label] of ["Scan your inbox.", "Review your Inbox Report.", "Choose what to clean.", "Confirm cleanup.", "Review the result."].entries()) {
+      expect(steps[index].startsWith(label)).toBe(true);
+      expect(html).toContain(label);
+    }
+    expect(steps[0]).toContain("scan the whole inbox");
+    expect(steps[0]).toContain("Scanning does not move or delete anything");
+    expect(steps[1]).toContain("Suggested, Review and Protected");
+    expect(steps[3]).toContain("final safety checks and moves only approved messages");
+    expect(steps[3]).toContain(slug === "outlook-cleaner" ? "Move to Deleted Items" : "Move to Trash");
+    expect(steps[4]).toContain("displayed deadline");
+    expect(html).not.toMatch(/Start with the clutter|Choose one area|Start with a date search|steps work directly in Gmail|sender-first|from:newsletter@example/);
     expect(html).toContain("Production cleanup is not available yet");
     expect(html).toContain("temporarily in encrypted form");
     expect(html).toContain("configured window is 15 minutes");

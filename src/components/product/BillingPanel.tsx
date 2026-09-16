@@ -1,56 +1,41 @@
 import Link from "next/link";
 import { BillingActions } from "@/components/product/BillingActions";
 import { getBillingConfig } from "@/lib/billing/config";
-import { deriveEntitlement } from "@/lib/billing/entitlements";
+import { creditOwner, creditSnapshot } from "@/lib/billing/credits";
 import { getSession } from "@/lib/server/session";
 import { prisma } from "@/lib/server/db";
-import { createStripeClient } from "@/lib/billing/stripe";
+import { runtimeConfig } from "@/lib/config";
 import { StripeBillingService } from "@/lib/billing/service";
+import { createStripeClient } from "@/lib/billing/stripe";
 
-const labels = { free: "Free / no paid access", active: "Active paid subscription", past_due: "Past due / paid access inactive",
-  inactive: "Paid access inactive", cancelled_active: "Cancelled / paid access until period end" };
-
-async function loadBillingPanel() {
+async function load() {
   const config = getBillingConfig();
-  if (!config) return { mode: "unavailable" as const };
-  try {
-    const session = await getSession();
-    if (!session) return { mode: "signed-out" as const };
-    let account;
-    let verified = true;
-    try {
-      account = await new StripeBillingService(prisma, createStripeClient(), config).reconcile(session.userId);
-    } catch {
-      verified = false;
-      account = await prisma.billingAccount.findUnique({ where: { userId: session.userId } });
-    }
-    const entitlement = deriveEntitlement(account, config.priceId, config.livemode);
-    const sameMode = !account?.stripeCustomerId || account.livemode === config.livemode;
-    const hasSubscription = account?.stripeSubscriptionId && !["canceled", "incomplete_expired"].includes(account.subscriptionStatus);
-    return { mode: "ready" as const, entitlement, sameMode, verified, livemode: config.livemode,
-      syncedAt: account?.syncedAt?.toISOString() ?? null,
-      canSubscribe: verified && config.checkoutEnabled && !hasSubscription,
-      canManage: Boolean(account?.stripeCustomerId) };
-  } catch { return { mode: "unavailable" as const }; }
+  if (!config) return null;
+  const session = await getSession();
+  if (!session) return null;
+  const owner = await creditOwner(prisma, session.userId);
+  const account = await new StripeBillingService(prisma, createStripeClient(), config).reconcile(owner);
+  const sameMode = !account?.stripeCustomerId || account.livemode === config.livemode;
+  return { ...await creditSnapshot(prisma, owner), canBuy: sameMode && config.checkoutEnabled && !account?.stripeSubscriptionId,
+    needsReview: !sameMode || Boolean(account?.stripeSubscriptionId), linked: await prisma.user.count({ where: { creditOwnerId: owner } }),
+    canRefresh: sameMode && Boolean(account?.stripeCustomerId), livemode: config.livemode };
 }
 
 export async function BillingPanel() {
-  const state = await loadBillingPanel();
-  return <section className="mt-8 border-t border-[var(--line)] py-6">
-    <h2 className="m-0 text-2xl font-bold">Billing</h2>
-    <p className="muted mt-3">Your subscription provides paid access where cleanup is available for your inbox.</p>
-    {state.mode === "unavailable" ? <p className="muted">Billing is temporarily unavailable.</p> : null}
-    {state.mode === "signed-out" ? <Link className="btn btn-secondary focus-ring mt-3" href="/connect">Sign in to manage billing</Link> : null}
-    {state.mode === "ready" ? <>
-      <p className="mt-3 font-bold">{state.verified ? labels[state.entitlement.state] : "Billing access could not be verified"}</p>
-      {!state.verified ? <p className="muted text-sm">Wait two minutes, then refresh billing status. You can still manage your subscription.</p>
-        : !state.entitlement.paidAccess ? <p className="muted text-sm">{state.canSubscribe ? "Upgrade in Account for paid access." : state.canManage ? "Manage billing to review your subscription or payment status." : "New subscriptions are not available yet."}</p> : null}
-      {state.entitlement.periodEnd ? <p className="muted text-sm">Current period ends: {new Date(state.entitlement.periodEnd).toLocaleDateString("en-US", { timeZone: "UTC", dateStyle: "medium" })} (UTC)</p> : null}
+  const state = await load().catch(() => null);
+  return <section className="account-billing mt-8 border-t border-[var(--line)] py-6">
+    <h2 className="m-0 text-2xl font-bold">Cleanup credits</h2>
+    <p className="muted mt-3">Pay once. No subscription. Credits don&apos;t expire.</p>
+    {state ? <>
+      <dl className="credit-balances mt-4">{[["Available", state.available], ["Reserved for active cleanup", state.reserved], ["Total balance", state.balance]].map(([label, value]) =>
+        <div key={label}><dt className="muted text-sm">{label}</dt><dd className="m-0 text-2xl font-bold">{Number(value).toLocaleString("en-US")}</dd></div>)}</dl>
+      <p className="muted mt-4">One credit is spent only when an email is verified as moved. Verified Undo returns the credit. Reserved credits are not spent.</p>
+      {state.needsReview ? <p role="alert">Your previous billing arrangement needs review. Contact support before purchasing credits.</p> : null}
+      {state.balance < 0 ? <p role="alert">A refunded or disputed purchase needs attention before starting more cleanup.</p> : null}
+      {!state.canBuy ? <p className="muted">New credit purchases are currently unavailable.</p> : null}
       {process.env.NODE_ENV !== "production" && !state.livemode ? <p className="muted text-sm">Test billing. No live payment.</p> : null}
-      {state.syncedAt ? <p className="muted text-sm">Last billing check: {new Date(state.syncedAt).toLocaleString("en-US", { timeZone: "UTC" })} (UTC)</p> : null}
-      {!state.sameMode ? <p className="muted text-sm">Billing mode changed. Contact support.</p> : <BillingActions
-        canSubscribe={state.canSubscribe} canManage={state.canManage} canRefresh={state.canManage} />}
-      <p className="muted mt-3 text-sm">Subscription price and billing interval are shown in Stripe before payment. Access updates after payment confirmation.</p>
-    </> : null}
+      <BillingActions canBuy={state.canBuy} canRefresh={state.canRefresh} gmail={runtimeConfig.gmailAvailable} microsoft={runtimeConfig.microsoftAvailable} />
+      <p className="muted text-sm">{state.linked + 1} inbox {state.linked ? "identities share" : "identity uses"} this credit balance. Link another inbox before buying credits there. One inbox is active at a time; reconnect a linked inbox to use its report.</p>
+    </> : <p className="muted">Credit purchases are temporarily unavailable. <Link href="/connect">Connect an available inbox</Link> to get started.</p>}
   </section>;
 }

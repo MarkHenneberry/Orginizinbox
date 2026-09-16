@@ -19,7 +19,7 @@ export default async function ProductLayout({ children }: { children: React.Reac
   return (
     <div className="min-h-screen bg-[var(--background)]">
       <header className="border-b border-[var(--line)] bg-white">
-        <div className="container flex min-h-20 flex-wrap items-center justify-between gap-4">
+        <div className="app-header-inner container flex min-h-20 flex-wrap items-center justify-between gap-4">
           <Link href="/" aria-label="Organizinbox home" className="focus-ring flex items-center gap-3 rounded-md font-extrabold text-[var(--navy)]">
             <Image src={siteConfig.logoPath} alt="Organizinbox" width={40} height={40} priority />
             <span>Organizinbox</span>

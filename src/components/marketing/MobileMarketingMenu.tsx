@@ -12,7 +12,7 @@ export function MobileMarketingMenu({ links, cta }: { links: MarketingNavLink[];
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="md:hidden">
+    <div className="lg:hidden">
       <button
         aria-controls="mobile-marketing-navigation"
         aria-expanded={open}

@@ -525,8 +525,8 @@ export function GmailCleanupClient({
     <section
       aria-busy={busy}
       className={showFrozenSenderContext || !reviewStarted
-        ? "mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]"
-        : "mt-6 max-w-2xl"}
+        ? "cleanup-workspace mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]"
+        : "cleanup-workspace mt-6 max-w-2xl"}
     >
       {!reviewStarted ? <div className="panel overflow-hidden">
         <div className="border-b border-[var(--line)] p-5">
@@ -591,13 +591,10 @@ export function GmailCleanupClient({
         </div>
 
         <div aria-label="Sender groups" className="focus-ring lg:max-h-[calc(100vh-18rem)] lg:min-h-[360px] lg:overflow-y-auto" tabIndex={0}>
-          <div className="hidden grid-cols-[minmax(180px,1fr)_minmax(150px,190px)_repeat(4,70px)] gap-3 border-b border-[var(--line)] bg-[var(--surface-subtle)] px-5 py-2 text-xs font-bold text-[var(--navy)] md:grid">
-            <span>Sender</span><span>Recommendation</span><span className="text-right">Total</span><span className="text-right">Suggested</span><span className="text-right">Review</span><span className="text-right">Protected</span>
-          </div>
           {visibleGroups.length ? (
             visibleGroups.map((group) => (
               <label
-                className={`grid gap-3 border-b border-[var(--line)] px-5 py-4 last:border-b-0 md:grid-cols-[minmax(180px,1fr)_minmax(150px,190px)_repeat(4,70px)] md:items-center ${
+                className={`cleanup-row grid gap-3 border-b border-[var(--line)] px-5 py-4 last:border-b-0 ${
                   group.eligible ? "cursor-pointer hover:bg-sky-50/50" : "cursor-not-allowed bg-neutral-50 text-neutral-500"
                 }`}
                 key={group.index}
@@ -857,7 +854,7 @@ function OutlookCleanupWorkspace({
                 : "Cleanup result";
 
   return (
-    <section aria-busy={working} className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+    <section aria-busy={working} className="cleanup-workspace mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
       <aside className="panel order-1 p-5 lg:order-2 lg:sticky lg:top-24">
         <p className="eyebrow m-0">Up to {job.requested.toLocaleString()} Outlook messages</p>
         <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{heading}</h2>
@@ -1045,7 +1042,7 @@ function ScalableCleanupWorkspace({
   const statusCopy = scalableStatusCopy(job, developmentMode);
 
   return (
-    <section aria-busy={working} className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+    <section aria-busy={working} className="cleanup-workspace mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
       <aside className="panel order-1 p-5 lg:order-2 lg:sticky lg:top-24">
         <div aria-live="polite">
           <p className="eyebrow m-0">{job.requestedCount.toLocaleString()}{developmentMode ? "-message development job" : " messages"}</p>
@@ -1303,7 +1300,7 @@ function FrozenSenderContext({
     <section aria-label={sessionAdjusted ? "Updated sender context" : "Frozen sender context"} className="order-2 lg:order-1">
       <div className="panel hidden overflow-hidden lg:block">
         <FrozenSenderSummary adjustedReportSuggested={adjustedReportSuggested} job={job} sessionAdjusted={sessionAdjusted} />
-        <div className="grid grid-cols-[minmax(180px,1fr)_minmax(150px,190px)_repeat(3,70px)] gap-3 border-b border-[var(--line)] bg-[var(--surface-subtle)] px-5 py-2 text-xs font-bold text-[var(--navy)]">
+        <div className="frozen-heading-row grid gap-3 border-b border-[var(--line)] bg-[var(--surface-subtle)] px-5 py-2 text-xs font-bold text-[var(--navy)]">
           <span>Sender</span>
           <span>Recommendation</span>
           <span className="text-right">Suggested</span>
@@ -1379,7 +1376,7 @@ function FrozenSenderRows({
     >
       {groups.map((group) => (
         <li
-          className="grid gap-3 border-b border-[var(--line)] px-5 py-4 last:border-b-0 lg:grid-cols-[minmax(180px,1fr)_minmax(150px,190px)_repeat(3,70px)] lg:items-center"
+          className="frozen-row grid gap-3 border-b border-[var(--line)] px-5 py-4 last:border-b-0 lg:items-center"
           key={group.index}
         >
           <span className="min-w-0">
@@ -1443,7 +1440,7 @@ function recommendationBadgeClass(group: CleanupSenderGroup) {
 }
 
 function Metric({ label, value, strong = false }: { label: string; value: number; strong?: boolean }) {
-  return <span className={`flex justify-between gap-3 text-sm md:block md:text-right ${strong ? "font-extrabold text-[var(--navy)]" : ""}`}><span className="muted md:hidden">{label}</span>{value.toLocaleString()}</span>;
+  return <span className={`cleanup-metric flex justify-between gap-1 text-sm ${strong ? "font-extrabold text-[var(--navy)]" : ""}`}><span className="muted">{label}</span>{value.toLocaleString()}</span>;
 }
 
 function PreviewAccounting({ job }: { job: GmailCleanupJobView }) {
@@ -1651,7 +1648,7 @@ async function cleanupResponse(response: Response, development: boolean): Promis
   return {
     job: body.job?.ui,
     error: response.ok ? undefined : response.status === 402
-      ? "Your paid access needs attention. Open Account to upgrade or manage billing."
+      ? "Check your available cleanup credits in Account before continuing."
       : response.status === 410 ? "This cleanup has expired. Its temporary restoration state is no longer available."
       : "Cleanup could not continue. Check its status before trying again. You can manage your inbox and billing from Account."
   };

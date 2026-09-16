@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyOutlookCleanupTiming } from "@/lib/domain/outlook-cleanup";
 import type { OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store";
+import { accountVerifiedProgress } from "@/lib/billing/credits";
+import { verifiedCreditProgress } from "@/lib/server/gmail-scalable-cleanup-durable-store";
+import { billingFixture } from "./fixtures/credit-billing";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), compareAndSet: vi.fn(), start: vi.fn(), session: vi.fn(),
   claim: vi.fn(), refreshLock: vi.fn(), releaseLock: vi.fn(), move: vi.fn(), aggregate: vi.fn(), safety: vi.fn(),
@@ -82,6 +85,42 @@ beforeEach(() => {
     inputs.map(({ messageId }) => ({ outcome: "success", messageId: `moved-${messageId}` })));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+describe("credit accounting through actual Outlook worker recovery", () => {
+  it("charges only verified targets and returns only verified recovery credits across worker re-entry", async () => {
+    const financial = billingFixture(3);
+    Object.assign(job, { creditBilling: true });
+    job.payload.confirmedAt = Date.now();
+    job.view.status = "running";
+    job.view.movedVerified = 0; job.view.failed = 0; job.view.uncertain = 0;
+    job.payload.selectedSenders = [{ groupIndex: 0, senderKey: "bulk@example.test" }];
+    job.payload.targets = [0, 1, 2].map((index) => ({ originalMessageId: `original-${index}`, groupIndex: 0, state: "frozen" }));
+    mocks.compareAndSet.mockImplementation(async (_userId, _id, version, update) => {
+      if (version !== job.version) return undefined;
+      const next = update(structuredClone(job)) as OutlookCleanupStoredJob;
+      const progress = verifiedCreditProgress(next);
+      if (progress) await financial.client.$transaction((tx) => accountVerifiedProgress(tx, next.userId, next.view.id, progress));
+      job = { ...next, version: version + 1 };
+      return structuredClone(job);
+    });
+    mocks.move.mockResolvedValueOnce([{ outcome: "success", messageId: "exact-returned" }, { outcome: "uncertain" }, { outcome: "failed" }]);
+    await advanceOutlookCleanupJob("same-job", "cleanup");
+    expect(job.view.movedVerified).toBe(1);
+    expect(financial.row.creditBalance).toBe(2);
+    expect(job.view.uncertain).toBeGreaterThan(0);
+    await advanceOutlookCleanupJob("same-job", "cleanup");
+    expect(mocks.move).toHaveBeenCalledTimes(1);
+    await undoOutlookCleanup("same-job");
+    await advanceOutlookCleanupJob("same-job", "undo");
+    expect(mocks.move).toHaveBeenLastCalledWith([{ messageId: "exact-returned", destinationFolderId: "inbox" }]);
+    expect(financial.row.creditBalance).toBe(3);
+    await advanceOutlookCleanupJob("same-job", "undo");
+    expect(financial.row.creditBalance).toBe(3);
+    expect([...financial.entries.values()].map((entry) => entry.amount)).toEqual([-1, 1]);
+    expect(job.view.status).not.toBe("undo_complete");
+    expect(JSON.stringify([...financial.entries.values()])).not.toMatch(/original-|exact-returned|folder|inbox|sender/);
+  });
+});
 
 function productionRollback() {
   const env = { NODE_ENV: "production", NEXT_PUBLIC_APP_URL: "https://example.test", DATABASE_URL: "postgresql://localhost/fixture",

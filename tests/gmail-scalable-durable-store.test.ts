@@ -29,6 +29,8 @@ import {
   type GmailScalableWorkflowOperationExecutor
 } from "@/lib/server/gmail-scalable-workflow-coordinator";
 import { GmailScalableProviderWorkflowExecutor } from "@/lib/server/gmail-scalable-workflow-executor";
+import { accountVerifiedProgress } from "@/lib/billing/credits";
+import { billingFixture } from "./fixtures/credit-billing";
 
 const key = Buffer.alloc(32, 7);
 const codec = createCleanupJobStateCodec({
@@ -37,6 +39,34 @@ const codec = createCleanupJobStateCodec({
 });
 
 describe("durable scalable cleanup Workflow boundary", () => {
+  it("reserves before dispatch and spends once after exact verification across process replacement", async () => {
+    const financial = billingFixture(1);
+    const repository = new FakeCleanupJobStateRepository();
+    const replace = repository.replaceIfVersion.bind(repository);
+    repository.replaceIfVersion = async (input: Parameters<CleanupJobStateRepository["replaceIfVersion"]>[0]) => {
+      const row = await repository.find(input.jobId);
+      if (!row || row.version !== input.expectedVersion) return false;
+      return financial.client.$transaction(async (tx) => {
+        if (input.creditProgress) await accountVerifiedProgress(tx, input.userId, input.jobId, input.creditProgress);
+        return replace(input);
+      });
+    };
+    const store = new PrismaGmailScalableCleanupStore(repository, codec);
+    const job = storedJob("credit-job", "owner");
+    Object.assign(job, { creditBilling: true }); job.payload.confirmedAt = Date.now();
+    await store.create(job);
+    const provider = new FakeDurableProvider();
+    const executor = new GmailScalableProviderWorkflowExecutor(async () => provider);
+    await new GmailScalableWorkflowCoordinator(store, executor).advance("credit-job", "cleanup");
+    expect(financial.row.creditBalance).toBe(1);
+    expect(financial.jobs.get("credit-job")?.requested).toBe(1);
+    const replacement = new GmailScalableWorkflowCoordinator(new PrismaGmailScalableCleanupStore(repository, codec), executor);
+    await replacement.advance("credit-job", "cleanup");
+    expect(financial.row.creditBalance).toBe(0);
+    await replacement.advance("credit-job", "cleanup");
+    expect(financial.row.creditBalance).toBe(0);
+    expect(financial.entries.size).toBe(1); expect(provider.trashMutations).toBe(1);
+  });
   it("advances two users' cleanup Workflows concurrently without sharing locks or state", async () => {
     const repository = new FakeCleanupJobStateRepository();
     const store = new PrismaGmailScalableCleanupStore(repository, codec);

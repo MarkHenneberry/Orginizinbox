@@ -22,7 +22,7 @@ export function DataAccessContent({ appContext = false, primaryCta }: { appConte
   const cta = primaryCta ?? { href: "/connect", label: "Clean my inbox" };
 
   return (
-    <main>
+    <main className="reading-content">
       <section className="section">
         <div className="container">
           <p className="eyebrow">Data access</p>
@@ -44,12 +44,12 @@ export function DataAccessContent({ appContext = false, primaryCta }: { appConte
         <div className="container">
           <div className="panel overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+              <table className="capability-table w-full min-w-[760px] border-collapse text-left text-sm" aria-label="Data access capabilities">
                 <thead className="bg-[var(--soft)] text-[var(--navy)]">
                   <tr>
-                    <th className="p-4">Capability</th>
-                    <th className="p-4">Organizinbox uses it?</th>
-                    <th className="p-4">Notes</th>
+                    <th scope="col" className="p-4">Capability</th>
+                    <th scope="col" className="p-4">Organizinbox uses it?</th>
+                    <th scope="col" className="p-4">Notes</th>
                   </tr>
                 </thead>
                 <tbody>

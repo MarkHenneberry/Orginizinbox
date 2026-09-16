@@ -31,10 +31,15 @@ describe("product copy and contextual navigation", () => {
     expect(home).toMatch(/See what&apos;s clogging your inbox/);
     expect(home).toMatch(/finds the senders and old email taking over your inbox/);
     expect(home).toMatch(/Organizinbox never permanently deletes email/);
-    expect(home).toMatch(/Connect an enabled provider securely/);
-    expect(home).toMatch(/See what&apos;s filling your inbox/);
-    expect(home).toMatch(/Check what Organizinbox recommends cleaning/);
-    expect(home).toMatch(/Move unwanted email to Trash in a few clicks/);
+    expect(home).toMatch(/scan the whole inbox/);
+    expect(home).toMatch(/Scanning does not move or delete anything/);
+    expect(home).toMatch(/Suggested, Review and Protected/);
+    expect(home).toMatch(/final safety checks and moves only approved messages to Trash or Deleted Items/);
+    expect(home).toMatch(/Use Undo within the displayed deadline/);
+    const steps = ["Scan your inbox", "Review your Inbox Report", "Choose what to clean", "Confirm cleanup", "Review the result"];
+    const positions = steps.map((step) => home.indexOf(`"${step}"`));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(home).toMatch(/When we&apos;re unsure, we leave it alone/);
   });
 

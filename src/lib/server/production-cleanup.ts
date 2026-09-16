@@ -42,7 +42,7 @@ export async function requireProductionCleanupAccess(input: {
 }) {
   if (process.env.NODE_ENV !== "production") return;
   assertProductionCleanupInfrastructure(input.provider, input.access);
-  if (input.access === "forward") await requirePaidCleanupEntitlement(input.userId);
+  if (input.access === "forward") await requirePaidCleanupEntitlement(input.userId, input.jobId);
   const connection = await prisma.providerConnection.findFirst({ where: {
     id: input.providerConnectionId, userId: input.userId, provider: input.provider, disconnectedAt: null
   } });

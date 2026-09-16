@@ -114,7 +114,7 @@ function MailboxScanClient({
   }
 
   return (
-    <section aria-busy={working} className="panel mt-6 p-6">
+    <section aria-busy={working} className="mt-6 border-t border-[var(--line)] py-6">
       {pollError ? <p role="alert">Status could not be refreshed. Retrying...</p> : null}
       <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">
         {isRunning
@@ -168,7 +168,7 @@ function MailboxScanClient({
       ) : null}
 
       {!outlook ? (
-        <div className="mt-5 h-3 overflow-hidden rounded-full bg-[var(--soft)]">
+        <div role="progressbar" aria-label="Inbox scan progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="mt-5 h-2 overflow-hidden rounded-full bg-[var(--line)]">
           <div className="h-full bg-[var(--teal)] transition-all" style={{ width: `${percent}%` }} />
         </div>
       ) : null}

@@ -198,6 +198,14 @@ The standard cleanup reassurance is:
 
 User-facing copy must use short sentences, plain language and concrete verbs. Lead with what the user gets. Keep paragraphs short. Remove repeated reassurance and implementation detail from normal product surfaces. Terms such as IMAP, OAuth state, provider connection, API identifiers, metadata pipeline, worker architecture and token introspection belong in implementation or narrowly relevant technical documentation, not ordinary product copy.
 
+Guides, help and landing pages describe Organizinbox as a whole-inbox, scan-first product, not a manual Gmail or Outlook search tutorial. Users do not choose senders, dates or an area of clutter before scanning. The customer journey is:
+
+1. **Scan your inbox.** Connect Gmail or Outlook and scan the whole inbox. Scanning does not move or delete anything.
+2. **Review your Inbox Report.** See messages grouped into Suggested, Review and Protected, and where the clutter comes from.
+3. **Choose what to clean.** Review suggested sender groups and messages, then choose what you want moved.
+4. **Confirm cleanup.** Where cleanup is available, Organizinbox runs final safety checks and moves only approved messages to Gmail Trash or Outlook Deleted Items.
+5. **Review the result.** Use Undo within the displayed deadline if needed, or scan again to see what remains.
+
 Marketing and SEO pages may use natural search language such as `delete old emails` and `delete thousands of emails`. When describing the actual Organizinbox action, use `Move to Trash` for Gmail and `Move to Deleted Items` for Outlook. Qualify permanent-deletion claims as actions Organizinbox does not perform, not a promise that providers retain mail forever. Cleanup requires explicit confirmation and must not be advertised as currently available when its production gate is off.
 
 Undo UI displays the current job's actual `expiresAt` deadline with a date, time and timezone, not a guessed fixed window. Distinguish Undo, Recovery Undo of only confirmed moved messages, expired Undo, and unavailable Undo. Expiry updates the UI even after terminal polling stops. Undo needs the temporary restoration state and a connected provider; expiry or disconnect can remove that ability, and provider-side recovery is separate and not guaranteed. Warn before Disconnect and Google authorization removal that any remaining Undo/recovery ability is lost. This is presentation only: do not extend expiry, alter server eligibility, retry uncertain targets, or change restore semantics. Retention disclosures use the existing configured durations and explain scheduled deletion and outage/backup caveats.
@@ -1522,85 +1530,45 @@ Any future AI implementation must not silently transmit private mailbox content 
 
 # 33. Pricing Model
 
-Pricing is a hypothesis to validate, not a permanent requirement.
+Organizinbox sells account-level, non-expiring cleanup credits through one-time Stripe Checkout payments. There is no subscription, recurring charge, time-limited pass, or one-inbox reset entitlement.
 
-The following prices remain research hypotheses, not active Stripe offers. The billing foundation now supports one configurable recurring subscription product through `STRIPE_SUBSCRIPTION_PRICE_ID`; no numeric subscription price, tier system, trial or free cleanup quota is established by this implementation. The earlier one-time `Full Inbox Reset` experiment and `STRIPE_PRICE_FULL_RESET_USD` stub do not authorize paid access.
+## Credit Packs
 
-Billing is server-only, default-off through `STRIPE_BILLING_ENABLED`. Test/live mode is explicit through `STRIPE_BILLING_MODE` and must match the API key, price and webhook event. Use hosted Stripe Checkout in subscription mode and the Customer Portal. The signed-in Organizinbox user owns one durable billing account/customer mapping; never map ownership by email, a client-supplied customer ID, price ID, subscription ID or return URL. Repeated checkout attempts reuse a durable attempt and Stripe idempotency key. An unresolved attempt whose Stripe idempotency guarantee has elapsed fails closed instead of risking another subscription.
+- US$10 buys 10,000 cleanup credits.
+- US$15 buys 50,000 cleanup credits.
+- US$20 buys 100,000 cleanup credits.
 
-The entitlement is a durable provider-neutral projection, not a browser flag. It is free without a subscription, active paid only for the configured single recurring price with an active subscription, a paid latest invoice and an unexpired billing period, past due/inactive otherwise, and cancelled-but-active until period end only while the same paid period remains valid. Trials do not grant paid cleanup access. Immediate cancellation revokes access. Every server-side access check enforces period expiry even if a webhook was missed. No checkout success redirect grants access.
+Use three server-only configurable one-time Stripe Price IDs: `STRIPE_PRICE_10000_CREDITS`, `STRIPE_PRICE_50000_CREDITS`, and `STRIPE_PRICE_100000_CREDITS`. Checkout validates the selected pack's currency, amount, one-time price type, quantity and test/live mode. Never accept a price, amount, customer identifier, balance or entitlement from browser state. Purchases accumulate; prices and allowances are the offer, not mailbox-operation limits.
 
-Verify Stripe webhook signatures against the unmodified request body. Handle only `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid` and `invoice.payment_failed`. Reconcile the mapped customer's current subscription state from Stripe rather than trusting delivery order or granting access from an invoice alone. Per-account durable leases fence concurrent reconciliation/checkout; webhook event receipts and entitlement changes commit atomically. Duplicate events are no-ops; failed processing returns a retryable error and does not consume the event. Do not store raw webhook bodies, card data, customer email, secrets or mailbox metadata in billing tables/logs.
+One credit equals one message VERIFIED successfully moved to Gmail Trash or Outlook Deleted Items. Scanning, reviewing, protected messages, safety exclusions, failed moves and uncertain moves consume no credits. Verified successful Undo restores one credit for each corresponding previously debited message. Uncertain or failed Undo does not restore credits. Repeated verification, webhook delivery, confirmation, Workflow re-entry or Undo cannot charge or restore twice.
 
-Account shows entitlement status, period end and subscription/portal actions when configured; pricing may link to that same account action. Checkout and account copy must explicitly disclose that production cleanup remains unavailable. One provider-neutral server boundary checks same-origin requests, validated session ownership and paid entitlement in production before Gmail/Outlook cleanup preview/start/confirmation. Free, inactive, past-due or expired access is denied with an Account billing action; cancelled-but-active access ends at the paid period boundary. The production availability block remains OFF even for paid users, and existing development/worker safety gates remain in force. Development cleanup bypasses billing checks; Undo is not newly paywalled. Provider/OAuth/scan/classifier behavior and mutation safety are unchanged. Billing survives provider disconnect; the existing authentication model still requires reconnecting the same Organizinbox identity to access its account/portal.
+## Durable Accounting
 
-Billing snapshots are fresh for at most five minutes. Account access and production entitlement evaluation reconcile older or never-synced mapped customers from current Stripe state before reporting/granting access. An authenticated same-origin Account refresh can reconcile after a one-minute minimum successful-sync interval, including after returning from Checkout/Portal. Reconciliation uses the existing per-account durable lease, one bounded subscription-list page (maximum 100 subscriptions), an eight-second SDK request timeout and at most one network retry. Concurrent reconciliation cannot publish stale state. Failed reconciliation retains the two-minute lease as a durable retry cooldown, returns a retryable unavailable state, and never falls back to granting access from stale data. Accounts without a Stripe customer remain free without a Stripe request. Webhook processing still reconciles current state and commits its receipt atomically; reconciliation does not consume webhook events. There is no unbounded sweep or new billing job system. A missed cancellation may remain locally visible until the five-minute freshness window ends; paid-period expiry is always enforced immediately.
+Credits belong to an Organizinbox account, not a provider connection, inbox, report or expiring cleanup state. They do not expire on disconnect, report expiry, job expiry or inactivity. They may be used across supported inboxes linked to the same account. Multiple purchases add to the same balance. Never merge accounts by matching an email address or silently share balances between provider identities.
 
-Emit aggregate-only operational billing events for Checkout failures, webhook signature/processing failures, stale/reconciliation-required state, reconciliation success/failure and entitlement denial. Events use fixed allowlisted names/categories only, with no user/customer/subscription/event identifiers, raw exceptions, payment details, webhook payloads, URLs, secrets or mailbox data. Deployment operators must configure log-based alerts and monitor Stripe delivery failures; the application does not silently provision external monitoring.
+Explicit authenticated inbox linking shares an account credit balance without merging provider identities or mailbox state. A same-origin authenticated POST starts a short-lived, single-use linking intent bound to the initiating session generation and chosen provider; the validated OAuth callback authenticates the added inbox. No email-based linking. Linking an independently funded account or a root with existing linked identities is rejected rather than silently transferring payment history. Existing linked identities can reconnect normally and use the same balance; only one inbox is active in the browser at a time. Production credit sales and cleanup remain disabled until this flow and financial migrations have been validated in staging.
 
-Historical initial-model hypotheses:
+Before forward mutation, atomically reserve the maximum credits a confirmed job could consume. Reservations are not spending and must be shown separately from the balance. Concurrent jobs cannot reserve the same credits. Commit monotonic verified-move and verified-restore accounting with the durable job-state CAS in one database transaction. Ledger entries and per-job accounting survive transient mailbox-state deletion and contain only internal account/job/payment references and aggregate counts, never message IDs, subjects, sender addresses, folder IDs or tokens.
 
-## Free Scan
+Release unused reservations after forward work becomes terminal, cancellation, disconnect or final transient-state expiry, without deleting active/non-expired work. Already debited credits are not refunded merely because a job expires or disconnects. Retain idempotency records so late duplicates cannot alter the balance again. Existing exact-target verification and uncertainty rules remain authoritative.
 
-$0
+## Payment Safety
 
-Includes:
+Billing remains server-only and default-off through `STRIPE_BILLING_ENABLED`. Test/live mode remains explicit through `STRIPE_BILLING_MODE`. Use hosted Checkout with `mode: "payment"`; no subscription creation, renewal, saved off-session charging or Customer Portal dependency. A return redirect never grants credits.
 
-- connect inbox
-- complete Inbox Report
-- sender analytics
-- category analytics
-- cleanup recommendations
-- clean up to 500 selected emails
+Durable purchase attempts and Stripe idempotency keys prevent duplicate charges. Grant credits only for a server-verified paid Checkout purchase with the exact supported price/amount/currency and account ownership. Payment fulfillment and its idempotency record commit atomically. Signed webhooks may arrive repeatedly or out of order; reconcile authoritative current Stripe payment state rather than trusting event order. Delayed/failed payment grants nothing until success is verified. Refund/dispute handling must not leave refunded purchases spendable; record reversals idempotently and prevent further spending when net available credits are insufficient. Do not invent or promise a customer refund guarantee.
 
-The free product needs to produce the "aha" moment.
+Preserve bounded reconciliation for missed delivery, durable billing leases and sanitized operational events. No raw webhook bodies, card data, customer email, provider data, secrets or raw exception content in database logs. Existing subscription records require an explicit operational migration review; never convert an old recurring charge into credits automatically or assume changing application code cancels billing in Stripe.
 
-Example:
+## Product and Rollout
 
-> **We found 17,412 emails you probably don't need.**
+The core positioning is: "See what's clogging your inbox. Clean thousands of unwanted emails safely." Supporting copy: "Pay once. No subscription. Credits don't expire." Explain that only verified moves spend credits, verified Undo returns them, and per-job safety limits still apply. Do not promise an exact number of eligible emails, instant completion, unlimited throughput or permanent deletion.
 
-Then sell the action.
+Customers can connect an available provider and inspect a free Inbox Report before paying. Free scanning does not include free cleanup credits. Account displays total balance, reserved/available credits and one-time pack purchase actions; no monthly plans, subscription status, renewals or portal-management UI.
 
-## Full Inbox Reset
+Production cleanup still requires provider availability, valid connection, durable Workflow/database/encryption infrastructure, explicit independent default-off cleanup flags and sufficient server-verified credits. Development cleanup remains unchanged. Existing-job status, verification and eligible Undo/Recovery Undo are not paywalled or disabled by turning off new cleanup. Buying credits cannot bypass rollout gates or authorize uncertain mutations.
 
-Initial experiment:
-
-**US$9.99**
-
-Includes:
-
-- full cleanup for one connected inbox
-- unlimited selected messages during that cleanup session
-- full Inbox Report
-- cleanup history for that session
-
-Test:
-
-$7.99  
-$9.99  
-$14.99
-
-Do not assume the lowest price wins.
-
-## Multiple Inbox Option
-
-Potential:
-
-**US$14.99 to $19.99**
-
-for multiple connected mailboxes.
-
-## Recurring plan
-
-The minimal subscription entitlement foundation described above is now in scope. Recurring mailbox monitoring, additional tiers and complex subscription management remain out of scope.
-
-Possible later:
-
-> **Keep It Clean**
-
-for recurring monitoring.
-
-The research confirms that one-time/no-subscription messaging is commercially relevant but already exists among competitors, so it should support the positioning rather than serve as the main moat.
+Competitor prices inform internal positioning only. Do not publish competitor comparisons, percentage savings, fabricated testimonials or unsupported speed claims. Useful Gmail/Outlook/Hotmail cleanup guides, safety limitations, privacy disclosures and SEO intent remain intact.
 
 ---
 
@@ -2311,7 +2279,7 @@ Attachment retrieval:
 No
 
 Subscription required:
-No, if final pricing remains one-time
+No. Cleanup uses one-time, non-expiring account credits, not a subscription.
 
 Disconnect available:
 Yes
@@ -2660,9 +2628,9 @@ Production always forces fixture mode off, including when `ORGANIZINBOX_FIXTURE_
 
 Public CTAs and provider pages resolve the same availability as the server. Disabled providers show an unavailable state rather than OAuth or scan actions; connected users see maintenance without destroying their connection or encrypted report. Production cleanup remains disabled by default, even when scanning is enabled, and additionally requires the independent cleanup authorization and UI policy below. Development retains its existing explicit provider and test gates. The production flags supersede older unconditional Gmail availability and development-only Microsoft connection guidance in this specification; they do not change OAuth scopes, classifier behavior or provider mutation semantics. Vercel's compiled Workflow integration and deployed retention Cron must be operational before enabling production scanning; local configuration validation cannot prove external credentials, migrations, deployment or provider approval are operational.
 
-Production cleanup rollout authorization is independent per provider: `GMAIL_PRODUCTION_CLEANUP_ENABLED` and `MICROSOFT_PRODUCTION_CLEANUP_ENABLED` default to false. Forward cleanup additionally requires that provider's production availability, a valid owning provider connection with the existing scopes, server-verified active paid entitlement, Prisma-backed durable state, encryption and Cron configuration, and `CLEANUP_WORKFLOW_ENABLED=true`. The Workflow switch is an explicit deployment prerequisite, not proof of external service health. No flags are enabled by this change. `/api/app/cleanup/[provider]/[action]` is the production-only entry point to the existing durable services; `/api/dev/**` stays unavailable even with production cleanup enabled. It returns only ordinary aggregate job progress and presentation fields, never development diagnostics. Existing caps and mutation/verification algorithms are unchanged.
+Production cleanup rollout authorization is independent per provider: `GMAIL_PRODUCTION_CLEANUP_ENABLED` and `MICROSOFT_PRODUCTION_CLEANUP_ENABLED` default to false. Forward cleanup additionally requires that provider's production availability, a valid owning provider connection with the existing scopes, server-verified available cleanup credits (or an existing job's funded reservation), Prisma-backed durable state, encryption and Cron configuration, and `CLEANUP_WORKFLOW_ENABLED=true`. The Workflow switch is an explicit deployment prerequisite, not proof of external service health. No flags are enabled by this change. `/api/app/cleanup/[provider]/[action]` is the production-only entry point to the existing durable services; `/api/dev/**` stays unavailable even with production cleanup enabled. It returns only ordinary aggregate job progress and presentation fields, never development diagnostics. Existing caps and mutation/verification algorithms are unchanged.
 
-The production report and Review Cleanup page reuse the existing shared cleanup workspace. Server-resolved availability and entitlement determine whether Review Cleanup, Upgrade, Manage billing, or temporary-unavailability copy is shown. Disabled providers never offer new cleanup; an existing owned job remains reachable from `/app/cleanup` independently of report expiry and new-cleanup availability. Recovery is never presented as requiring payment. Ready-job confirmation is hidden when new cleanup is disabled or paid access is lost, while status, verification, Undo and Recovery Undo remain visible through the existing deadline. Open workspaces refresh their presentation permission without changing server authorization. Only the supported production 250/500 Gmail sizes and the Outlook 500-message option are displayed; smaller Outlook debug sizes, all benchmark/proof controls, classifier development panels, copyable diagnostics and internal implementation wording are absent. Production errors use customer-facing retry, account or billing guidance rather than HTTP codes. Destination wording remains Trash for Gmail and Deleted Items for Outlook. Development retains its current endpoints, sizes and diagnostic tools.
+The production report and Review Cleanup page reuse the existing shared cleanup workspace. Server-resolved availability and entitlement determine whether Review Cleanup, Buy credits, View credits, or temporary-unavailability copy is shown. Disabled providers never offer new cleanup; an existing owned job remains reachable from `/app/cleanup` independently of report expiry and new-cleanup availability. Recovery is never presented as requiring payment. Ready-job confirmation is hidden when new cleanup is disabled or paid access is lost, while status, verification, Undo and Recovery Undo remain visible through the existing deadline. Open workspaces refresh their presentation permission without changing server authorization. Only the supported production 250/500 Gmail sizes and the Outlook 500-message option are displayed; smaller Outlook debug sizes, all benchmark/proof controls, classifier development panels, copyable diagnostics and internal implementation wording are absent. Production errors use customer-facing retry, account or billing guidance rather than HTTP codes. Destination wording remains Trash for Gmail and Deleted Items for Outlook. Development retains its current endpoints, sizes and diagnostic tools.
 
 Rollback disables the affected production cleanup switch, not its provider availability, database, encryption keys, Cron or Workflow infrastructure. New acceptance/confirmation and further forward Workflow units observing the disabled configuration fail closed. An already dispatched batch may finish verification; it cannot be recalled. Workflow runs can remain pinned to an older deployment's configuration, so an environment redeploy is not an instantaneous global kill switch: drain/review old runs as part of rollback. Status, verification and Undo/recovery for an owned, unexpired existing job do not depend on the cleanup enablement switch or continued paid entitlement/Stripe availability. Existing exact-ledger, connection, lease, expiry and uncertainty checks still apply; disabling cleanup never authorizes Undo of uncertain targets or recreates expired/disconnected state. Keep infrastructure and provider credentials available through all outstanding Undo deadlines. Disconnect remains a separate security action that invalidates state. Keep checkout disabled until the paid service is ready to deliver.
 
@@ -2702,7 +2670,7 @@ After a genuinely new or reconnected Google authorization succeeds, the user sho
 
 Normal production/public navigation must not send users into the development Microsoft connection flow. Microsoft connection and scanning remain behind the explicit non-production `MICROSOFT_OAUTH_DEV_ENABLED` boundary. Successful development authorization may show Microsoft connected in the app shell and Account. Only the authenticated app may expose the separately gated 500-message Outlook cleanup validation, and it must not change public provider availability from coming soon.
 
-Pricing remains public and indexable. Its normal product CTA follows the central session-aware scan/app CTA. When billing is explicitly configured, pricing may additionally link to Account's subscription action with clear disclosure that production cleanup is not available; never expose an unauthenticated checkout or promise the historical one-time price as a subscription offer.
+Pricing remains public and indexable. Its normal product CTA follows the central session-aware scan/app CTA. Pricing displays the three one-time credit packs and links to authenticated Account purchases only when sales are available. Availability wording must remain truthful while cleanup or account linking is unavailable.
 
 Authenticated app header final navigation:
 
@@ -2987,7 +2955,7 @@ The MVP is not launch-ready until:
 ### Billing
 
 - free scan works
-- free cleanup allowance enforced
+- free scanning and verified-move credit accounting enforced
 - Stripe checkout works
 - paid entitlement works
 - payment failure handled

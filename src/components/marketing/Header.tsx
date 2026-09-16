@@ -22,14 +22,14 @@ export async function Header() {
           <Image src={siteConfig.logoPath} alt="Organizinbox" width={44} height={44} priority />
           <span>Organizinbox</span>
         </Link>
-        <nav className="hidden items-center gap-6 text-sm font-bold text-[var(--navy)] md:flex" aria-label="Marketing navigation">
+        <nav className="hidden items-center gap-6 text-sm font-bold text-[var(--navy)] lg:flex" aria-label="Marketing navigation">
           {marketingNavLinks.map((link) => (
             <Link className="focus-ring rounded-md px-1 py-2 hover:text-[var(--teal-dark)]" href={link.href} key={link.href}>
               {link.label}
             </Link>
           ))}
         </nav>
-        <div className="hidden md:block">
+        <div className="hidden lg:block">
           <Link href={cta.href} className="btn btn-primary focus-ring">
             {cta.label}
           </Link>

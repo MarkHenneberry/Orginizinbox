@@ -9,7 +9,8 @@ import { POST as outlookConfirm } from "../app/api/dev/outlook-cleanup/confirm/r
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), account: vi.fn(), start: vi.fn(), confirm: vi.fn() }));
 vi.mock("@/lib/server/session", () => ({ getSession: mocks.session }));
-vi.mock("@/lib/server/db", () => ({ prisma: { billingAccount: { findUnique: mocks.account } } }));
+vi.mock("@/lib/server/db", () => ({ prisma: { billingAccount: { findUnique: mocks.account }, user: { findUniqueOrThrow: async () => ({ creditOwnerId: null }) },
+  creditJobAccounting: { findMany: async () => [] } } }));
 vi.mock("@/lib/server/gmail-scalable-cleanup-runner", () => ({ startGmailScalableCleanup: mocks.start, confirmGmailScalableCleanup: mocks.confirm }));
 vi.mock("@/lib/server/gmail-scalable-cleanup-route", () => ({ scalableCleanupResponse: () => new Response(null, { status: 500 }) }));
 vi.mock("@/lib/server/outlook-cleanup", () => ({ startOutlookCleanup: mocks.start, confirmOutlookCleanup: mocks.confirm }));
@@ -22,13 +23,12 @@ const request = (from = origin) => new Request(`${origin}/api/dev/cleanup`, {
   method: "POST", headers: { origin: from }, body: JSON.stringify({ userId: "attacker", paidAccess: true,
     jobId: "fixture-job", confirmation: "MOVE_TO_TRASH", confirmed: true, groupIndices: [0], requestedCount: 5 })
 });
-const active = () => ({ stripeCustomerId: "cus_fixture", stripeSubscriptionId: "sub_fixture", stripePriceId: "price_fixture",
-  subscriptionStatus: "active", latestInvoicePaid: true, livemode: false, currentPeriodEnd: new Date(Date.now() + 60_000), syncedAt: new Date() });
+const active = () => ({ stripeCustomerId: "cus_fixture", creditBalance: 10000, livemode: false, syncedAt: new Date() });
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const env = { NODE_ENV: "production", STRIPE_BILLING_ENABLED: "false", STRIPE_BILLING_MODE: "test", STRIPE_SECRET_KEY: "sk_test_fixture",
-    STRIPE_WEBHOOK_SECRET: "whsec_fixture", STRIPE_SUBSCRIPTION_PRICE_ID: "price_fixture", NEXT_PUBLIC_APP_URL: origin,
+    STRIPE_WEBHOOK_SECRET: "whsec_fixture", STRIPE_PRICE_10000_CREDITS: "price_small", STRIPE_PRICE_50000_CREDITS: "price_medium", STRIPE_PRICE_100000_CREDITS: "price_large", NEXT_PUBLIC_APP_URL: origin,
     DATABASE_URL: "postgresql://localhost/fixture", TOKEN_ENCRYPTION_KEY: "t".repeat(32) };
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
   mocks.session.mockResolvedValue({ userId: "owner" });
@@ -52,23 +52,23 @@ describe("provider-neutral production cleanup billing boundary", () => {
     expect(mocks.start).not.toHaveBeenCalled();
     expect(mocks.confirm).not.toHaveBeenCalled();
   });
-  it.each(["free", "past_due", "unpaid", "canceled", "expired", "wrong-price"])("rejects %s at every Gmail and Outlook entry point", async (state) => {
+  it.each(["free", "empty", "refunded", "wrong-mode"])("rejects %s at every Gmail and Outlook entry point", async (state) => {
     mocks.account.mockResolvedValue(state === "free" ? null : { ...active(),
-      subscriptionStatus: state === "expired" || state === "wrong-price" ? "active" : state,
-      currentPeriodEnd: new Date(state === "expired" ? 0 : Date.now() + 60_000),
-      stripePriceId: state === "wrong-price" ? "price_other" : "price_fixture" });
+      creditBalance: state === "refunded" ? -500 : state === "empty" ? 0 : 10000,
+      livemode: state === "wrong-mode" });
     for (const handler of handlers) {
       const response = await handler(request());
-      expect(response.status).toBe(402);
-      expect(await response.json()).toMatchObject({ code: "PAID_ACCESS_REQUIRED", href: "/app/account", action: state === "free" ? "upgrade" : "manage" });
+      expect(response.status).toBe(state === "wrong-mode" ? 409 : 402);
+      expect(await response.json()).toMatchObject(state === "wrong-mode" ? { code: "BILLING_UNAVAILABLE", href: "/app/account" }
+        : { code: "PAID_ACCESS_REQUIRED", href: "/app/account", action: ["free", "empty"].includes(state) ? "upgrade" : "manage" });
     }
     expect(mocks.start).not.toHaveBeenCalled();
     expect(mocks.confirm).not.toHaveBeenCalled();
   });
-  it("honors cancelled access only before the paid boundary", async () => {
-    mocks.account.mockResolvedValue({ ...active(), cancelAtPeriodEnd: true });
+  it("does not expire credits with an old subscription period", async () => {
+    mocks.account.mockResolvedValue({ ...active(), currentPeriodEnd: new Date(0) });
     expect((await productionCleanupBoundary(request()))?.status).toBe(503);
-    mocks.account.mockResolvedValue({ ...active(), cancelAtPeriodEnd: true, currentPeriodEnd: new Date(0) });
+    mocks.account.mockResolvedValue({ ...active(), creditBalance: 0 });
     expect((await productionCleanupBoundary(request()))?.status).toBe(402);
   });
   it("rejects forged origin, unauthenticated calls and unavailable verification", async () => {

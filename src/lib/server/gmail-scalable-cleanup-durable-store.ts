@@ -1,4 +1,6 @@
 import "server-only";
+import { accountVerifiedProgress, type VerifiedCreditProgress } from "@/lib/billing/credits";
+import type { OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store";
 import { expiredUnlockedStateWhere } from "@/lib/domain/transient-retention";
 import type { CleanupJobState, PrismaClient } from "@prisma/client";
 import { runtimeConfig } from "@/lib/config";
@@ -23,6 +25,7 @@ export type CleanupJobStateRow = Pick<
 >;
 
 export type DurableCleanupJobEnvelope = {
+  creditBilling?: true;
   userId: string;
   version: number;
   view: { id: string; expiresAt: number };
@@ -44,6 +47,7 @@ export type CleanupJobStateRepository = {
     lockOwner?: string;
     encryptedPayload: string;
     expiresAt: Date;
+    creditProgress?: VerifiedCreditProgress;
   }): Promise<boolean>;
   claim(input: { jobId: string; owner: string; now: Date; lockExpiresAt: Date }): Promise<boolean>;
   refreshLock(input: { jobId: string; owner: string; now: Date; lockExpiresAt: Date }): Promise<boolean>;
@@ -137,7 +141,8 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
       now,
       lockOwner,
       encryptedPayload: this.codec.encode(next),
-      expiresAt: new Date(next.view.expiresAt)
+      expiresAt: new Date(next.view.expiresAt),
+      creditProgress: verifiedCreditProgress(next)
     });
     return replaced ? cloneJob(next) : undefined;
   }
@@ -210,9 +215,10 @@ export class PrismaCleanupJobStateRepository implements CleanupJobStateRepositor
     lockOwner?: string;
     encryptedPayload: string;
     expiresAt: Date;
+    creditProgress?: VerifiedCreditProgress;
   }) {
-    const result = await this.client.$transaction((transaction) =>
-      transaction.cleanupJobState.updateMany({
+    const result = await this.client.$transaction(async (transaction) => {
+      const result = await transaction.cleanupJobState.updateMany({
         where: {
           jobId: input.jobId,
           userId: input.userId,
@@ -227,7 +233,12 @@ export class PrismaCleanupJobStateRepository implements CleanupJobStateRepositor
           expiresAt: input.expiresAt,
           version: { increment: 1 }
         }
-      }),
+      });
+      if (result.count === 1 && input.creditProgress) {
+        await accountVerifiedProgress(transaction, input.userId, input.jobId, input.creditProgress);
+      }
+      return result;
+    },
       { isolationLevel: "Serializable" }
     );
     return result.count === 1;
@@ -319,7 +330,7 @@ export function prepareCleanupJobState<TJob extends DurableCleanupJobEnvelope>(
   job: TJob,
   codec: CleanupJobStateCodec<TJob> = createCleanupJobStateCodec<TJob>()
 ) {
-  const stored = normalizeJob(job, 1);
+  const stored = normalizeJob({ ...job, ...(process.env.NODE_ENV === "production" ? { creditBilling: true as const } : {}) }, 1);
   return {
     job: cloneJob(stored),
     data: {
@@ -393,4 +404,20 @@ function normalizeJob<TJob extends DurableCleanupJobEnvelope>(job: TJob, version
 
 function cloneJob<TJob extends DurableCleanupJobEnvelope>(job: TJob): TJob {
   return structuredClone(job);
+}
+
+export function verifiedCreditProgress(envelope: DurableCleanupJobEnvelope): VerifiedCreditProgress | undefined {
+  if (!envelope.creditBilling) return;
+  const job = envelope as (GmailScalableStoredJob | OutlookCleanupStoredJob) & DurableCleanupJobEnvelope;
+  if (!job.payload.confirmedAt) return;
+  const closed = ["complete", "partial", "uncertain", "failed", "expired", "undo_complete", "undoing"].includes(job.view.status);
+  if ("provider" in job && job.provider === "microsoft") {
+    const moved = job.payload.targets.filter((target) => target.state === "moved_verified" || target.state.startsWith("restore")).length;
+    const restored = job.payload.targets.filter((target) => target.state === "restored_verified").length;
+    return { requested: job.view.requested, moved, restored, closed };
+  }
+  const gmail = job as GmailScalableStoredJob;
+  return { requested: gmail.view.requestedCount,
+    moved: gmail.payload.chunks.reduce((sum, chunk) => sum + new Set(chunk.verifiedMovedIndexes).size, 0),
+    restored: gmail.payload.chunks.reduce((sum, chunk) => sum + new Set(chunk.verifiedRestoredIndexes).size, 0), closed };
 }
