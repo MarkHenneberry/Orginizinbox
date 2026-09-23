@@ -10,3 +10,5 @@ dist
 /.workflow-data
 /.workflow-vitest
 /app/.well-known/workflow
+
+.vercel

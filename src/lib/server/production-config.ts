@@ -2,8 +2,8 @@ import "server-only";
 
 type Environment = Record<string, string | undefined>;
 
-// Returns capabilities only. Never serialize the configuration or rejection details.
-export function resolveProductionProviders(input: Environment) {
+// Fixed check names and booleans only; never expose configuration values.
+export function productionProviderChecks(input: Environment) {
   const text = (name: string) => Boolean(input[name]?.trim());
   const key = (name: string) => {
     const value = input[name] ?? "";
@@ -28,11 +28,35 @@ export function resolveProductionProviders(input: Environment) {
       (["prisma:", "prisma+postgres:"].includes(url.protocol) && Boolean(url.searchParams.get("api_key")))
     );
   } catch { /* Invalid database configuration disables provider availability. */ }
-  const shared = Boolean(app && database && key("TOKEN_ENCRYPTION_KEY") && key("CLEANUP_STATE_ENCRYPTION_KEY") && text("CRON_SECRET"));
+  const shared = {
+    NEXT_PUBLIC_APP_URL: Boolean(app),
+    DATABASE_URL: database,
+    TOKEN_ENCRYPTION_KEY: key("TOKEN_ENCRYPTION_KEY"),
+    CLEANUP_STATE_ENCRYPTION_KEY: key("CLEANUP_STATE_ENCRYPTION_KEY"),
+    CRON_SECRET: text("CRON_SECRET")
+  };
   return {
-    gmail: shared && input.GMAIL_PRODUCTION_ENABLED === "true" && text("GOOGLE_CLIENT_ID") && text("GOOGLE_CLIENT_SECRET") &&
-      callback("GOOGLE_REDIRECT_URI", "/api/oauth/google/callback"),
-    microsoft: shared && input.MICROSOFT_PRODUCTION_ENABLED === "true" && text("MICROSOFT_CLIENT_ID") && text("MICROSOFT_CLIENT_SECRET") &&
-      callback("MICROSOFT_REDIRECT_URI", "/api/oauth/microsoft/callback")
+    gmail: {
+      ...shared,
+      GMAIL_PRODUCTION_ENABLED: input.GMAIL_PRODUCTION_ENABLED === "true",
+      GOOGLE_CLIENT_ID: text("GOOGLE_CLIENT_ID"),
+      GOOGLE_CLIENT_SECRET: text("GOOGLE_CLIENT_SECRET"),
+      GOOGLE_REDIRECT_URI: callback("GOOGLE_REDIRECT_URI", "/api/oauth/google/callback")
+    },
+    microsoft: {
+      ...shared,
+      MICROSOFT_PRODUCTION_ENABLED: input.MICROSOFT_PRODUCTION_ENABLED === "true",
+      MICROSOFT_CLIENT_ID: text("MICROSOFT_CLIENT_ID"),
+      MICROSOFT_CLIENT_SECRET: text("MICROSOFT_CLIENT_SECRET"),
+      MICROSOFT_REDIRECT_URI: callback("MICROSOFT_REDIRECT_URI", "/api/oauth/microsoft/callback")
+    }
+  };
+}
+
+export function resolveProductionProviders(input: Environment) {
+  const checks = productionProviderChecks(input);
+  return {
+    gmail: Object.values(checks.gmail).every(Boolean),
+    microsoft: Object.values(checks.microsoft).every(Boolean)
   };
 }
