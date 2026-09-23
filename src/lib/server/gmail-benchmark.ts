@@ -11,7 +11,7 @@ import {
   type GmailScalableScanIdentity
 } from "@/lib/providers/gmail/scalable-targets";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
-import { classifyGmailScanFailure, type GmailScanFailurePhase } from "@/lib/server/gmail-scan-failure";
+import { classifyGmailScanFailure, type GmailScanFailurePhase, type GmailConnectionDiagnostic } from "@/lib/server/gmail-scan-failure";
 import {
   acceptLiveScan,
   createProgress,
@@ -111,9 +111,10 @@ async function executeGmailBenchmark(input: {
   let subjectProtectionMs = 0;
   const writeProgress = createDurableWriteGate(5_000);
   let failurePhase: GmailScanFailurePhase = "connection";
+  const connectionDiagnostic: GmailConnectionDiagnostic = {};
 
   try {
-    const activeConnection = await getActiveGmailConnection(input.userId, input.providerConnectionId);
+    const activeConnection = await getActiveGmailConnection(input.userId, input.providerConnectionId, connectionDiagnostic);
     if (!activeConnection) {
       throw new Error("No active Gmail connection is available.");
     }
@@ -227,6 +228,9 @@ async function executeGmailBenchmark(input: {
     }, "gmail", input.lockOwner);
   } catch (error) {
     input.progress.gmailFailureCategory = classifyGmailScanFailure(error, failurePhase);
+    if (failurePhase === "connection") {
+      input.progress.gmailConnectionFailureReason = connectionDiagnostic.failureReason ?? "unknown_connection_failure";
+    }
     input.progress.completedAt = Date.now();
     input.progress.durationMs = Math.round(performance.now() - started);
     if (error instanceof DOMException && error.name === "AbortError") {

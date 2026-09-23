@@ -3,6 +3,7 @@ import type { LiveScanSession } from "@/lib/server/live-scan-store";
 import type { NormalizedMessageMetadata } from "@/lib/domain/types";
 
 const mocks = vi.hoisted(() => ({ context: vi.fn(), save: vi.fn(), fence: vi.fn(), request: vi.fn(), close: vi.fn(),
+  gmailConnection: vi.fn(),
   pages: 3, recordsPerPage: 0, pageMs: 0, clock: 0, fallback: false, failAfterPages: false }));
 
 function records(page: number, provider: "gmail" | "microsoft"): NormalizedMessageMetadata[] {
@@ -19,7 +20,7 @@ vi.mock("@/lib/server/live-scan-store", async (original) => ({
   ...await original<typeof import("@/lib/server/live-scan-store")>(),
   getLiveScanExecutionContext: mocks.context, setLiveScan: mocks.save
 }));
-vi.mock("@/lib/server/gmail-connection", () => ({ getActiveGmailConnection: async () => ({ accessToken: "fixture", accountEmail: "fixture@example.test" }) }));
+vi.mock("@/lib/server/gmail-connection", () => ({ getActiveGmailConnection: mocks.gmailConnection }));
 vi.mock("@/lib/server/microsoft-connection", () => ({
   getActiveMicrosoftConnection: async () => ({ accessToken: "fixture", connection: { id: "connection" } }),
   getActiveMicrosoftImapConnection: async () => ({ accessToken: "fixture", accountEmail: "fixture@example.test" }),
@@ -91,6 +92,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(mocks, { pages: 3, recordsPerPage: 0, pageMs: 0, clock: Date.now(), fallback: false, failAfterPages: false });
   mocks.save.mockImplementation(async (_user, session: LiveScanSession) => structuredClone(session));
+  mocks.gmailConnection.mockResolvedValue({ accessToken: "fixture", accountEmail: "fixture@example.test" });
   mocks.fence.mockResolvedValue(undefined);
   vi.spyOn(console, "info").mockImplementation(() => undefined);
 });
@@ -103,6 +105,27 @@ describe("scan performance without weaker recovery", () => {
     vi.spyOn(Date, "now").mockImplementation(() => mocks.clock);
     return (provider === "gmail" ? runGmailBenchmark : runMicrosoftScan)({ scanId: "scan", lockOwner: "worker" });
   }
+
+  it.each(["null", "throw"])("persists the connection subreason when resolution returns %s", async (outcome) => {
+    mocks.gmailConnection.mockImplementationOnce(async (_user, _connection, diagnostic) => {
+      diagnostic.failureReason = outcome === "null" ? "runtime_config_unavailable" : "access_token_decrypt_failed";
+      if (outcome === "throw") throw new Error("Private fixture failure");
+      return null;
+    });
+    await run("gmail");
+    const final = await mocks.save.mock.results.at(-1)!.value as LiveScanSession;
+    expect(final.progress).toMatchObject({ status: "failed", gmailFailureCategory: "provider_connection_failed",
+      gmailConnectionFailureReason: outcome === "null" ? "runtime_config_unavailable" : "access_token_decrypt_failed" });
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("does not mislabel an IMAP connection failure as credential resolution failure", async () => {
+    mocks.fence.mockRejectedValueOnce(Object.assign(new Error("Private fixture failure"), { code: "CONNECT_TIMEOUT" }));
+    await run("gmail");
+    const final = await mocks.save.mock.results.at(-1)!.value as LiveScanSession;
+    expect(final.progress.gmailFailureCategory).toBe("provider_connection_failed");
+    expect(final.progress.gmailConnectionFailureReason).toBeUndefined();
+  });
 
   it("persists 22 snapshots for 100 Outlook pages while fencing every page", async () => {
     Object.assign(mocks, { pages: 100, recordsPerPage: 100, pageMs: 1000 });

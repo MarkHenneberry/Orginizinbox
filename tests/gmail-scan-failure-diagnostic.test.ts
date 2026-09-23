@@ -9,9 +9,9 @@ import { classifyGmailScanFailure } from "@/lib/server/gmail-scan-failure";
 const request = (token = "operator-secret") => new Request("https://example.test/api/diagnostics/gmail-scan-failure?userId=other", {
   headers: { authorization: `Bearer ${token}` }
 });
-function scan(category?: string) {
+function scan(category?: string, reason?: string) {
   vi.mocked(getLiveScan).mockResolvedValue({
-    progress: { status: "failed", gmailFailureCategory: category, errors: ["PRIVATE RAW ERROR"], mailboxPath: "PRIVATE MAILBOX" },
+    progress: { status: "failed", gmailFailureCategory: category, gmailConnectionFailureReason: reason, errors: ["PRIVATE RAW ERROR"], mailboxPath: "PRIVATE MAILBOX" },
     report: { secret: "PRIVATE METADATA" }
   } as unknown as NonNullable<Awaited<ReturnType<typeof getLiveScan>>>);
 }
@@ -40,11 +40,20 @@ describe("temporary Gmail scan failure diagnostic", () => {
     const response = await GET(request());
     expect(getLiveScan).toHaveBeenCalledWith("owner", "gmail");
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(await response.json()).toEqual({ scanFound: true, failureCategory: "imap_auth_failed" });
+    expect(await response.json()).toEqual({ scanFound: true, failureCategory: "imap_auth_failed", connectionFailureReason: null });
   });
   it.each([undefined, "PRIVATE RAW ERROR"])("redacts missing or arbitrary stored classifications: %s", async (value) => {
     scan(value);
-    expect(await (await GET(request())).json()).toEqual({ scanFound: true, failureCategory: "unknown" });
+    expect(await (await GET(request())).json()).toEqual({ scanFound: true, failureCategory: "unknown", connectionFailureReason: null });
+  });
+  it.each([
+    ["runtime_config_unavailable", "runtime_config_unavailable"],
+    ["PRIVATE RAW ERROR", "unknown_connection_failure"]
+  ])("allowlists the connection subreason: %s", async (stored, expected) => {
+    scan("provider_connection_failed", stored);
+    expect(await (await GET(request())).json()).toEqual({
+      scanFound: true, failureCategory: "provider_connection_failed", connectionFailureReason: expected
+    });
   });
   it("does not expose raw storage exceptions", async () => {
     vi.mocked(getLiveScan).mockRejectedValue(new Error("PRIVATE DB URL"));
@@ -52,7 +61,7 @@ describe("temporary Gmail scan failure diagnostic", () => {
   });
   it("handles absent/expired state", async () => {
     vi.mocked(getLiveScan).mockResolvedValue(undefined);
-    expect(await (await GET(request())).json()).toEqual({ scanFound: false, failureCategory: null });
+    expect(await (await GET(request())).json()).toEqual({ scanFound: false, failureCategory: null, connectionFailureReason: null });
   });
   it("classifies structured signals and catch phase without returning exception text", () => {
     expect(classifyGmailScanFailure({ authenticationFailed: true, message: "PRIVATE" }, "provider")).toBe("imap_auth_failed");

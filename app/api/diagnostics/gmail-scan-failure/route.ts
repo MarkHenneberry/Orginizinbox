@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { getSession } from "@/lib/server/session";
 import { getLiveScan } from "@/lib/server/live-scan-store";
-import { safeGmailScanFailure } from "@/lib/server/gmail-scan-failure";
+import { safeGmailScanFailure, safeGmailConnectionFailure } from "@/lib/server/gmail-scan-failure";
 
 // Temporary operator diagnostic. Remove after identifying the production scan failure.
 export const runtime = "nodejs";
@@ -24,7 +24,9 @@ export async function GET(request: Request) {
     return Response.json({
       scanFound: Boolean(scan),
       failureCategory: scan?.progress.status === "cancelled" ? "cancelled"
-        : failed ? safeGmailScanFailure(scan.progress.gmailFailureCategory) : null
+        : failed ? safeGmailScanFailure(scan.progress.gmailFailureCategory) : null,
+      connectionFailureReason: failed && scan.progress.gmailConnectionFailureReason !== undefined
+        ? safeGmailConnectionFailure(scan.progress.gmailConnectionFailureReason) : null
     }, { headers });
   } catch {
     return Response.json({ diagnosticAvailable: false, failureCategory: "durable_state_failed" }, { status: 503, headers });
