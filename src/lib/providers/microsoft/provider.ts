@@ -793,7 +793,7 @@ function normalizeSender(input: unknown) {
   };
 }
 
-function allowlistedHeaders(input: unknown) {
+export function allowlistedHeaders(input: unknown) {
   const result = new Map<string, string>();
   if (!Array.isArray(input)) return result;
   const allowed = new Set<string>(microsoftClassifierHeaderAllowlist);

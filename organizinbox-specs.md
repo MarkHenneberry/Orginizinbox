@@ -11,6 +11,10 @@ Temporary Outlook header A/B measurement is default-off behind `OUTLOOK_HEADER_B
 
 The temporary Outlook benchmark also accepts a candidate-count mode: complete Sent participation indexing followed by the normal sequential mailbox-wide metadata path without headers. It applies existing non-header per-message protections and cleanup age eligibility, returns only aggregate counts and sample-based payload estimates, and never creates or replaces a report. Incomplete passes must not present full-mailbox estimates. Normal scanning and cleanup behavior are unchanged.
 
+Scan start/status/reattach responses expose server-computed elapsed milliseconds. Scan UI advances that duration with the browser monotonic clock, never by subtracting a server timestamp from the browser wall clock; pending starts use zero elapsed until acceptance.
+
+The temporary protected Outlook benchmark accepts `extended_headers`: compare a bounded first-page sample against PS_INTERNET_HEADERS named string properties for List-Id, List-Unsubscribe, Precedence and Auto-Submitted. Probe a combined OR expansion and four documented single-property expansions separately. Correlate exact IDs only in memory, mark absent/ambiguous coverage non-parity, and return only timing/size/counts and per-header presence/mismatch totals. Both-absent evidence does not prove a property's availability. Normal scanning retains full headers until live parity and efficiency are established.
+
 **Status:** Pre-build product specification  
 **Platform:** Web application  
 **Current mailbox provider:** Gmail

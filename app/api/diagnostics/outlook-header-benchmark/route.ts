@@ -4,6 +4,7 @@ import { getActiveMicrosoftConnection } from "@/lib/server/microsoft-connection"
 import { createProviderRequestCoordinator } from "@/lib/server/provider-request-coordinator";
 import { runOutlookHeaderBenchmark } from "@/lib/server/outlook-header-benchmark";
 import { runOutlookCandidateCount } from "@/lib/server/outlook-candidate-count";
+import { runOutlookExtendedHeaderBenchmark } from "@/lib/server/outlook-extended-header-benchmark";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +26,8 @@ export async function POST(request: Request) {
     if (!connection) return Response.json({ available: false }, { status: 403, headers });
     const body = await request.json();
     const candidateCount = body?.mode === "candidate_count";
-    if (!candidateCount && body?.order !== "headers_first" && body?.order !== "no_headers_first") return Response.json({ valid: false }, { status: 400, headers });
+    const extendedHeaders = body?.mode === "extended_headers";
+    if (!candidateCount && !extendedHeaders && body?.order !== "headers_first" && body?.order !== "no_headers_first") return Response.json({ valid: false }, { status: 400, headers });
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(candidateCount ? 270_000 : 180_000)]);
     const coordinate = createProviderRequestCoordinator(connection.connection.id, {
       async beforeRequest() {
@@ -39,7 +41,8 @@ export async function POST(request: Request) {
         }
       }
     });
-    const result = candidateCount ? await runOutlookCandidateCount({ accessToken: connection.accessToken, signal, coordinate })
+    const result = extendedHeaders ? await runOutlookExtendedHeaderBenchmark({ accessToken: connection.accessToken, signal, coordinate })
+      : candidateCount ? await runOutlookCandidateCount({ accessToken: connection.accessToken, signal, coordinate })
       : await runOutlookHeaderBenchmark({ accessToken: connection.accessToken, signal,
       noHeadersFirst: body.order === "no_headers_first", coordinate });
     return Response.json(result, { headers });

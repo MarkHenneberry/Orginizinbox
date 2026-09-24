@@ -21,7 +21,7 @@ vi.mock("react", async (original) => ({
 import { OutlookScanClient } from "@/components/product/GmailScanClient";
 import { OperationStatus } from "@/components/product/OperationStatus";
 
-type Element = ReactElement<{ children?: React.ReactNode; onClick?: () => Promise<void>; startedAt?: number }>;
+type Element = ReactElement<{ children?: React.ReactNode; onClick?: () => Promise<void>; startedAt?: number; elapsedMs?: number }>;
 function elements(node: React.ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!React.isValidElement(node)) return [];
@@ -46,11 +46,13 @@ it.each([false, true])("completed scan -> click Rescan -> fresh pending timer ->
   const pending = button.props.onClick!();
   const pendingStatus = elements(render()).find((element) => element.type === OperationStatus)!;
   expect(pendingStatus.props.startedAt).toBe(267000);
+  expect(pendingStatus.props.elapsedMs).toBe(0);
   expect(pendingStatus.key).toBe("267000");
   resolve(Response.json({ reused, progress: { scanId: reused ? "existing" : "fresh", provider: "microsoft",
-    status: "running", startedAt: reused ? 1000 : 268000, processed: 0, errors: [] } }));
+    status: "running", startedAt: reused ? 1000 : 268000, elapsedMs: reused ? 267000 : 200, processed: 0, errors: [] } }));
   await pending;
   const accepted = elements(render());
   expect(accepted.find((element) => element.type === OperationStatus)!.props.startedAt).toBe(reused ? 1000 : 268000);
+  expect(accepted.find((element) => element.type === OperationStatus)!.props.elapsedMs).toBe(reused ? 267000 : 200);
   expect(accepted.some((element) => element.props.children === "Continuing your existing scan. Elapsed time includes work already in progress.")).toBe(reused);
 });

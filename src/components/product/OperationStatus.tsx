@@ -1,30 +1,36 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { advanceScanElapsed } from "@/lib/scan-clock";
 
 export function OperationStatus({
   title,
   description,
-  startedAt
+  startedAt,
+  elapsedMs
 }: {
   title: string;
   description: string;
   startedAt?: number;
+  elapsedMs?: number;
 }) {
   const fallbackStartedAt = useRef<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
+    const receivedAt = performance.now();
     const updateElapsed = () => {
       fallbackStartedAt.current ??= Date.now();
       setElapsedSeconds(
-        Math.max(0, Math.floor((Date.now() - (startedAt ?? fallbackStartedAt.current)) / 1000))
+        Math.max(0, Math.floor((elapsedMs !== undefined
+          ? advanceScanElapsed(elapsedMs, receivedAt, performance.now())
+          : Date.now() - (startedAt ?? fallbackStartedAt.current)) / 1000))
       );
     };
     updateElapsed();
     const interval = window.setInterval(updateElapsed, 1000);
     return () => window.clearInterval(interval);
-  }, [startedAt]);
+  }, [startedAt, elapsedMs]);
 
   return (
     <div

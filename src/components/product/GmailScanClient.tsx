@@ -7,6 +7,7 @@ import { startAdaptivePolling } from "@/lib/adaptive-polling";
 import { scanClockStart } from "@/lib/scan-clock";
 
 type ScanProgress = {
+  elapsedMs?: number;
   phase?: "preparing" | "sent_conversations" | "messages";
   scanId: string;
   provider: "gmail" | "microsoft";
@@ -170,6 +171,7 @@ function MailboxScanClient({
       ) : null}
       {working ? (
         <OperationStatus
+          elapsedMs={pending ? 0 : progress?.elapsedMs ?? 0}
           key={scanClockStart(pending, operationStartedAt, progress?.startedAt)}
           description={outlook && (progress?.phase === "preparing" || progress?.phase === "sent_conversations") ? "Safety checks run before the message count increases. Large inboxes can take several minutes." : "We're safely checking your mailbox and building your Inbox Report. For large inboxes this can take a few minutes."}
           startedAt={scanClockStart(pending, operationStartedAt, progress?.startedAt)}

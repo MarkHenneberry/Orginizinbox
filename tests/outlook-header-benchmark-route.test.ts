@@ -3,11 +3,13 @@ vi.mock("@/lib/server/session", () => ({ getSession: vi.fn() }));
 vi.mock("@/lib/server/microsoft-connection", () => ({ getActiveMicrosoftConnection: vi.fn() }));
 vi.mock("@/lib/server/outlook-header-benchmark", () => ({ runOutlookHeaderBenchmark: vi.fn() }));
 vi.mock("@/lib/server/outlook-candidate-count", () => ({ runOutlookCandidateCount: vi.fn() }));
+vi.mock("@/lib/server/outlook-extended-header-benchmark", () => ({ runOutlookExtendedHeaderBenchmark: vi.fn() }));
 vi.mock("@/lib/server/provider-request-coordinator", () => ({ createProviderRequestCoordinator: vi.fn() }));
 import { getSession } from "@/lib/server/session";
 import { getActiveMicrosoftConnection } from "@/lib/server/microsoft-connection";
 import { runOutlookHeaderBenchmark } from "@/lib/server/outlook-header-benchmark";
 import { runOutlookCandidateCount } from "@/lib/server/outlook-candidate-count";
+import { runOutlookExtendedHeaderBenchmark } from "@/lib/server/outlook-extended-header-benchmark";
 import { POST } from "../app/api/diagnostics/outlook-header-benchmark/route";
 const request = (token = "operator") => new Request("https://example.test/api/diagnostics/outlook-header-benchmark", {
   method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ order: "headers_first" })
@@ -44,4 +46,16 @@ it("dispatches the protected candidate-count mode without creating a report", as
   expect(await response.json()).toEqual({ complete: true, stage2Candidates: 2 });
   expect(runOutlookHeaderBenchmark).not.toHaveBeenCalled();
   expect(runOutlookCandidateCount).toHaveBeenCalledOnce();
+});
+it("dispatches the protected extended-header probe only for the owning session", async () => {
+  vi.mocked(getSession).mockResolvedValue({ userId: "owner", providerConnectionId: "connection" } as never);
+  vi.mocked(getActiveMicrosoftConnection).mockResolvedValue({ accessToken: "fixture", connection: { id: "connection" } } as never);
+  vi.mocked(runOutlookExtendedHeaderBenchmark).mockResolvedValue({ success: true } as never);
+  const response = await POST(new Request("https://example.test/api/diagnostics/outlook-header-benchmark", {
+    method: "POST", headers: { authorization: "Bearer operator" }, body: JSON.stringify({ mode: "extended_headers" })
+  }));
+  expect(await response.json()).toEqual({ success: true });
+  expect(runOutlookExtendedHeaderBenchmark).toHaveBeenCalledOnce();
+  expect(runOutlookCandidateCount).not.toHaveBeenCalled();
+  expect(runOutlookHeaderBenchmark).not.toHaveBeenCalled();
 });

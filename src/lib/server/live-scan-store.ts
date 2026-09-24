@@ -615,6 +615,7 @@ function isRetryableAcceptanceError(error: unknown) {
 
 export function serializeBenchmark(progress: BenchmarkProgress) {
   return {
+    elapsedMs: Math.max(0, (progress.completedAt ?? Date.now()) - progress.startedAt),
     phase: progress.phase,
     scanId: progress.scanId,
     provider: progress.provider,
@@ -679,6 +680,7 @@ export function serializeBenchmark(progress: BenchmarkProgress) {
 export function serializeScanProgress(progress: BenchmarkProgress) {
   if (process.env.NODE_ENV !== "production") return serializeBenchmark(progress);
   return {
+    elapsedMs: Math.max(0, (progress.completedAt ?? Date.now()) - progress.startedAt),
     phase: progress.phase,
     scanId: progress.scanId,
     provider: progress.provider,
