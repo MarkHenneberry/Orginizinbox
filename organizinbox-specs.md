@@ -15,6 +15,8 @@ Scan start/status/reattach responses expose server-computed elapsed milliseconds
 
 The temporary protected Outlook benchmark accepts `extended_headers`: compare a bounded first-page sample against PS_INTERNET_HEADERS named string properties for List-Id, List-Unsubscribe, Precedence and Auto-Submitted. Probe a combined OR expansion and four documented single-property expansions separately. Correlate exact IDs only in memory, mark absent/ambiguous coverage non-parity, and return only timing/size/counts and per-header presence/mismatch totals. Both-absent evidence does not prove a property's availability. Normal scanning retains full headers until live parity and efficiency are established.
 
+Temporary `page_sizes` Outlook measurement compares the unchanged full-header Graph query at `$top=100`, `250`, and `500`, targeting 1,000 messages per arm (at most 20 pages, 80 seconds, zero retries). Optional reversed order checks cache/order bias. Follow next links unchanged; a final partial sample can download extra messages, which are counted separately from the first 1,000 comparison identities. Keep identities only in memory and return aggregate overlap/missing/duplicate counts against the 100-message-page arm, plus decoded payload sizes, fetch/body/parse timings and HTTP failure counts. Stop all arms on authorization loss, cancellation or throttling. This creates no report and changes neither normal scanning nor OAuth. Extended-property parity failed in live testing; do not use that approach for classification.
+
 **Status:** Pre-build product specification  
 **Platform:** Web application  
 **Current mailbox provider:** Gmail

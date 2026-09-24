@@ -4,18 +4,36 @@ vi.mock("@/lib/server/microsoft-connection", () => ({ getActiveMicrosoftConnecti
 vi.mock("@/lib/server/outlook-header-benchmark", () => ({ runOutlookHeaderBenchmark: vi.fn() }));
 vi.mock("@/lib/server/outlook-candidate-count", () => ({ runOutlookCandidateCount: vi.fn() }));
 vi.mock("@/lib/server/outlook-extended-header-benchmark", () => ({ runOutlookExtendedHeaderBenchmark: vi.fn() }));
+vi.mock("@/lib/server/outlook-page-size-benchmark", () => ({ runOutlookPageSizeBenchmark: vi.fn() }));
 vi.mock("@/lib/server/provider-request-coordinator", () => ({ createProviderRequestCoordinator: vi.fn() }));
 import { getSession } from "@/lib/server/session";
 import { getActiveMicrosoftConnection } from "@/lib/server/microsoft-connection";
 import { runOutlookHeaderBenchmark } from "@/lib/server/outlook-header-benchmark";
 import { runOutlookCandidateCount } from "@/lib/server/outlook-candidate-count";
 import { runOutlookExtendedHeaderBenchmark } from "@/lib/server/outlook-extended-header-benchmark";
+import { runOutlookPageSizeBenchmark } from "@/lib/server/outlook-page-size-benchmark";
 import { POST } from "../app/api/diagnostics/outlook-header-benchmark/route";
 const request = (token = "operator") => new Request("https://example.test/api/diagnostics/outlook-header-benchmark", {
   method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ order: "headers_first" })
 });
 beforeEach(() => { vi.resetAllMocks(); vi.stubEnv("CRON_SECRET", "operator"); vi.stubEnv("OUTLOOK_HEADER_BENCHMARK_ENABLED", "true"); });
 afterEach(() => vi.unstubAllEnvs());
+it("dispatches page sizes behind both operator and owning-session authorization", async () => {
+  const makeRequest = (token = "operator") => new Request("https://example.test/api/diagnostics/outlook-header-benchmark", {
+    method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ mode: "page_sizes", reverse: true })
+  });
+  expect((await POST(makeRequest("wrong"))).status).toBe(401);
+  expect((await POST(makeRequest())).status).toBe(401);
+  expect(runOutlookPageSizeBenchmark).not.toHaveBeenCalled();
+  vi.mocked(getSession).mockResolvedValue({ userId: "owner", providerConnectionId: "connection" } as never);
+  vi.mocked(getActiveMicrosoftConnection).mockResolvedValue({ accessToken: "PRIVATE", connection: { id: "connection" } } as never);
+  vi.mocked(runOutlookPageSizeBenchmark).mockResolvedValue({ sampled: true, results: [] } as never);
+  const response = await POST(makeRequest());
+  expect(await response.json()).toEqual({ sampled: true, results: [] });
+  expect(runOutlookPageSizeBenchmark).toHaveBeenCalledWith(expect.objectContaining({ reverse: true }));
+  expect(getActiveMicrosoftConnection).toHaveBeenCalledWith("owner", "connection");
+  expect(runOutlookHeaderBenchmark).not.toHaveBeenCalled();
+});
 it("fails closed unless enabled and operator-authenticated", async () => {
   vi.stubEnv("OUTLOOK_HEADER_BENCHMARK_ENABLED", "false");
   expect((await POST(request())).status).toBe(404);
