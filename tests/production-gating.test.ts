@@ -153,7 +153,7 @@ describe("production UI and route boundaries", () => {
     progress.notes = ["private diagnostic"];
     progress.errors = ["internal development exception"];
     const publicProgress = serializeScanProgress(progress);
-    expect(Object.keys(publicProgress).sort()).toEqual(["completedAt", "errors", "mailboxExists", "processed", "provider", "scanId", "startedAt", "status"].sort());
+    expect(Object.keys(publicProgress).sort()).toEqual(["completedAt", "errors", "mailboxExists", "phase", "processed", "provider", "scanId", "startedAt", "status"].sort());
     expect(JSON.stringify(publicProgress)).not.toMatch(/diagnostic|exception|graphRequests|graphEvidence/);
   });
 

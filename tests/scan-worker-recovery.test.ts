@@ -68,7 +68,8 @@ vi.mock("@/lib/providers/microsoft/imap-provider", () => ({
 vi.mock("@/lib/providers/microsoft/provider", () => ({
   MicrosoftProvider: class {
     constructor(_token: string, private options: { requestCoordinator: (request: () => Promise<unknown>) => Promise<unknown> }) {}
-    async scanParticipatedConversationIds() {
+    async scanParticipatedConversationIds(input: { onFoldersResolved?: () => Promise<void> }) {
+      await input.onFoldersResolved?.();
       await this.options.requestCoordinator(async () => mocks.request("participation")); return new Set();
     }
     async processMetadataWithAdaptiveFallback(input: { onBatch: (batch: { records: unknown[] }) => Promise<void>; onFallback: () => Promise<void> }) {
@@ -126,14 +127,25 @@ describe("scan performance without weaker recovery", () => {
     expect(final.progress.errors).toHaveLength(1);
   });
 
-  it("persists 22 snapshots for 100 Outlook pages while fencing every page", async () => {
+  it("persists 24 snapshots including phases for 100 Outlook pages while fencing every page", async () => {
     Object.assign(mocks, { pages: 100, recordsPerPage: 100, pageMs: 1000 });
     await run("microsoft");
-    expect(mocks.save).toHaveBeenCalledTimes(22);
+    expect(mocks.save).toHaveBeenCalledTimes(24);
+    const snapshots = await Promise.all(mocks.save.mock.results.map((result) => result.value)) as LiveScanSession[];
+    expect(snapshots.slice(0, 3).map(({ progress }) => [progress.phase, progress.processed])).toEqual([
+      ["preparing", 0], ["sent_conversations", 0], ["messages", 0]
+    ]);
     expect(mocks.fence).toHaveBeenCalledTimes(101);
     const final = await mocks.save.mock.results.at(-1)!.value as LiveScanSession;
     expect(final.progress).toMatchObject({ status: "completed", processed: 10000 });
     expect(final.report).toBeDefined();
+    expect(console.info).toHaveBeenCalledWith("Outlook scan metrics", expect.objectContaining({
+      credentialResolutionMs: expect.any(Number), folderResolutionMs: expect.any(Number),
+      sentConversationMs: expect.any(Number), coordinationMs: expect.any(Number),
+      requestMs: expect.any(Number), progressWriteMs: expect.any(Number), progressWrites: 22
+    }));
+    const telemetry = vi.mocked(console.info).mock.calls.at(-1)![1];
+    expect(JSON.stringify(telemetry)).not.toMatch(/fixture|connection|@|token|sender|subject|scanId|userId/i);
   });
 
   it("persists fallback reset and failure immediately inside the throttle window", async () => {
@@ -141,7 +153,7 @@ describe("scan performance without weaker recovery", () => {
     await run("microsoft");
     const snapshots = await Promise.all(mocks.save.mock.results.map((result) => result.value)) as LiveScanSession[];
     expect(snapshots.map(({ progress }) => [progress.status, progress.processed])).toEqual([
-      ["running", 0], ["running", 100], ["running", 0], ["failed", 0]
+      ["running", 0], ["running", 0], ["running", 0], ["running", 100], ["running", 0], ["failed", 0]
     ]);
   });
 
@@ -151,7 +163,7 @@ describe("scan performance without weaker recovery", () => {
       .mockResolvedValueOnce(undefined).mockRejectedValueOnce(new DOMException("Lost lease", "AbortError"));
     await run("microsoft");
     expect(mocks.request.mock.calls).toEqual([["participation"], ["metadata"], ["metadata"]]);
-    expect(mocks.save).toHaveBeenCalledTimes(2);
+    expect(mocks.save).toHaveBeenCalledTimes(4);
   });
 
   it("bounds pending Gmail identities to a batch while retaining exact eligible REST bridges", async () => {
@@ -188,7 +200,7 @@ describe.each(["gmail", "graph", "imap"] as const)("%s scan worker cancellation"
     mocks.save.mockImplementationOnce(async (_user, session) => session)
       .mockRejectedValueOnce(new DOMException("Ownership lost", "AbortError"));
     await run();
-    expect(mocks.request.mock.calls).toEqual([["participation"], ["metadata"]]);
+    expect(mocks.request.mock.calls).toEqual(transport === "graph" ? [] : [["participation"], ["metadata"]]);
     expect(mocks.save).toHaveBeenCalledTimes(2);
     expect(mocks.save.mock.calls.some(([, session]) => session.report !== undefined)).toBe(false);
     if (transport === "imap") expect(mocks.close).toHaveBeenCalledOnce();
@@ -198,7 +210,7 @@ describe.each(["gmail", "graph", "imap"] as const)("%s scan worker cancellation"
     mocks.fence.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new DOMException("Disconnected", "AbortError"));
     await run();
     expect(mocks.request.mock.calls).toEqual([["participation"]]);
-    expect(mocks.save).toHaveBeenCalledTimes(1);
+    expect(mocks.save).toHaveBeenCalledTimes(transport === "graph" ? 3 : 1);
   });
 
   it("does not begin provider work if the initial durable write is rejected", async () => {

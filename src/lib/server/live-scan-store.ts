@@ -13,6 +13,7 @@ export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "can
 export type LiveScanProvider = "gmail" | "microsoft";
 
 export type BenchmarkProgress = {
+  phase?: "preparing" | "sent_conversations" | "messages";
   scanId: string;
   provider: LiveScanProvider;
   status: BenchmarkStatus;
@@ -614,6 +615,7 @@ function isRetryableAcceptanceError(error: unknown) {
 
 export function serializeBenchmark(progress: BenchmarkProgress) {
   return {
+    phase: progress.phase,
     scanId: progress.scanId,
     provider: progress.provider,
     status: progress.status,
@@ -677,6 +679,7 @@ export function serializeBenchmark(progress: BenchmarkProgress) {
 export function serializeScanProgress(progress: BenchmarkProgress) {
   if (process.env.NODE_ENV !== "production") return serializeBenchmark(progress);
   return {
+    phase: progress.phase,
     scanId: progress.scanId,
     provider: progress.provider,
     status: progress.status,

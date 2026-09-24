@@ -179,8 +179,9 @@ export class MicrosoftProvider implements MailboxProcessor {
     };
   }
 
-  async scanParticipatedConversationIds(input: Pick<ScanMetadataInput, "batchSize" | "signal">) {
+  async scanParticipatedConversationIds(input: Pick<ScanMetadataInput, "batchSize" | "signal"> & { onFoldersResolved?: () => Promise<void> }) {
     const folders = await this.getFolderIndex(input.signal);
+    await input.onFoldersResolved?.();
     const participatedConversationIds = new Set<string>();
     const pageSize = boundedPageSize(input.batchSize);
 

@@ -1,6 +1,8 @@
 # Inbox Cleanup MicroSaaS
 ## Product, UX, Technical, SEO and Launch Specification
 
+Outlook scan progress distinguishes preparing the inbox, checking sent conversations, and scanning messages. Messages checked counts main-scan classification only, not preparatory safety work. Production scan timing telemetry is aggregate-only (durations, request/page/retry counts and coordination/write overhead), never mailbox content, identifiers, tokens or raw errors. Existing participation protection, scan transport and retention rules remain unchanged.
+
 **Status:** Pre-build product specification  
 **Platform:** Web application  
 **Current mailbox provider:** Gmail

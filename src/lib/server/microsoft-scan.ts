@@ -53,6 +53,7 @@ export async function runMicrosoftScan(input: { scanId: string; lockOwner: strin
   if (!context || context.lockOwner !== input.lockOwner || context.session.progress.provider !== "microsoft") return;
   const progress = createProgress({ scanId: input.scanId, provider: "microsoft", ...microsoftScanDefaults });
   progress.outlookTransport = context.session.progress.outlookTransport ?? "graph";
+  if (progress.outlookTransport === "graph") progress.phase = "preparing";
   progress.duplicateStartCount = context.session.progress.duplicateStartCount;
   await setLiveScan(context.userId, { progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner);
   if (progress.outlookTransport === "imap") {
@@ -87,25 +88,65 @@ async function executeMicrosoftScan(input: {
   let provider: MicrosoftProvider | undefined;
   const writeProgress = createDurableWriteGate(5_000);
   input.progress.outlookTransport = "graph";
+  let credentialResolutionMs = 0;
+  let folderResolutionMs = 0;
+  let sentStarted = 0;
+  let coordinationMs = 0;
+  let requestMs = 0;
+  let progressWriteMs = 0;
+  let progressWrites = 0;
+  const saveProgress = async () => {
+    const start = performance.now();
+    try {
+      await setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner);
+    } finally {
+      progressWrites += 1;
+      progressWriteMs += performance.now() - start;
+    }
+  };
 
   try {
     const activeConnection = await getActiveMicrosoftConnection(input.userId, input.providerConnectionId);
     if (!activeConnection) throw new Error("Connect Microsoft before scanning Outlook.");
+    credentialResolutionMs = Math.round(performance.now() - started);
+    const coordinate = createProviderRequestCoordinator(activeConnection.connection.id, {
+      beforeRequest: createScanRequestFence(input.progress.scanId, input.lockOwner, "microsoft")
+    });
 
     provider = new MicrosoftProvider(activeConnection.accessToken, {
       refreshAccessToken: () => forceRefreshMicrosoftConnection(input.userId, input.providerConnectionId),
-      requestCoordinator: createProviderRequestCoordinator(activeConnection.connection.id, {
-        beforeRequest: createScanRequestFence(input.progress.scanId, input.lockOwner, "microsoft")
-      })
+      requestCoordinator: async (request) => {
+        const start = performance.now();
+        let transportMs = 0;
+        try {
+          return await coordinate(async () => {
+            const transportStart = performance.now();
+            try { return await request(); }
+            finally { transportMs += performance.now() - transportStart; }
+          });
+        } finally {
+          requestMs += transportMs;
+          coordinationMs += performance.now() - start - transportMs;
+        }
+      }
     });
     const conversationIndexStarted = performance.now();
     const participatedConversationIds = await provider.scanParticipatedConversationIds({
       batchSize: microsoftScanDefaults.batchSize,
-      signal: input.signal
+      signal: input.signal,
+      async onFoldersResolved() {
+        folderResolutionMs = Math.round(performance.now() - conversationIndexStarted);
+        input.progress.phase = "sent_conversations";
+        await saveProgress();
+        sentStarted = performance.now();
+      }
     });
     input.progress.conversationIndexMs = Math.round(performance.now() - conversationIndexStarted);
     input.progress.peakParticipatedConversationCount = participatedConversationIds.size;
     updateGraphProgress(input.progress, provider);
+    const sentConversationMs = sentStarted ? Math.round(performance.now() - sentStarted) : 0;
+    input.progress.phase = "messages";
+    await saveProgress();
 
     const createAggregator = () => new StreamingReportAggregator({
       participatedConversationIds,
@@ -134,7 +175,7 @@ async function executeMicrosoftScan(input: {
         input.progress.subjectProtectionMs = Math.round(subjectProtectionMs);
         input.progress.approxMemoryMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
         updateGraphProgress(input.progress, provider!);
-        await writeProgress(() => setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner));
+        await writeProgress(saveProgress);
       },
       async onFallback() {
         aggregator = createAggregator();
@@ -143,7 +184,7 @@ async function executeMicrosoftScan(input: {
           "Outlook returned an oversized or invalid metadata page. Restarted the main scan with smaller pages."
         );
         updateGraphProgress(input.progress, provider!);
-        await writeProgress(() => setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "microsoft", input.lockOwner), true);
+        await writeProgress(saveProgress, true);
       }
     });
 
@@ -162,8 +203,22 @@ async function executeMicrosoftScan(input: {
       expiresAt: nextExpiry()
     }, "microsoft", input.lockOwner);
 
-    if (process.env.NODE_ENV !== "production") {
+    {
       console.info("Outlook scan metrics", {
+        folderRequests: provider.getScanMetrics().requestsByOperation?.folder_resolution ?? 0,
+        conversationRequests: provider.getScanMetrics().requestsByOperation?.conversation_index ?? 0,
+        credentialResolutionMs,
+        folderResolutionMs,
+        sentConversationMs,
+        conversationIndexMs: input.progress.conversationIndexMs,
+        metadataMs: input.progress.metadataMs,
+        requestMs: Math.round(requestMs),
+        coordinationMs: Math.round(coordinationMs),
+        progressWriteMs: Math.round(progressWriteMs),
+        progressWrites,
+        retries: input.progress.graphRetries,
+        tokenRefreshes: input.progress.graphTokenRefreshes,
+        throttles: input.progress.graph429Throttles,
         messagesScanned: input.progress.processed,
         graphPages: input.progress.graphPages,
         graphRequests: input.progress.graphRequests,

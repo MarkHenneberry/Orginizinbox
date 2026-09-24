@@ -38,6 +38,21 @@ import { OutlookScanClient } from "@/components/product/GmailScanClient";
 describe("Outlook scan UX", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it.each([
+    ["preparing", "Preparing your inbox..."],
+    ["sent_conversations", "Checking sent conversations..."],
+    ["messages", "Scanning Outlook inbox..."]
+  ] as const)("shows the durable %s phase without inventing checked messages", (phase, title) => {
+    const html = renderToStaticMarkup(React.createElement(OutlookScanClient, {
+      imapAvailable: false, imapBenchmarkEnabled: false,
+      initialProgress: { scanId: "fixture", provider: "microsoft", status: "running", processed: 0,
+        startedAt: Date.now() - 267_000, errors: [], phase }
+    }));
+    expect(html).toContain(title);
+    expect(html).toContain("Messages checked");
+    if (phase !== "messages") expect(html).toContain("Safety checks run before the message count increases.");
+  });
+
   it("shows the Outlook scan action for a connected Microsoft account", async () => {
     mocks.getAppHomeState.mockResolvedValue({
       mode: "connected_no_report",
