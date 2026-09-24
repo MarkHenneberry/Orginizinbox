@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { OperationStatus } from "@/components/product/OperationStatus";
 import { startAdaptivePolling } from "@/lib/adaptive-polling";
+import { scanClockStart } from "@/lib/scan-clock";
 
 type ScanProgress = {
   phase?: "preparing" | "sent_conversations" | "messages";
@@ -169,8 +170,9 @@ function MailboxScanClient({
       ) : null}
       {working ? (
         <OperationStatus
+          key={scanClockStart(pending, operationStartedAt, progress?.startedAt)}
           description={outlook && (progress?.phase === "preparing" || progress?.phase === "sent_conversations") ? "Safety checks run before the message count increases. Large inboxes can take several minutes." : "We're safely checking your mailbox and building your Inbox Report. For large inboxes this can take a few minutes."}
-          startedAt={progress?.startedAt ?? operationStartedAt}
+          startedAt={scanClockStart(pending, operationStartedAt, progress?.startedAt)}
           title={outlook && progress?.phase === "preparing" ? "Preparing your inbox..." : outlook && progress?.phase === "sent_conversations" ? "Checking sent conversations..." : operationMode === "rescan" ? "Rescanning your inbox..." : outlook ? "Scanning Outlook inbox..." : "Scanning your inbox..."}
         />
       ) : null}

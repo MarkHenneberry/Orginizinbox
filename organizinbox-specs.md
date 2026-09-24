@@ -7,6 +7,8 @@ Production Outlook read-only scans retain shared per-connection request leases a
 
 Outlook aggregate timing separates fetch-to-response, response body consumption/JSON parsing, normalization, and aggregator wall time. Header/evidence/Subject timings are subsets of normalization; classification/aggregation timings are subsets of aggregator wall time. Metadata-only fetch, coordination and progress-write deltas plus an explicit residual reconcile to metadata wall time. Starting a new scan clears the previous progress display while acceptance is pending; only the server's accepted/reused result supplies the next scan timestamp.
 
+Temporary Outlook header A/B measurement is default-off behind `OUTLOOK_HEADER_BENCHMARK_ENABLED=true`, operator CRON bearer authorization and a valid owning Microsoft session. It compares at most five mailbox-wide pages of 100 messages per arm, with/without headers, follows trusted pagination, and returns only aggregate decoded UTF-8 sizes and timing/counts. It never produces a report or cleanup candidates. Normal production scanning still fetches all classifier evidence unchanged. Repeat with reversed arm order to check cache/order bias; results are a bounded sample, not a frozen mailbox comparison. Remove the endpoint after diagnosis.
+
 **Status:** Pre-build product specification  
 **Platform:** Web application  
 **Current mailbox provider:** Gmail
