@@ -132,6 +132,9 @@ const emptyEvidenceAvailability = () => ({
 });
 
 export class MicrosoftProvider implements MailboxProcessor {
+  private normalizationMs = 0;
+  private evidenceProcessingMs = 0;
+  private readonly normalizationTiming = { headerProcessingMs: 0 };
   private readonly graph: MicrosoftGraphClient;
   private readonly experimentalFolderScan: boolean;
   private folderIndexPromise?: Promise<MicrosoftFolderIndex>;
@@ -155,6 +158,9 @@ export class MicrosoftProvider implements MailboxProcessor {
 
   getScanMetrics() {
     return {
+      normalizationMs: this.normalizationMs,
+      evidenceProcessingMs: this.evidenceProcessingMs,
+      headerProcessingMs: this.normalizationTiming.headerProcessingMs,
       graphPages: this.graphPages,
       mainMessagePageSize: this.mainMessagePageSize,
       mainMessagePages: this.mainMessagePages,
@@ -241,21 +247,26 @@ export class MicrosoftProvider implements MailboxProcessor {
       for (const batchMessages of chunks(messages, outputBatchSize)) {
         let subjectProtectionMs = 0;
         let records: NormalizedMailboxRecord[];
+        const normalizationStarted = performance.now();
         try {
+          const evidenceStarted = performance.now();
           batchMessages.forEach((message) => this.observeEvidenceAvailability(message));
+          this.evidenceProcessingMs += performance.now() - evidenceStarted;
           const subjectStarted = performance.now();
           const subjectProtection = batchMessages.map((message) =>
             deriveSubjectProtection(typeof message.subject === "string" ? message.subject : undefined)
           );
           subjectProtectionMs = performance.now() - subjectStarted;
           records = batchMessages.map((message, index) =>
-            normalizeMicrosoftMessage(message, folders, subjectProtection[index])
+            normalizeMicrosoftMessage(message, folders, subjectProtection[index], this.normalizationTiming)
           );
           for (const message of batchMessages) message.internetMessageHeaders = undefined;
           subjectProtection.length = 0;
         } catch (error) {
           this.graph.recordNonHttpFailure("main_message_scan", "normalization");
           throw error;
+        } finally {
+          this.normalizationMs += performance.now() - normalizationStarted;
         }
         processed += records.length;
         yield { records, subjectProtectionMs };
@@ -699,7 +710,8 @@ export class MicrosoftProvider implements MailboxProcessor {
 export function normalizeMicrosoftMessage(
   message: GraphMessage,
   folders: MicrosoftFolderIndex,
-  subjectProtection = deriveSubjectProtection(typeof message.subject === "string" ? message.subject : undefined)
+  subjectProtection = deriveSubjectProtection(typeof message.subject === "string" ? message.subject : undefined),
+  timing?: { headerProcessingMs: number }
 ): NormalizedMailboxRecord {
   if (typeof message.id !== "string" || !message.id) throw new MicrosoftGraphMalformedResponseError();
   const sender = normalizeSender(message.from);
@@ -709,7 +721,9 @@ export function normalizeMicrosoftMessage(
   const folderKind = parentFolderId ? folders.kindByFolderId.get(parentFolderId) : undefined;
   const flagStatus = normalizeFlagStatus(message.flag);
   const knownLocation = Boolean(parentFolderId && folders.knownFolderIds.has(parentFolderId));
+  const headersStarted = timing ? performance.now() : 0;
   const headers = allowlistedHeaders(message.internetMessageHeaders);
+  if (timing) timing.headerProcessingMs += performance.now() - headersStarted;
   const categories = Array.isArray(message.categories)
     ? message.categories.filter((category): category is string => typeof category === "string" && category.length > 0)
     : [];

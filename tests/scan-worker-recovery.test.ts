@@ -145,7 +145,11 @@ describe("scan performance without weaker recovery", () => {
       requestMs: expect.any(Number), progressWriteMs: expect.any(Number), progressWrites: 22
     }));
     const telemetry = vi.mocked(console.info).mock.calls.at(-1)![1];
-    expect(JSON.stringify(telemetry)).not.toMatch(/fixture|connection|@|token|sender|subject|scanId|userId/i);
+    expect(telemetry.metadataWallMs).toBeCloseTo(telemetry.metadataFetchMs + telemetry.metadataCoordinationMs +
+      telemetry.metadataProgressWriteMs + telemetry.mainMessageResponseBodyJsonMs + telemetry.normalizationMs +
+      telemetry.aggregatorWallMs + telemetry.metadataOtherMs, -1);
+    expect(JSON.stringify(Object.values(telemetry))).not.toMatch(/fixture|connection|@|token|sender|subject|scanId|userId/i);
+    expect(Object.keys(telemetry)).not.toContain("subject");
   });
 
   it("persists fallback reset and failure immediately inside the throttle window", async () => {

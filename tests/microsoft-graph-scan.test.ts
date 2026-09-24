@@ -15,6 +15,22 @@ import {
 } from "@/lib/providers/microsoft/provider";
 
 describe("Microsoft Graph read-only client", () => {
+  it("times body consumption separately and attributes only main-message JSON to the main scan", async () => {
+    let clock = 0;
+    const timer = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const response = (elapsed: number, fail = false) => ({ ok: true, status: 200,
+      json: async () => { clock += elapsed; if (fail) throw new Error("private body"); return { value: [] }; }
+    }) as Response;
+    try {
+      const client = new MicrosoftGraphClient({ accessToken: "fixture", fetchImpl: vi.fn()
+        .mockResolvedValueOnce(response(40)).mockResolvedValueOnce(response(1900))
+        .mockResolvedValueOnce(response(20, true)) as typeof fetch });
+      await client.getJson("/me/mailFolders", undefined, "folder_resolution");
+      await client.getJson("/me/messages", undefined, "main_message_scan");
+      await expect(client.getJson("/me/messages", undefined, "main_message_scan")).rejects.toThrow();
+      expect(client.getMetrics()).toMatchObject({ responseBodyJsonMs: 1960, mainMessageResponseBodyJsonMs: 1920, requests: 3 });
+    } finally { timer.mockRestore(); }
+  });
   it("refreshes once after a 401 and retries only with GET", async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response(null, { status: 401 }))

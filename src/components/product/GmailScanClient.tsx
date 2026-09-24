@@ -90,6 +90,7 @@ function MailboxScanClient({
     setReattached(false);
     setOperationMode(mode);
     setOperationStartedAt(Date.now());
+    setProgress(null);
     setPending(true);
     try {
       const response = await fetch(`${endpoint}/start`, {

@@ -5,6 +5,8 @@ const graphVersionPath = "/v1.0/";
 const maxRetryDelayMs = 30_000;
 
 export type MicrosoftGraphClientMetrics = {
+  responseBodyJsonMs: number;
+  mainMessageResponseBodyJsonMs: number;
   requests: number;
   subrequests: number;
   maxConcurrentRequests: number;
@@ -90,6 +92,8 @@ export class MicrosoftGraphClient {
   private readonly random: () => number;
   private activeRequests = 0;
   private readonly metrics: MicrosoftGraphClientMetrics = {
+    responseBodyJsonMs: 0,
+    mainMessageResponseBodyJsonMs: 0,
     requests: 0,
     subrequests: 0,
     maxConcurrentRequests: 0,
@@ -205,11 +209,16 @@ export class MicrosoftGraphClient {
           graph4xxCategory(response.status)
         );
       }
+      const bodyStarted = performance.now();
       try {
         return (await response.json()) as T;
       } catch {
         if (operation) this.recordNonHttpFailure(operation, "invalid_json");
         throw new MicrosoftGraphMalformedResponseError();
+      } finally {
+        const elapsed = performance.now() - bodyStarted;
+        this.metrics.responseBodyJsonMs += elapsed;
+        if (operation === "main_message_scan") this.metrics.mainMessageResponseBodyJsonMs += elapsed;
       }
     }
   }

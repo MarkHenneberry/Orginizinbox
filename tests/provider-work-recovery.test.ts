@@ -25,6 +25,24 @@ beforeEach(() => {
 });
 
 describe("durable scan fencing", () => {
+  it("creates fresh progress after completion but reuses an existing running scan", async () => {
+    const store = new DurableLiveScanStore(new MemoryScanStateRepository());
+    const input = (scanId: string, startedAt: number) => ({ userId: "fixture-user", providerConnectionId: "fixture-connection",
+      session: { progress: { ...createProgress({ scanId, provider: "microsoft", limit: "full", batchSize: 100 }), startedAt }, expiresAt: nextExpiry() }
+    });
+    const old = input("old", Date.now() - 267_000);
+    await store.accept(old);
+    const duplicate = await store.accept(input("duplicate", Date.now()));
+    expect(duplicate.reused).toBe(true);
+    expect(duplicate.session.progress.scanId).toBe("old");
+    expect(duplicate.session.progress.startedAt).toBe(old.session.progress.startedAt);
+    await store.set(old.userId, { ...old.session, progress: { ...old.session.progress, status: "completed" } });
+    const fresh = input("fresh", Date.now());
+    const accepted = await store.accept(fresh);
+    expect(accepted.reused).toBe(false);
+    expect(accepted.session.progress.scanId).toBe("fresh");
+    expect(accepted.session.progress.startedAt).toBe(fresh.session.progress.startedAt);
+  });
   it.each(["cancelled", "disconnected", "deleted", "replaced", "lease_expired", "ownership_lost"])(
     "post-claim authorization denies provider access when durable predicate fails: %s", async () => {
       db.scanState.updateMany.mockResolvedValue({ count: 0 });

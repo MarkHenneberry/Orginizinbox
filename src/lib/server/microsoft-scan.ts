@@ -155,6 +155,8 @@ async function executeMicrosoftScan(input: {
     });
     let aggregator = createAggregator();
     const metadataStarted = performance.now();
+    const metadataBaseline = { requestMs, coordinationMs, progressWriteMs };
+    let aggregatorWallMs = 0;
 
     await provider.processMetadataWithAdaptiveFallback({
       scan: {
@@ -162,7 +164,9 @@ async function executeMicrosoftScan(input: {
         signal: input.signal
       },
       async onBatch(batch) {
+        const aggregationStarted = performance.now();
         const timing = aggregator.processBatch(batch.records);
+        aggregatorWallMs += performance.now() - aggregationStarted;
         protectionClassificationMs += timing.protectionClassificationMs;
         aggregationMs += timing.aggregationMs;
         subjectProtectionMs += batch.subjectProtectionMs ?? 0;
@@ -189,6 +193,16 @@ async function executeMicrosoftScan(input: {
       }
     });
 
+    const metadataWallMs = performance.now() - metadataStarted;
+    const scanMetrics = provider.getScanMetrics();
+    const metadataFetchMs = requestMs - metadataBaseline.requestMs;
+    const metadataCoordinationMs = coordinationMs - metadataBaseline.coordinationMs;
+    const metadataProgressWriteMs = progressWriteMs - metadataBaseline.progressWriteMs;
+    const mainMessageResponseBodyJsonMs = scanMetrics.mainMessageResponseBodyJsonMs ?? 0;
+    const normalizationMs = scanMetrics.normalizationMs ?? 0;
+    const metadataOtherMs = metadataWallMs - metadataFetchMs - metadataCoordinationMs -
+      metadataProgressWriteMs - mainMessageResponseBodyJsonMs - normalizationMs - aggregatorWallMs;
+
     input.progress.status = "completed";
     input.progress.completedAt = Date.now();
     input.progress.durationMs = Math.round(performance.now() - started);
@@ -206,6 +220,20 @@ async function executeMicrosoftScan(input: {
 
     {
       console.info("Outlook scan metrics", {
+        responseBodyJsonMs: Math.round(scanMetrics.responseBodyJsonMs ?? 0),
+        mainMessageResponseBodyJsonMs: Math.round(mainMessageResponseBodyJsonMs),
+        normalizationMs: Math.round(normalizationMs),
+        evidenceProcessingMs: Math.round(scanMetrics.evidenceProcessingMs ?? 0),
+        headerProcessingMs: Math.round(scanMetrics.headerProcessingMs ?? 0),
+        subjectProtectionMs: Math.round(subjectProtectionMs),
+        aggregatorWallMs: Math.round(aggregatorWallMs),
+        classificationMs: Math.round(protectionClassificationMs),
+        aggregationMs: Math.round(aggregationMs),
+        metadataWallMs: Math.round(metadataWallMs),
+        metadataFetchMs: Math.round(metadataFetchMs),
+        metadataCoordinationMs: Math.round(metadataCoordinationMs),
+        metadataProgressWriteMs: Math.round(metadataProgressWriteMs),
+        metadataOtherMs: Math.round(metadataOtherMs),
         folderRequests: provider.getScanMetrics().requestsByOperation?.folder_resolution ?? 0,
         conversationRequests: provider.getScanMetrics().requestsByOperation?.conversation_index ?? 0,
         credentialResolutionMs,

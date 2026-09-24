@@ -5,6 +5,8 @@ Outlook scan progress distinguishes preparing the inbox, checking sent conversat
 
 Production Outlook read-only scans retain shared per-connection request leases and revalidate durable scan ownership immediately before every Graph request, including retries. They omit the redundant pre-claim fence but check authorization after unsuccessful acquisition attempts before waiting again. No authorization is cached across requests; cleanup and development coordination remain unchanged. Reattached running scans explicitly explain that elapsed time includes earlier work.
 
+Outlook aggregate timing separates fetch-to-response, response body consumption/JSON parsing, normalization, and aggregator wall time. Header/evidence/Subject timings are subsets of normalization; classification/aggregation timings are subsets of aggregator wall time. Metadata-only fetch, coordination and progress-write deltas plus an explicit residual reconcile to metadata wall time. Starting a new scan clears the previous progress display while acceptance is pending; only the server's accepted/reused result supplies the next scan timestamp.
+
 **Status:** Pre-build product specification  
 **Platform:** Web application  
 **Current mailbox provider:** Gmail
