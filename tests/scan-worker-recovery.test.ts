@@ -106,25 +106,24 @@ describe("scan performance without weaker recovery", () => {
     return (provider === "gmail" ? runGmailBenchmark : runMicrosoftScan)({ scanId: "scan", lockOwner: "worker" });
   }
 
-  it.each(["null", "throw"])("persists the connection subreason when resolution returns %s", async (outcome) => {
-    mocks.gmailConnection.mockImplementationOnce(async (_user, _connection, diagnostic) => {
-      diagnostic.failureReason = outcome === "null" ? "runtime_config_unavailable" : "access_token_decrypt_failed";
+  it.each(["null", "throw"])("preserves failed scan handling when connection resolution returns %s", async (outcome) => {
+    mocks.gmailConnection.mockImplementationOnce(async () => {
       if (outcome === "throw") throw new Error("Private fixture failure");
       return null;
     });
     await run("gmail");
     const final = await mocks.save.mock.results.at(-1)!.value as LiveScanSession;
-    expect(final.progress).toMatchObject({ status: "failed", gmailFailureCategory: "provider_connection_failed",
-      gmailConnectionFailureReason: outcome === "null" ? "runtime_config_unavailable" : "access_token_decrypt_failed" });
+    expect(final.progress.status).toBe("failed");
+    expect(final.progress.errors).toHaveLength(1);
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
-  it("does not mislabel an IMAP connection failure as credential resolution failure", async () => {
+  it("preserves failed scan handling after an IMAP connection failure", async () => {
     mocks.fence.mockRejectedValueOnce(Object.assign(new Error("Private fixture failure"), { code: "CONNECT_TIMEOUT" }));
     await run("gmail");
     const final = await mocks.save.mock.results.at(-1)!.value as LiveScanSession;
-    expect(final.progress.gmailFailureCategory).toBe("provider_connection_failed");
-    expect(final.progress.gmailConnectionFailureReason).toBeUndefined();
+    expect(final.progress.status).toBe("failed");
+    expect(final.progress.errors).toHaveLength(1);
   });
 
   it("persists 22 snapshots for 100 Outlook pages while fencing every page", async () => {

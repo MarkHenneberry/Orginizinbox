@@ -2,8 +2,7 @@ import "server-only";
 
 type Environment = Record<string, string | undefined>;
 
-// Fixed check names and booleans only; never expose configuration values.
-export function productionProviderChecks(input: Environment) {
+function productionProviderChecks(input: Environment) {
   const text = (name: string) => Boolean(input[name]?.trim());
   const key = (name: string) => {
     const value = input[name] ?? "";

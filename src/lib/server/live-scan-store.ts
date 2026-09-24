@@ -13,8 +13,6 @@ export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "can
 export type LiveScanProvider = "gmail" | "microsoft";
 
 export type BenchmarkProgress = {
-  gmailFailureCategory?: import("@/lib/server/gmail-scan-failure").GmailScanFailureCategory;
-  gmailConnectionFailureReason?: import("@/lib/server/gmail-scan-failure").GmailConnectionFailureReason;
   scanId: string;
   provider: LiveScanProvider;
   status: BenchmarkStatus;

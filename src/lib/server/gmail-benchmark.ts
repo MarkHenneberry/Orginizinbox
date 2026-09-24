@@ -11,7 +11,6 @@ import {
   type GmailScalableScanIdentity
 } from "@/lib/providers/gmail/scalable-targets";
 import { getActiveGmailConnection } from "@/lib/server/gmail-connection";
-import { classifyGmailScanFailure, type GmailScanFailurePhase, type GmailConnectionDiagnostic } from "@/lib/server/gmail-scan-failure";
 import {
   acceptLiveScan,
   createProgress,
@@ -110,16 +109,13 @@ async function executeGmailBenchmark(input: {
   let aggregationMs = 0;
   let subjectProtectionMs = 0;
   const writeProgress = createDurableWriteGate(5_000);
-  let failurePhase: GmailScanFailurePhase = "connection";
-  const connectionDiagnostic: GmailConnectionDiagnostic = {};
 
   try {
-    const activeConnection = await getActiveGmailConnection(input.userId, input.providerConnectionId, connectionDiagnostic);
+    const activeConnection = await getActiveGmailConnection(input.userId, input.providerConnectionId);
     if (!activeConnection) {
       throw new Error("No active Gmail connection is available.");
     }
 
-    failurePhase = "provider";
     const provider = new GmailProvider(activeConnection.accessToken, activeConnection.accountEmail,
       createScanRequestFence(input.progress.scanId, input.lockOwner, "gmail"));
     const conversationIndexStarted = performance.now();
@@ -187,9 +183,7 @@ async function executeGmailBenchmark(input: {
           subjectProtectionMs
       );
       input.progress.approxMemoryMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
-      failurePhase = "durable";
       await writeProgress(() => setLiveScan(input.userId, { progress: input.progress, expiresAt: nextExpiry() }, "gmail", input.lockOwner));
-      failurePhase = "provider";
     }
 
     input.progress.status = "completed";
@@ -217,7 +211,6 @@ async function executeGmailBenchmark(input: {
       ? buildScalableCleanupTargets(report.senders, eligibleIdentities) : undefined;
     eligibleIdentities.length = 0;
     input.progress.gmailRetainedEligibleIdentityCount = 0;
-    failurePhase = "durable";
     await setLiveScan(input.userId, {
       progress: input.progress,
       report,
@@ -227,10 +220,6 @@ async function executeGmailBenchmark(input: {
       expiresAt: nextExpiry()
     }, "gmail", input.lockOwner);
   } catch (error) {
-    input.progress.gmailFailureCategory = classifyGmailScanFailure(error, failurePhase);
-    if (failurePhase === "connection") {
-      input.progress.gmailConnectionFailureReason = connectionDiagnostic.failureReason ?? "unknown_connection_failure";
-    }
     input.progress.completedAt = Date.now();
     input.progress.durationMs = Math.round(performance.now() - started);
     if (error instanceof DOMException && error.name === "AbortError") {
