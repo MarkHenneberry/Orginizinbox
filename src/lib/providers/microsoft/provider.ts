@@ -221,7 +221,12 @@ export class MicrosoftProvider implements MailboxProcessor {
     yield* this.scanMailboxMetadata(input);
   }
 
-  private async *scanMailboxMetadata(input: ScanMetadataInput): AsyncIterable<ScanMetadataBatch> {
+  // Temporary diagnostic path only; it never supplies a report to the application.
+  async *scanBaseMetadataForCandidateCount(input: ScanMetadataInput): AsyncIterable<ScanMetadataBatch> {
+    yield* this.scanMailboxMetadata(input, false);
+  }
+
+  private async *scanMailboxMetadata(input: ScanMetadataInput, includeHeaders = true): AsyncIterable<ScanMetadataBatch> {
     const folders = await this.getFolderIndex(input.signal);
     const pageSize = this.mainMessagePageSize;
     const numericLimit = input.limit === undefined || input.limit === "full" ? undefined : input.limit;
@@ -235,7 +240,7 @@ export class MicrosoftProvider implements MailboxProcessor {
     });
     this.scannedFolderIds.add("mailbox-wide");
     const firstPath = collectionPath("/me/messages", {
-      "$select": microsoftMessageSelect.join(","),
+      "$select": microsoftMessageSelect.filter((field) => includeHeaders || field !== "internetMessageHeaders").join(","),
       "$top": String(pageSize)
     });
 
@@ -243,6 +248,7 @@ export class MicrosoftProvider implements MailboxProcessor {
       this.mainMessagePageSizes.add(pageSize);
       const remaining = numericLimit === undefined ? page.value.length : Math.max(0, numericLimit - processed);
       const messages = remaining >= page.value.length ? page.value : page.value.slice(0, remaining);
+      if (!includeHeaders) for (const message of messages) message.internetMessageHeaders = undefined;
       this.observeRetainedMessages(messages);
       for (const batchMessages of chunks(messages, outputBatchSize)) {
         let subjectProtectionMs = 0;

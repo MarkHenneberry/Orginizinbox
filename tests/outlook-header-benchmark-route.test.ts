@@ -2,10 +2,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.mock("@/lib/server/session", () => ({ getSession: vi.fn() }));
 vi.mock("@/lib/server/microsoft-connection", () => ({ getActiveMicrosoftConnection: vi.fn() }));
 vi.mock("@/lib/server/outlook-header-benchmark", () => ({ runOutlookHeaderBenchmark: vi.fn() }));
+vi.mock("@/lib/server/outlook-candidate-count", () => ({ runOutlookCandidateCount: vi.fn() }));
 vi.mock("@/lib/server/provider-request-coordinator", () => ({ createProviderRequestCoordinator: vi.fn() }));
 import { getSession } from "@/lib/server/session";
 import { getActiveMicrosoftConnection } from "@/lib/server/microsoft-connection";
 import { runOutlookHeaderBenchmark } from "@/lib/server/outlook-header-benchmark";
+import { runOutlookCandidateCount } from "@/lib/server/outlook-candidate-count";
 import { POST } from "../app/api/diagnostics/outlook-header-benchmark/route";
 const request = (token = "operator") => new Request("https://example.test/api/diagnostics/outlook-header-benchmark", {
   method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ order: "headers_first" })
@@ -31,4 +33,15 @@ it("scopes lookup to session owner and redacts unexpected failures", async () =>
   expect(getActiveMicrosoftConnection).toHaveBeenCalledWith("owner", "connection");
   expect(await response.json()).toEqual({ success: false });
   expect(response.headers.get("cache-control")).toBe("private, no-store");
+});
+it("dispatches the protected candidate-count mode without creating a report", async () => {
+  vi.mocked(getSession).mockResolvedValue({ userId: "owner", providerConnectionId: "connection" } as never);
+  vi.mocked(getActiveMicrosoftConnection).mockResolvedValue({ accessToken: "fixture", connection: { id: "connection" } } as never);
+  vi.mocked(runOutlookCandidateCount).mockResolvedValue({ complete: true, stage2Candidates: 2 } as never);
+  const response = await POST(new Request("https://example.test/api/diagnostics/outlook-header-benchmark", {
+    method: "POST", headers: { authorization: "Bearer operator" }, body: JSON.stringify({ mode: "candidate_count" })
+  }));
+  expect(await response.json()).toEqual({ complete: true, stage2Candidates: 2 });
+  expect(runOutlookHeaderBenchmark).not.toHaveBeenCalled();
+  expect(runOutlookCandidateCount).toHaveBeenCalledOnce();
 });

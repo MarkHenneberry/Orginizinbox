@@ -9,6 +9,8 @@ Outlook aggregate timing separates fetch-to-response, response body consumption/
 
 Temporary Outlook header A/B measurement is default-off behind `OUTLOOK_HEADER_BENCHMARK_ENABLED=true`, operator CRON bearer authorization and a valid owning Microsoft session. It compares at most five mailbox-wide pages of 100 messages per arm, with/without headers, follows trusted pagination, and returns only aggregate decoded UTF-8 sizes and timing/counts. It never produces a report or cleanup candidates. Normal production scanning still fetches all classifier evidence unchanged. Repeat with reversed arm order to check cache/order bias; results are a bounded sample, not a frozen mailbox comparison. Remove the endpoint after diagnosis.
 
+The temporary Outlook benchmark also accepts a candidate-count mode: complete Sent participation indexing followed by the normal sequential mailbox-wide metadata path without headers. It applies existing non-header per-message protections and cleanup age eligibility, returns only aggregate counts and sample-based payload estimates, and never creates or replaces a report. Incomplete passes must not present full-mailbox estimates. Normal scanning and cleanup behavior are unchanged.
+
 **Status:** Pre-build product specification  
 **Platform:** Web application  
 **Current mailbox provider:** Gmail

@@ -3,6 +3,7 @@ import { getSession } from "@/lib/server/session";
 import { getActiveMicrosoftConnection } from "@/lib/server/microsoft-connection";
 import { createProviderRequestCoordinator } from "@/lib/server/provider-request-coordinator";
 import { runOutlookHeaderBenchmark } from "@/lib/server/outlook-header-benchmark";
+import { runOutlookCandidateCount } from "@/lib/server/outlook-candidate-count";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,8 +24,9 @@ export async function POST(request: Request) {
     const connection = await getActiveMicrosoftConnection(session.userId, session.providerConnectionId);
     if (!connection) return Response.json({ available: false }, { status: 403, headers });
     const body = await request.json();
-    if (body?.order !== "headers_first" && body?.order !== "no_headers_first") return Response.json({ valid: false }, { status: 400, headers });
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(180_000)]);
+    const candidateCount = body?.mode === "candidate_count";
+    if (!candidateCount && body?.order !== "headers_first" && body?.order !== "no_headers_first") return Response.json({ valid: false }, { status: 400, headers });
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(candidateCount ? 270_000 : 180_000)]);
     const coordinate = createProviderRequestCoordinator(connection.connection.id, {
       async beforeRequest() {
         signal.throwIfAborted();
@@ -37,7 +39,8 @@ export async function POST(request: Request) {
         }
       }
     });
-    const result = await runOutlookHeaderBenchmark({ accessToken: connection.accessToken, signal,
+    const result = candidateCount ? await runOutlookCandidateCount({ accessToken: connection.accessToken, signal, coordinate })
+      : await runOutlookHeaderBenchmark({ accessToken: connection.accessToken, signal,
       noHeadersFirst: body.order === "no_headers_first", coordinate });
     return Response.json(result, { headers });
   } catch {
