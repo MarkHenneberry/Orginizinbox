@@ -25,6 +25,73 @@ beforeEach(() => {
 });
 
 describe("durable scan fencing", () => {
+  it.each(["cancelled", "disconnected", "deleted", "replaced", "lease_expired", "ownership_lost"])(
+    "post-claim authorization denies provider access when durable predicate fails: %s", async () => {
+      db.scanState.updateMany.mockResolvedValue({ count: 0 });
+      const request = vi.fn();
+      const coordinate = createProviderRequestCoordinator("connection", {
+        fenceAfterClaimOnly: true, beforeRequest: createScanRequestFence("scan", "owner")
+      });
+      await expect(coordinate(request)).rejects.toMatchObject({ name: "AbortError" });
+      expect(request).not.toHaveBeenCalled();
+      expect(db.scanState.updateMany).toHaveBeenCalledOnce();
+      expect(db.providerRequestLease.updateMany).toHaveBeenCalledTimes(2);
+      expect(db.providerRequestLease.updateMany.mock.calls[1][0].data).toEqual({ leaseOwner: null, leaseExpiresAt: null });
+    }
+  );
+
+  it("does not reuse authorization for a later page or retry", async () => {
+    const coordinate = createProviderRequestCoordinator("connection", {
+      fenceAfterClaimOnly: true, beforeRequest: createScanRequestFence("scan", "owner")
+    });
+    const request = vi.fn();
+    await coordinate(request);
+    db.scanState.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(coordinate(request)).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("checks cancellation while waiting for shared request capacity", async () => {
+    db.providerRequestLease.updateMany.mockResolvedValue({ count: 0 });
+    db.scanState.updateMany.mockResolvedValue({ count: 0 });
+    const request = vi.fn();
+    const sleep = vi.fn();
+    const coordinate = createProviderRequestCoordinator("connection", {
+      fenceAfterClaimOnly: true, beforeRequest: createScanRequestFence("scan", "owner"), sleep
+    });
+    await expect(coordinate(request)).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on post-claim database errors and still releases capacity", async () => {
+    db.scanState.updateMany.mockRejectedValueOnce(new Error("storage unavailable"));
+    const request = vi.fn();
+    const coordinate = createProviderRequestCoordinator("connection", {
+      fenceAfterClaimOnly: true, beforeRequest: createScanRequestFence("scan", "owner")
+    });
+    await expect(coordinate(request)).rejects.toThrow("storage unavailable");
+    expect(request).not.toHaveBeenCalled();
+    expect(db.providerRequestLease.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it("reduces 100 uncontended requests from 400 to 300 coordination writes in a synthetic latency model", async () => {
+    for (const optimized of [false, true]) {
+      let dbMs = 0;
+      let providerMs = 0;
+      const update = vi.fn(async () => { dbMs += 250; return { count: 1 }; });
+      const coordinate = createProviderRequestCoordinator("connection", {
+        fenceAfterClaimOnly: optimized,
+        client: { providerRequestLease: { upsert: vi.fn(), updateMany: update } } as never,
+        beforeRequest: async () => { dbMs += 250; }
+      });
+      for (let page = 0; page < 100; page++) await coordinate(async () => { providerMs += 1000; });
+      expect(update).toHaveBeenCalledTimes(200);
+      expect(dbMs).toBe(optimized ? 75_000 : 100_000);
+      expect(dbMs + providerMs).toBe(optimized ? 175_000 : 200_000);
+    }
+  });
+
   it("checks exact ownership, status, connection and expiry while renewing only a live lease", async () => {
     await createScanRequestFence("scan-a", "worker-a")();
     expect(db.scanState.updateMany).toHaveBeenCalledWith({

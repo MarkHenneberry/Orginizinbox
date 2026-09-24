@@ -50,6 +50,7 @@ describe("Outlook scan UX", () => {
     }));
     expect(html).toContain(title);
     expect(html).toContain("Messages checked");
+    expect(html).toContain("Continuing your existing scan. Elapsed time includes work already in progress.");
     if (phase !== "messages") expect(html).toContain("Safety checks run before the message count increases.");
   });
 

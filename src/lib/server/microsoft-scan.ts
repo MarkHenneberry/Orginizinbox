@@ -110,6 +110,7 @@ async function executeMicrosoftScan(input: {
     if (!activeConnection) throw new Error("Connect Microsoft before scanning Outlook.");
     credentialResolutionMs = Math.round(performance.now() - started);
     const coordinate = createProviderRequestCoordinator(activeConnection.connection.id, {
+      fenceAfterClaimOnly: process.env.NODE_ENV === "production",
       beforeRequest: createScanRequestFence(input.progress.scanId, input.lockOwner, "microsoft")
     });
 

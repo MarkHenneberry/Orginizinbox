@@ -50,15 +50,17 @@ describe("provider multi-user coordination", () => {
     expect(second.encryptedRefreshToken).toBe("encrypted:refresh-1");
   });
 
-  it("bounds one connection while allowing another user's provider work concurrently", async () => {
+  it.each([false, true])("bounds one connection while allowing another user's work (post-claim fence: %s)", async (fenceAfterClaimOnly) => {
     const leaseClient = requestLeaseClient();
     const firstUser = createProviderRequestCoordinator("connection-a", {
+      fenceAfterClaimOnly,
       limit: 1,
       client: leaseClient as never,
       sleep: () => new Promise<void>((resolve) => setTimeout(resolve, 1)),
       random: () => 0
     });
     const secondUser = createProviderRequestCoordinator("connection-b", {
+      fenceAfterClaimOnly,
       limit: 1,
       client: leaseClient as never,
       sleep: () => new Promise<void>((resolve) => setTimeout(resolve, 1)),

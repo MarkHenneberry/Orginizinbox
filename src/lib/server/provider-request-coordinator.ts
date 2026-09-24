@@ -12,6 +12,8 @@ export function createProviderRequestCoordinator(
     sleep?: (milliseconds: number) => Promise<void>;
     random?: () => number;
     beforeRequest?: () => Promise<void>;
+    // Read-only scans may omit the redundant pre-claim fence, never the pre-request fence.
+    fenceAfterClaimOnly?: boolean;
   } = {}
 ) {
   const limit = Math.max(1, Math.min(4, input.limit ?? 2));
@@ -37,7 +39,7 @@ export function createProviderRequestCoordinator(
     await ensureSlots();
 
     for (let attempt = 0; attempt < 200; attempt += 1) {
-      await input.beforeRequest?.();
+      if (!input.fenceAfterClaimOnly) await input.beforeRequest?.();
       const claimedAt = now();
       for (let slot = 0; slot < limit; slot += 1) {
         const claimed = await client.providerRequestLease.updateMany({
@@ -63,6 +65,7 @@ export function createProviderRequestCoordinator(
           });
         }
       }
+      if (input.fenceAfterClaimOnly) await input.beforeRequest?.();
       await sleep(20 + Math.floor(random() * 40));
     }
     throw new Error("Provider request concurrency limit is busy.");

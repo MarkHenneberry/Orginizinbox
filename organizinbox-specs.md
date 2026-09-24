@@ -3,6 +3,8 @@
 
 Outlook scan progress distinguishes preparing the inbox, checking sent conversations, and scanning messages. Messages checked counts main-scan classification only, not preparatory safety work. Production scan timing telemetry is aggregate-only (durations, request/page/retry counts and coordination/write overhead), never mailbox content, identifiers, tokens or raw errors. Existing participation protection, scan transport and retention rules remain unchanged.
 
+Production Outlook read-only scans retain shared per-connection request leases and revalidate durable scan ownership immediately before every Graph request, including retries. They omit the redundant pre-claim fence but check authorization after unsuccessful acquisition attempts before waiting again. No authorization is cached across requests; cleanup and development coordination remain unchanged. Reattached running scans explicitly explain that elapsed time includes earlier work.
+
 **Status:** Pre-build product specification  
 **Platform:** Web application  
 **Current mailbox provider:** Gmail

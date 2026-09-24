@@ -53,6 +53,7 @@ function MailboxScanClient({
 }) {
   const [progress, setProgress] = useState<ScanProgress | null>(initialProgress);
   const [pending, setPending] = useState(false);
+  const [reattached, setReattached] = useState(initialProgress?.status === "running");
   const [pollError, setPollError] = useState(false);
   const [operationMode, setOperationMode] = useState<"scan" | "rescan">("scan");
   const [operationStartedAt, setOperationStartedAt] = useState<number | undefined>(initialProgress?.startedAt);
@@ -86,6 +87,7 @@ function MailboxScanClient({
   async function startScan(mode: "scan" | "rescan") {
     if (pendingRef.current || isRunning) return;
     pendingRef.current = true;
+    setReattached(false);
     setOperationMode(mode);
     setOperationStartedAt(Date.now());
     setPending(true);
@@ -95,9 +97,10 @@ function MailboxScanClient({
         headers: outlook ? { "Content-Type": "application/json" } : undefined,
         body: outlook ? JSON.stringify({ transport: outlookTransport }) : undefined
       });
-      const payload = (await response.json()) as { progress?: ScanProgress; error?: string };
+      const payload = (await response.json()) as { progress?: ScanProgress; error?: string; reused?: boolean };
       if (!response.ok) throw new Error("We couldn't scan your inbox. Try again.");
       setProgress(payload.progress ?? null);
+      setReattached(payload.reused === true);
       setOperationStartedAt(payload.progress?.startedAt ?? Date.now());
     } catch (error) {
       setProgress({
@@ -160,6 +163,9 @@ function MailboxScanClient({
         </div>
       ) : null}
 
+      {working && outlook && reattached ? (
+        <p role="status" className="muted mt-4 text-sm">Continuing your existing scan. Elapsed time includes work already in progress.</p>
+      ) : null}
       {working ? (
         <OperationStatus
           description={outlook && (progress?.phase === "preparing" || progress?.phase === "sent_conversations") ? "Safety checks run before the message count increases. Large inboxes can take several minutes." : "We're safely checking your mailbox and building your Inbox Report. For large inboxes this can take a few minutes."}
