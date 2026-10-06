@@ -1,10 +1,8 @@
 import type { Metadata } from "next";
-import { AppHeader } from "@/components/product/AppHeader";
+import Image from "next/image";
+import Link from "next/link";
 import { AppFooter } from "@/components/product/AppFooter";
-import { runtimeConfig, siteConfig } from "@/lib/config";
-import { getOptionalActiveReportState } from "@/lib/server/report-state";
-import { getCreditPresentation } from "@/lib/server/credit-presentation";
-import { getProductionCleanupUiState } from "@/lib/server/production-cleanup-ui";
+import { siteConfig } from "@/lib/config";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 
 export const metadata: Metadata = {
@@ -17,22 +15,29 @@ export const metadata: Metadata = {
 
 export default async function ProductLayout({ children }: { children: React.ReactNode }) {
   const connection = await getCurrentProviderConnection();
-  const report = await getOptionalActiveReportState();
-  const credits = await getCreditPresentation();
-  const production = process.env.NODE_ENV === "production";
-  const cleanup = production ? await getProductionCleanupUiState() : null;
-  const connected = connection.mode === "connected";
-  const developmentCleanup = connected && (connection.provider === "gmail"
-    ? runtimeConfig.gmailCleanupEnabled || runtimeConfig.gmailScalableCleanupDevEnabled
-    : runtimeConfig.outlookCleanupDevEnabled && runtimeConfig.microsoftOAuthDevEnabled);
 
   return (
-    <div className="product-shell">
-      <AppHeader logoPath={siteConfig.logoPath} provider={connected ? connection.provider : undefined} availableCredits={credits?.available ?? null}
-        reportAvailable={Boolean(report)} scanAvailable={connected}
-        cleanupStartAvailable={production ? cleanup?.access === "available" : developmentCleanup}
-        cleanupAvailable={production ? Boolean(cleanup?.hasJob || (report && cleanup?.access === "available")) : Boolean(report && developmentCleanup)} />
-      <div className="product-content">{children}</div>
+    <div className="min-h-screen bg-[var(--background)]">
+      <header className="border-b border-[var(--line)] bg-white">
+        <div className="app-header-inner container flex min-h-20 flex-wrap items-center justify-between gap-4">
+          <Link href="/" aria-label="Organizinbox home" className="focus-ring flex items-center gap-3 rounded-md font-extrabold text-[var(--navy)]">
+            <Image src={siteConfig.logoPath} alt="Organizinbox" width={40} height={40} priority />
+            <span>Organizinbox</span>
+          </Link>
+          <nav className="flex flex-wrap items-center gap-2 text-sm font-bold text-[var(--navy)]" aria-label="Application navigation">
+            {connection.mode === "connected" ? (
+              <span className="badge">{connection.provider === "gmail" ? "Gmail" : "Microsoft"} connected</span>
+            ) : null}
+            <Link className="rounded-md px-3 py-2 hover:bg-[var(--soft)]" href="/app/help">
+              Help
+            </Link>
+            <Link className="rounded-md px-3 py-2 hover:bg-[var(--soft)]" href="/app/account">
+              Account
+            </Link>
+          </nav>
+        </div>
+      </header>
+      <div className="min-h-[calc(100vh-18rem)]">{children}</div>
       <AppFooter />
     </div>
   );

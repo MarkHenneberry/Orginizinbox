@@ -1580,7 +1580,7 @@ Preserve bounded reconciliation for missed delivery, durable billing leases and 
 
 The core positioning is: "See what's clogging your inbox. Clean thousands of unwanted emails safely." Supporting copy: "Pay once. No subscription. Credits don't expire." Explain that only verified moves spend credits, verified Undo returns them, and per-job safety limits still apply. Do not promise an exact number of eligible emails, instant completion, unlimited throughput or permanent deletion.
 
-Customers can connect an available provider and inspect a free Inbox Report before paying. Free scanning does not include free cleanup credits. `/app/credits` is the authenticated purchase destination, showing available, reserved and total credits, the three existing one-time packs (50,000 Recommended), and payment-status reconciliation when applicable. Account shows only a compact balance summary linking to Manage credits, alongside inbox connection and explicitly authenticated inbox linking. No monthly plans, subscription status, renewals or portal-management UI. Existing shared ownership, purchase validation, reservation, verified-move spending and verified-Undo credit restoration are unchanged.
+Customers can connect an available provider and inspect a free Inbox Report before paying. Free scanning does not include free cleanup credits. Account displays total balance, reserved/available credits and one-time pack purchase actions; no monthly plans, subscription status, renewals or portal-management UI.
 
 Production cleanup still requires provider availability, valid connection, durable Workflow/database/encryption infrastructure, explicit independent default-off cleanup flags and sufficient server-verified credits. Development cleanup remains unchanged. Existing-job status, verification and eligible Undo/Recovery Undo are not paywalled or disabled by turning off new cleanup. Buying credits cannot bypass rollout gates or authorize uncertain mutations.
 
@@ -2686,25 +2686,20 @@ After a genuinely new or reconnected Google authorization succeeds, the user sho
 
 Normal production/public navigation must not send users into the development Microsoft connection flow. Microsoft connection and scanning remain behind the explicit non-production `MICROSOFT_OAUTH_DEV_ENABLED` boundary. Successful development authorization may show Microsoft connected in the app shell and Account. Only the authenticated app may expose the separately gated 500-message Outlook cleanup validation, and it must not change public provider availability from coming soon.
 
-Pricing remains public and indexable. Its normal product CTA follows the central session-aware scan/app CTA. Pricing displays the three one-time credit packs and links to `/app/credits` purchases only when sales are available. Availability wording must remain truthful while cleanup or account linking is unavailable.
+Pricing remains public and indexable. Its normal product CTA follows the central session-aware scan/app CTA. Pricing displays the three one-time credit packs and links to authenticated Account purchases only when sales are available. Availability wording must remain truthful while cleanup or account linking is unavailable.
 
 Authenticated app header final navigation:
 
 ```text
 Organizinbox -> /
-Inbox Report -> /app/report when a current report exists; otherwise Scan -> /app/scan when connected
-Cleanup -> /app/cleanup when an existing job or available report/cleanup flow makes it useful
-Available account credits -> /app/credits (server-derived shared balance, no new polling)
-Provider/account menu -> Account, Help, Security, Data Access, Privacy
+Gmail connected or Microsoft connected badge when applicable
+Help -> /app/help
+Account -> /app/account
 ```
 
-Do not put Senders, Categories, Old Mail or public marketing navigation in the app header. Provider identity is clear in the compact account menu; disconnect remains on Account behind its existing confirmation. Mobile uses a compact disclosure navigation rather than wrapping desktop links, remains usable at 320px, and keeps credits discoverable. Unknown balances must not appear as zero. Request-local reads may be deduplicated but must never be cached across users or requests.
+Do not put Senders, Categories, Old Mail, Cleanup, or public marketing navigation in the app header.
 
-The authenticated app uses a persistent, restrained header and small utility footer across `/app`, scan progress, Inbox Report, cleanup review, cleanup progress, success, and account/settings surfaces. Use a local system UI font stack, clear headings, restrained navy/teal accents and visible keyboard focus, without external font dependencies. The primary journey remains Scan -> Inbox Report -> Review Cleanup -> Confirm -> Result / Undo.
-
-Account is a compact connection/settings page: connected inbox and report action first, then concise credits and linked-inbox sections, with destructive Google authorization controls visually separated. Help groups accessible disclosure rows under Getting started, Cleanup & Undo, and Privacy & safety. Disconnect wording is provider-neutral; Google-specific connected-app guidance is subordinate. Preserve all safety and temporary encrypted-state retention explanations.
-
-Review Cleanup shows the exact requested message count and server-derived available credits before starting new work, with Buy credits linking to `/app/credits` when insufficient. This is presentation only, not authorization: the existing server reservation/eligibility checks remain authoritative, balances can change, and existing-job confirmation/recovery must not be blocked by a UI snapshot that excludes reserved credits. Do not introduce polling for credit display or enable production cleanup.
+The authenticated app uses a stable, simple global header and footer across `/app`, scan progress, Inbox Report, cleanup review, cleanup progress, success, and account/settings surfaces.
 
 The app footer is contextual support navigation:
 
@@ -2726,7 +2721,6 @@ App-context support/account routes exist for:
 /app/data-access
 /app/privacy
 /app/account
-/app/credits
 ```
 
 These may reuse the same underlying Security, Data Access, Privacy, or Help content as public pages, but they must render inside the app shell and provide a clear path back to the active Inbox Report when a valid transient report exists. Otherwise, they should provide Back to Organizinbox -> `/app`. Contextual Back actions use the shared visible secondary-action treatment: outlined or equivalent secondary-button styling, adequate padding, visible hover/focus states, mobile touch-target sizing, and destination-specific labels. Opening Help, Security, Account, Data Access, or Privacy must not clear the transient report, trigger a rescan, switch report source, or create fixture data.

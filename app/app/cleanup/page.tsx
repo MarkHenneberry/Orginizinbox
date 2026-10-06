@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { getCreditPresentation } from "@/lib/server/credit-presentation";
 import Link from "next/link";
 import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { getProductionCleanupUiState } from "@/lib/server/production-cleanup-ui";
@@ -23,7 +22,6 @@ import { getCurrentGmailScalableCleanup } from "@/lib/server/gmail-scalable-clea
 import { getCurrentOutlookCleanup } from "@/lib/server/outlook-cleanup";
 
 export default async function CleanupPage() {
-  const credits = await getCreditPresentation();
   if (process.env.NODE_ENV === "production") {
     const state = await getProductionCleanupUiState(true);
     // Recovery does not depend on an unexpired report or permission to start another cleanup.
@@ -38,7 +36,6 @@ export default async function CleanupPage() {
         <h1 className="m-0 mt-2 text-4xl font-extrabold text-[var(--navy)]">Review cleanup</h1>
         {hasJob || (state.access === "available" && report && !live?.reportStale) ? (
           <GmailCleanupClient
-            availableCredits={credits?.available ?? null}
             key={`${state.provider}:${state.gmailJob?.id ?? state.outlookJob?.id ?? "selection"}`}
             bulkUndoProofEnabled={false} cleanupEnabled={true} legacyCleanupMaximum={0}
             scalableCleanupEnabled={state.provider === "gmail"} countOptions={state.provider === "gmail" ? [250, 500] : [500]}
@@ -84,7 +81,6 @@ export default async function CleanupPage() {
             : "Select one or more eligible sender groups, check the combined Suggested messages, and move only the email you approve to Trash."}
         </p>
         <GmailCleanupClient
-          availableCredits={credits?.available ?? null}
           bulkUndoProofEnabled={
             runtimeConfig.gmailBulkUndoProofEnabled &&
             runtimeConfig.gmailBulkUndoHistoryShadowEnabled

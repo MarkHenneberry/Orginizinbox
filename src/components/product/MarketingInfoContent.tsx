@@ -47,7 +47,7 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
               </div>
             ) : null}
             <div className="mt-8 flex flex-wrap gap-3">
-              {creditSalesAvailable ? <Link href="/app/credits" className="btn btn-secondary focus-ring">Buy cleanup credits</Link> : null}
+              {creditSalesAvailable ? <Link href="/app/account" className="btn btn-secondary focus-ring">Buy cleanup credits</Link> : null}
               <Link href={cta.href} className="btn btn-primary focus-ring">
                 {cta.label}
               </Link>
