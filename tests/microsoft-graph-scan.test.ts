@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { assessMessage } from "@/lib/domain/recommendations";
+import { StreamingReportAggregator } from "@/lib/domain/streaming-aggregator";
 import {
   MicrosoftGraphClient,
   MicrosoftGraphMutationUncertainError,
@@ -280,8 +281,8 @@ describe("Microsoft Graph metadata scan", () => {
       foldersScanned: 1,
       headerEnrichmentRequests: 0,
       messagesEnriched: 0,
-      mainMessagePageSize: 100,
-      mainMessagePageSizes: [100],
+      mainMessagePageSize: 500,
+      mainMessagePageSizes: [500],
       mainMessagePageFallbacks: 0,
       maxConcurrentRequests: 1
     });
@@ -307,11 +308,11 @@ describe("Microsoft Graph metadata scan", () => {
       "parentFolderId",
       "internetMessageHeaders"
     ]));
-    expect(messageRequest?.searchParams.get("$top")).toBe("100");
+    expect(messageRequest?.searchParams.get("$top")).toBe("500");
     expect(messageRequests).toHaveLength(2);
     expect(messageRequests[1]?.searchParams.get("$skiptoken")).toBe("page-2");
-    expect(microsoftMainMessagePreferredPageSize).toBe(100);
-    expect(microsoftMainMessageFallbackPageSize).toBe(50);
+    expect(microsoftMainMessagePreferredPageSize).toBe(500);
+    expect(microsoftMainMessageFallbackPageSize).toBe(100);
     expect(microsoftExperimentalFolderPageSize).toBe(200);
     const requestedFields = messageRequest?.searchParams.get("$select") ?? "";
     expect(requestedFields).not.toMatch(/body|bodyPreview|attachments|hasAttachments/i);
@@ -347,7 +348,7 @@ describe("Microsoft Graph metadata scan", () => {
     expect(records.every((record) => record.estimatedSize === undefined)).toBe(true);
   });
 
-  it("restarts the complete mailbox-wide scan at 50 after an invalid page", async () => {
+  it.each(["invalid_json", "invalid_shape"])("restarts at 100 without duplicate report data or classification changes after %s", async (failure) => {
     const requestedUrls: URL[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
@@ -363,46 +364,55 @@ describe("Microsoft Graph metadata scan", () => {
         folder("deleted-id", { totalItemCount: 0 })
       ] });
       if (url.pathname.endsWith("/sent-id/messages")) return jsonResponse({ value: [] });
-      if (url.pathname === "/v1.0/me/messages" && url.searchParams.get("$top") === "100") return jsonResponse({
+      if (url.pathname === "/v1.0/me/messages" && url.searchParams.get("$top") === "500") return jsonResponse({
         value: [message("discarded-attempt", "inbox-id", "attempt-conversation")],
         "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=invalid"
       });
-      if (url.searchParams.get("$skiptoken") === "invalid") return new Response("invalid-json", { status: 200 });
-      if (url.pathname === "/v1.0/me/messages" && url.searchParams.get("$top") === "50") return jsonResponse({ value: [] });
+      if (url.searchParams.get("$skiptoken") === "invalid") return failure === "invalid_json"
+        ? new Response("invalid-json", { status: 200 }) : jsonResponse({ value: null });
+      if (url.pathname === "/v1.0/me/messages" && url.searchParams.get("$top") === "100") return jsonResponse({ value: [message("discarded-attempt", "inbox-id", "attempt-conversation")] });
       throw new Error(`Unexpected Graph request: ${url.pathname}${url.search}`);
     });
     const provider = new MicrosoftProvider("token", { fetchImpl: fetchImpl as typeof fetch });
     const acceptedIds: string[] = [];
     let fallbackCount = 0;
+    const context = { now: new Date("2026-08-31T00:00:00Z"), includeDiagnostics: true };
+    let aggregator = new StreamingReportAggregator(context);
+    let firstAttemptReport: ReturnType<StreamingReportAggregator["snapshot"]> | undefined;
 
     await provider.scanParticipatedConversationIds({ batchSize: 250 });
     await provider.processMetadataWithAdaptiveFallback({
       scan: { batchSize: 250, limit: "full" },
       onBatch(batch) {
         acceptedIds.push(...batch.records.map((record) => record.providerMessageId));
+        aggregator.processBatch(batch.records);
       },
       onFallback() {
         fallbackCount += 1;
         acceptedIds.length = 0;
+        firstAttemptReport = aggregator.snapshot("microsoft");
+        aggregator = new StreamingReportAggregator(context);
       }
     });
 
     const mainStarts = requestedUrls.filter(
       (url) => url.pathname === "/v1.0/me/messages" && url.searchParams.has("$select")
     );
-    expect(mainStarts.map((url) => url.searchParams.get("$top"))).toEqual(["100", "50"]);
-    expect(acceptedIds).toEqual([]);
+    expect(mainStarts.map((url) => url.searchParams.get("$top"))).toEqual(["500", "100"]);
+    expect(acceptedIds).toEqual(["discarded-attempt"]);
+    expect(aggregator.snapshot("microsoft").totals.messages).toBe(1);
+    expect(aggregator.snapshot("microsoft")).toEqual(firstAttemptReport);
     expect(fallbackCount).toBe(1);
     expect(provider.getScanMetrics()).toMatchObject({
-      mainMessagePageSize: 50,
+      mainMessagePageSize: 100,
       mainMessagePages: 1,
       mainMessagePageFallbacks: 1,
       lastNonHttpFailureOperation: "main_message_scan",
-      lastNonHttpFailureCategory: "invalid_json"
+      lastNonHttpFailureCategory: failure
     });
   });
 
-  it("restarts the mailbox-wide scan at 50 after HTTP 413", async () => {
+  it("restarts the mailbox-wide scan at 100 after HTTP 413", async () => {
     const requestedUrls: URL[] = [];
     const responses = [
       jsonResponse(folder("inbox-id", { totalItemCount: 1 })),
@@ -440,10 +450,10 @@ describe("Microsoft Graph metadata scan", () => {
     const mainStarts = requestedUrls.filter(
       (url) => url.pathname === "/v1.0/me/messages" && url.searchParams.has("$select")
     );
-    expect(mainStarts.map((url) => url.searchParams.get("$top"))).toEqual(["100", "50"]);
+    expect(mainStarts.map((url) => url.searchParams.get("$top"))).toEqual(["500", "100"]);
     expect(fallbackCount).toBe(1);
     expect(provider.getScanMetrics()).toMatchObject({
-      mainMessagePageSize: 50,
+      mainMessagePageSize: 100,
       mainMessagePageFallbacks: 1,
       other4xxFailures: 1,
       lastOther4xxStatus: 413
@@ -487,10 +497,10 @@ describe("Microsoft Graph metadata scan", () => {
     const mainStarts = requestedUrls.filter(
       (url) => url.pathname === "/v1.0/me/messages" && url.searchParams.has("$select")
     );
-    expect(mainStarts.map((url) => url.searchParams.get("$top"))).toEqual(["100"]);
+    expect(mainStarts.map((url) => url.searchParams.get("$top"))).toEqual(["500"]);
     expect(fallbackCount).toBe(0);
     expect(provider.getScanMetrics()).toMatchObject({
-      mainMessagePageSize: 100,
+      mainMessagePageSize: 500,
       mainMessagePages: 0,
       mainMessagePageFallbacks: 0,
       failures5xx: 1

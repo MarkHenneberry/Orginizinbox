@@ -40,8 +40,8 @@ export const microsoftMessageSelect = [
   "internetMessageHeaders"
 ] as const;
 
-export const microsoftMainMessagePreferredPageSize = 100;
-export const microsoftMainMessageFallbackPageSize = 50;
+export const microsoftMainMessagePreferredPageSize = 500;
+export const microsoftMainMessageFallbackPageSize = 100;
 export const microsoftExperimentalFolderPageSize = 200;
 export const microsoftFolderScanConcurrency = 2;
 
@@ -228,7 +228,7 @@ export class MicrosoftProvider implements MailboxProcessor {
 
   private async *scanMailboxMetadata(input: ScanMetadataInput, includeHeaders = true): AsyncIterable<ScanMetadataBatch> {
     const folders = await this.getFolderIndex(input.signal);
-    const pageSize = this.mainMessagePageSize;
+    const pageSize = includeHeaders ? this.mainMessagePageSize : 100;
     const numericLimit = input.limit === undefined || input.limit === "full" ? undefined : input.limit;
     const outputBatchSize = boundedPageSize(input.batchSize);
     let processed = 0;

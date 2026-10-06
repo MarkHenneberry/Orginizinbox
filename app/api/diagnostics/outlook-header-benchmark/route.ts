@@ -5,7 +5,6 @@ import { createProviderRequestCoordinator } from "@/lib/server/provider-request-
 import { runOutlookHeaderBenchmark } from "@/lib/server/outlook-header-benchmark";
 import { runOutlookCandidateCount } from "@/lib/server/outlook-candidate-count";
 import { runOutlookExtendedHeaderBenchmark } from "@/lib/server/outlook-extended-header-benchmark";
-import { runOutlookPageSizeBenchmark } from "@/lib/server/outlook-page-size-benchmark";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,9 +27,8 @@ export async function POST(request: Request) {
     const body = await request.json();
     const candidateCount = body?.mode === "candidate_count";
     const extendedHeaders = body?.mode === "extended_headers";
-    const pageSizes = body?.mode === "page_sizes";
-    if (!candidateCount && !extendedHeaders && !pageSizes && body?.order !== "headers_first" && body?.order !== "no_headers_first") return Response.json({ valid: false }, { status: 400, headers });
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(candidateCount || pageSizes ? 270_000 : 180_000)]);
+    if (body?.mode === "page_sizes" || (!candidateCount && !extendedHeaders && body?.order !== "headers_first" && body?.order !== "no_headers_first")) return Response.json({ valid: false }, { status: 400, headers });
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(candidateCount ? 270_000 : 180_000)]);
     const coordinate = createProviderRequestCoordinator(connection.connection.id, {
       async beforeRequest() {
         signal.throwIfAborted();
@@ -43,8 +41,7 @@ export async function POST(request: Request) {
         }
       }
     });
-    const result = pageSizes ? await runOutlookPageSizeBenchmark({ accessToken: connection.accessToken, signal, coordinate, reverse: body.reverse === true })
-      : extendedHeaders ? await runOutlookExtendedHeaderBenchmark({ accessToken: connection.accessToken, signal, coordinate })
+    const result = extendedHeaders ? await runOutlookExtendedHeaderBenchmark({ accessToken: connection.accessToken, signal, coordinate })
       : candidateCount ? await runOutlookCandidateCount({ accessToken: connection.accessToken, signal, coordinate })
       : await runOutlookHeaderBenchmark({ accessToken: connection.accessToken, signal,
       noHeadersFirst: body.order === "no_headers_first", coordinate });
