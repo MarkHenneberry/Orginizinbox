@@ -57,6 +57,9 @@ it("shows the supplied available balance and contextual desktop/mobile navigatio
   expect(html).toContain('aria-current="page"');
   expect(html).toContain('class="mobile-workflow-nav"');
   expect(html).toContain("<details");
+  expect(html).toContain('<svg class="account-menu-chevron" width="14" height="14"');
+  expect(html).toContain('stroke="currentColor"');
+  expect(html).toContain('stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"');
   expect(html).not.toMatch(/api\/|Disconnect/);
   navigation.path = "/app/scan";
   const unavailable = renderToStaticMarkup(createElement(AppHeader, { ...headerProps, availableCredits: null, reportAvailable: false, cleanupAvailable: false }));
