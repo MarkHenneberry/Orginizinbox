@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import "./workspace-v2.css";
 import { AppHeader } from "@/components/product/AppHeader";
 import { AppFooter } from "@/components/product/AppFooter";
 import { runtimeConfig, siteConfig } from "@/lib/config";

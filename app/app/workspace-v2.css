@@ -1,0 +1,90 @@
+.product-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.product-content { flex: 1; min-width: 0; }
+.product-header { background: white; border-bottom: 1px solid var(--line); }
+.app-header-inner { display: flex; flex-wrap: nowrap; align-items: center; gap: 24px; min-height: 72px; }
+.app-brand { display: inline-flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 750; color: var(--navy); border-radius: 4px; }
+.app-brand img { flex-shrink: 0; }
+.app-workflow-nav { display: flex; gap: 4px; }
+.app-workflow-nav a, .account-menu summary { padding: 10px 12px; border-radius: 6px; font-size: 14px; font-weight: 600; }
+.product-header a[aria-current="page"] { color: var(--teal-dark); background: var(--soft); }
+.app-workflow-nav a:hover, .account-menu summary:hover, .account-menu-items a:hover { background: var(--surface-subtle); }
+.header-credits { margin-left: auto; font-size: 14px; font-weight: 650; color: var(--teal-dark); padding: 8px 12px; background: var(--soft); border: 1px solid #cce3e1; border-radius: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.account-menu { position: relative; flex-shrink: 0; }
+.account-menu summary { display: flex; align-items: center; gap: 12px; list-style: none; border: 1px solid var(--line); background: white; cursor: pointer; }
+.account-menu summary::-webkit-details-marker { display: none; }
+.account-menu-items { position: absolute; right: 0; top: calc(100% + 12px); width: 248px; max-width: calc(100vw - 32px); padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: white; box-shadow: 0 8px 24px #10203312; z-index: 40; }
+.account-menu-items a { display: block; padding: 10px 12px; border-radius: 4px; font-size: 14px; }
+.menu-caption { margin: 4px 12px 8px; font-size: 12px; color: var(--muted); }
+.menu-divider { border-top: 1px solid var(--line); margin: 6px 0; }
+.mobile-workflow-nav { display: none; }
+.app-utility-footer { border-top: 1px solid var(--line); padding: 12px 0; font-size: 12px; color: var(--muted); }
+.app-utility-footer nav a { padding-block: 8px; }
+.settings-page { padding: 28px 0 56px; }
+.settings-width { max-width: 1000px; }
+.help-width { max-width: 800px; }
+.settings-heading { margin: 24px 0 28px; }
+.settings-heading h1 { margin: 0; color: var(--navy); font-size: 32px; font-weight: 750; line-height: 1.2; }
+.settings-heading p { margin: 10px 0 0; color: var(--muted); }
+.connection-section { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 28px; }
+.settings-section-title { display: flex; align-items: center; gap: 14px; }
+.settings-page h2 { margin: 0 0 12px; font-size: 20px; font-weight: 700; color: var(--navy); }
+.settings-section-title h2 { margin: 0; }
+.connected-address { margin: 12px 0 0; font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.connection-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; border-top: 1px solid var(--line); margin-top: 20px; padding-top: 20px; }
+.connection-actions > div:first-child { margin-right: auto; }
+.settings-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 20px 0 28px; }
+.settings-columns > section { min-width: 0; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+.settings-metric { margin: 12px 0 0; font-size: 32px; color: var(--teal-dark); font-weight: 700; font-variant-numeric: tabular-nums; }
+.settings-metric span { font-size: 14px; font-weight: 400; color: var(--muted); }
+.text-link { color: var(--teal-dark); font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.advanced-settings { border-top: 1px solid var(--line); padding-top: 20px; }
+.advanced-settings summary { font-size: 14px; font-weight: 600; padding: 10px 0; }
+.advanced-settings h3 { margin-top: 16px; font-size: 16px; font-weight: 650; }
+.link-inbox-disclosure summary { padding: 10px 0; }
+.help-group { margin: 28px 0 36px; }
+.help-group details { border-bottom: 1px solid var(--line); background: white; }
+.help-group summary { padding: 20px 48px 20px 20px; font-weight: 600; list-style: none; position: relative; cursor: pointer; }
+.help-group summary:hover, .help-group details[open] summary { background: var(--soft); }
+.help-group summary::-webkit-details-marker { display: none; }
+.help-group summary::after { content: "+"; position: absolute; right: 20px; color: var(--teal-dark); }
+.help-group details[open] summary::after { content: "−"; }
+.help-group details > div { padding: 20px 20px 8px; max-width: 68ch; color: var(--muted); }
+.help-group details p { margin: 0 0 12px; }
+.help-more { border-top: 1px solid var(--line); padding-top: 24px; }
+.credits-content > p:first-child { display: inline-block; margin: 0; font-size: 16px; color: var(--navy); font-weight: 600; }
+.cleanup-credit-context { margin-top: 20px; padding-block: 16px; border-block: 1px solid var(--line); font-size: 14px; }
+.cleanup-credit-context dl { display: grid; gap: 8px; margin: 0; }
+.cleanup-credit-context dl > div { display: flex; justify-content: space-between; gap: 12px; }
+.cleanup-credit-context dd { margin: 0; font-weight: 650; text-align: right; }
+.cleanup-credit-context p { color: var(--muted); font-size: 13px; }
+.settings-page .credit-balances { gap: 16px; border: 0; padding: 24px 0; margin: 0; }
+.settings-page .credit-balances > div { min-width: 0; padding: 20px; background: white; border: 1px solid var(--line); border-radius: 10px; }
+.settings-page .credit-balances dt { font-size: 13px; color: var(--muted); }
+.settings-page .credit-balances dd { margin: 8px 0 0; font-size: 30px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.settings-page .credit-pack { border-radius: 12px; padding: 24px; }
+.settings-page .credit-pack[data-recommended="true"] { background: #f0f8f7; padding: 23px; }
+.settings-page .credit-packs { margin-block: 28px 20px; }
+.connection-disconnect { border-left: 1px solid var(--line); padding-left: 16px; }
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-header-inner { gap: 12px; }
+  .app-brand { font-size: 16px; gap: 6px; }
+  .app-workflow-nav a { padding-inline: 8px; }
+}
+@media (max-width: 767px) {
+  .app-header-inner { gap: 12px; min-height: 64px; }
+  .app-workflow-nav { display: none; }
+  .mobile-workflow-nav { display: block; border-bottom: 1px solid var(--line); }
+  .account-menu summary { padding: 8px; gap: 6px; }
+  .app-brand span { display: none; }
+  .header-credits { font-size: 13px; padding: 8px; }
+  .settings-page { padding: 24px 0 36px; }
+  .settings-heading h1 { font-size: 28px; }
+  .settings-columns { grid-template-columns: 1fr; gap: 16px; padding-block: 16px; }
+  .settings-columns > section { padding: 20px; }
+  .connection-section { padding: 18px; }
+  .connection-actions { align-items: stretch; }
+  .connection-actions > div:first-child { width: 100%; }
+  .connection-disconnect { width: 100%; border-left: 0; border-top: 1px solid var(--line); padding: 16px 0 0; }
+  .app-utility-footer nav { gap: 8px 16px; }
+  .settings-page .credit-balances > div { flex-wrap: wrap; }
+}

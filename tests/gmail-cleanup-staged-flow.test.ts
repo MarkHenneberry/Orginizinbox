@@ -28,7 +28,7 @@ function seedJob(status: GmailCleanupJob["status"] = "ready", mutationStarted = 
 }
 
 describe("cleanup stage UI contracts", () => {
-  const client = readFileSync("src/components/product/GmailCleanupClient.tsx", "utf8");
+  const client = readFileSync("src/components/product/GmailCleanupClient.tsx", "utf8").replace(/\r\n/g, "\n");
   const selectStage = client.slice(
     client.indexOf("{!reviewStarted ? (\n          <>"),
     client.indexOf(") : job ? (")

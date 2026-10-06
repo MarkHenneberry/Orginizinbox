@@ -33,7 +33,7 @@ export default async function AccountPage({ searchParams }: { searchParams?: Pro
         <div className="connection-actions">
           <div><span className="muted text-sm">Current report</span><p className="m-0 font-bold">{account.hasActiveReport ? "Ready to view" : "No current report"}</p></div>
           <Link className="btn btn-primary focus-ring" href={account.hasActiveReport ? "/app/report" : "/app/scan"}>{account.hasActiveReport ? "View Inbox Report" : "Scan my inbox"}</Link>
-          {account.provider === "gmail" ? <DisconnectGmailConfirmation /> : <DisconnectMicrosoftConfirmation />}
+          <div className="connection-disconnect">{account.provider === "gmail" ? <DisconnectGmailConfirmation /> : <DisconnectMicrosoftConfirmation />}</div>
         </div>
       </> : null}
       {account.mode === "fixture" ? <><p className="eyebrow">DEVELOPMENT FIXTURE</p><h2>Fixture session</h2><p className="muted">Fixture mode is enabled. This is not a real connected Gmail or Outlook account.</p><Link className="btn btn-secondary focus-ring" href="/app/report">View fixture report</Link></> : null}

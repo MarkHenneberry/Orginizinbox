@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { AppHeader } from "@/components/product/AppHeader";
@@ -26,6 +26,16 @@ vi.mock("@/components/product/BillingPanel", () => ({ BillingPanel: () => create
   createElement(BillingActions, { canBuy: true, canRefresh: true })) }));
 
 const headerProps = { logoPath: "oi-logo.png", provider: "microsoft" as const, availableCredits: 60000, reportAvailable: true, scanAvailable: true, cleanupAvailable: true };
+it("loads dedicated workspace styles from the authenticated layout", () => {
+  expect(readFileSync("app/app/layout.tsx", "utf8")).toContain('import "./workspace-v2.css"');
+  const css = readFileSync("app/app/workspace-v2.css", "utf8");
+  const globalCss = readFileSync("app/globals.css", "utf8");
+  for (const selector of [".product-header", ".app-header-inner", ".account-menu-items", ".settings-columns", ".help-group"]) {
+    expect(css).toContain(`${selector} {`);
+    expect(globalCss).not.toContain(`${selector} {`);
+  }
+  expect(css).toMatch(/\.app-header-inner \{[^}]*display: flex;[^}]*flex-wrap: nowrap;/);
+});
 function render(name: string, content: React.ReactNode) {
   const html = renderToStaticMarkup(createElement("div", { className: "product-shell" }, createElement(AppHeader, headerProps), createElement("div", { className: "product-content" }, content), createElement(AppFooter)));
   if (process.env.UI_PREVIEW_DIR) {
