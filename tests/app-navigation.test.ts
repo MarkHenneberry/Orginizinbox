@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("authenticated app navigation", () => {
-  it("keeps report-specific tabs out of the global app header and includes stable shell links", () => {
+  it("keeps report filters out of the contextual application header", () => {
     const layout = readFileSync("app/app/layout.tsx", "utf8");
-    const headerSection = layout.slice(layout.indexOf("<header"), layout.indexOf("</header>"));
+    const headerSection = readFileSync("src/components/product/AppHeader.tsx", "utf8");
 
     expect(headerSection).toMatch(/Organizinbox/);
     expect(headerSection).toMatch(/Help/);
@@ -14,7 +14,9 @@ describe("authenticated app navigation", () => {
     expect(headerSection).toMatch(/href="\/"/);
     expect(headerSection).toMatch(/href="\/app\/help"/);
     expect(headerSection).toMatch(/href="\/app\/account"/);
-    expect(headerSection).not.toMatch(/Senders|Categories|Old Mail|Cleanup|Inbox Report/);
+    expect(headerSection).not.toMatch(/Senders|Categories|Old Mail/);
+    expect(headerSection).toMatch(/Inbox Report/);
+    expect(layout).toMatch(/cleanup\?\.hasJob/);
     expect(layout).toMatch(/<AppFooter \/>/);
   });
 
@@ -41,13 +43,13 @@ describe("authenticated app navigation", () => {
   it("uses full accessible brand links to the public homepage everywhere", () => {
     const marketingHeader = readFileSync("src/components/marketing/Header.tsx", "utf8");
     const appLayout = readFileSync("app/app/layout.tsx", "utf8");
-    const appHeaderSection = appLayout.slice(appLayout.indexOf("<header"), appLayout.indexOf("</header>"));
+    const appHeaderSection = readFileSync("src/components/product/AppHeader.tsx", "utf8");
 
     expect(marketingHeader).toMatch(/<Link href="\/" aria-label="Organizinbox home" className="focus-ring flex items-center gap-3 rounded-md/);
     expect(marketingHeader).toMatch(/<Image[\s\S]+<span>Organizinbox<\/span>[\s\S]+<\/Link>/);
 
     expect(appLayout).not.toMatch(/brandHref|connection\.mode === "connected" \? "\/app" : "\/"/);
-    expect(appHeaderSection).toMatch(/<Link href="\/" aria-label="Organizinbox home" className="focus-ring flex items-center gap-3 rounded-md/);
+    expect(appHeaderSection).toMatch(/<Link href="\/" aria-label="Organizinbox home" className="app-brand focus-ring/);
     expect(appHeaderSection).toMatch(/<Image[\s\S]+<span>Organizinbox<\/span>[\s\S]+<\/Link>/);
     expect(appHeaderSection).not.toMatch(/clearLiveScan|clearSessionCookie|clearGmailCleanupJobsForUser|clearOAuthStateCookie|disconnectCurrentGmailSession/);
   });
@@ -56,7 +58,7 @@ describe("authenticated app navigation", () => {
     const layout = readFileSync("app/app/layout.tsx", "utf8");
     const appRoutes = ["app/page.tsx", "app/scan/page.tsx", "app/report/page.tsx", "app/cleanup/page.tsx", "app/account/page.tsx", "app/help/page.tsx", "app/security/page.tsx", "app/data-access/page.tsx", "app/privacy/page.tsx"];
 
-    expect(layout).toMatch(/<Link href="\/" aria-label="Organizinbox home"/);
+    expect(layout).toMatch(/<AppHeader/);
     for (const route of appRoutes) {
       expect(readFileSync(`app/${route}`, "utf8")).not.toMatch(/Header \/>|Footer \/>/);
     }
@@ -131,7 +133,7 @@ describe("authenticated app navigation", () => {
   it("documents the internal report navigation model in the spec", () => {
     const spec = readFileSync("organizinbox-specs.md", "utf8");
 
-    expect(spec).toMatch(/stable, simple global header and footer/);
+    expect(spec).toMatch(/persistent, restrained header and small utility footer/);
     expect(spec).toMatch(/Public marketing pages use the marketing shell/);
     expect(spec).toMatch(/active Organizinbox workflow uses the app shell/);
     expect(spec).toMatch(/`\/app` is the canonical state-aware application home/);
@@ -165,7 +167,7 @@ describe("authenticated app navigation", () => {
 
     expect(accountState).toMatch(/getCurrentProviderConnection/);
     expect(accountState).toMatch(/mode: "connected"/);
-    expect(accountPage).toMatch(/Gmail connected/);
+    expect(accountPage).toMatch(/account.provider === "gmail"/);
     expect(accountPage).toMatch(/No current report/);
     expect(accountPage).toMatch(/No provider connected/);
     expect(accountPage).toMatch(/DEVELOPMENT FIXTURE/);
