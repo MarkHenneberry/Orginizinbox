@@ -2,6 +2,7 @@
 
 import { startAdaptivePolling } from "@/lib/adaptive-polling";
 import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
+import { CleanupCreditContext } from "@/components/product/CleanupCreditContext";
 import { useCleanupAvailability } from "@/components/product/useCleanupAvailability";
 import {
   cleanupEndpoint,
@@ -69,7 +70,8 @@ export function GmailCleanupClient({
   countOptions,
   reportStale,
   developmentMode: requestedDevelopmentMode,
-  productionAccess = "unavailable"
+  productionAccess = "unavailable",
+  availableCredits = null
 }: {
   groups: CleanupSenderGroup[];
   bulkUndoProofEnabled: boolean;
@@ -84,6 +86,7 @@ export function GmailCleanupClient({
   reportStale: boolean;
   developmentMode: boolean;
   productionAccess?: CleanupUiAccess;
+  availableCredits?: number | null;
 }) {
   const developmentMode = requestedDevelopmentMode && process.env.NODE_ENV !== "production";
   const availability = useCleanupAvailability(productionAccess, !developmentMode, provider, Boolean(initialScalableJob || initialOutlookJob));
@@ -477,6 +480,7 @@ export function GmailCleanupClient({
     return (
       <>
       {!developmentMode ? <CleanupAccessNotice access={availability.access} /> : null}
+      {!developmentMode && outlookJob.status === "ready" ? <CleanupCreditContext available={availableCredits} requested={outlookJob.requested} reserved /> : null}
       <OutlookCleanupWorkspace
         developmentMode={developmentMode}
         canStart={canStart}
@@ -499,6 +503,7 @@ export function GmailCleanupClient({
     return (
       <>
       {!developmentMode ? <CleanupAccessNotice access={availability.access} /> : null}
+      {!developmentMode && scalableJob.status === "ready" ? <CleanupCreditContext available={availableCredits} requested={scalableJob.requestedCount} reserved /> : null}
       <ScalableCleanupWorkspace
         developmentMode={developmentMode}
         canStart={canStart}
@@ -658,6 +663,7 @@ export function GmailCleanupClient({
             </select>
 
             {requestedCount > selectedReadyCount ? <Notice text="Select enough eligible senders to reach this suggested total." /> : null}
+            {!developmentMode ? <CleanupCreditContext available={availableCredits} requested={requestedCount} /> : null}
             {!cleanupEnabled && !scalableCleanupEnabled ? <Notice text="Cleanup is not available right now." /> : null}
             {fixtureMode ? <Notice text="Connect Gmail and run a scan before cleanup." /> : null}
             {reportStale ? <Notice text="Your inbox has changed. Rescan before cleaning more email." /> : null}
@@ -1648,7 +1654,7 @@ async function cleanupResponse(response: Response, development: boolean): Promis
   return {
     job: body.job?.ui,
     error: response.ok ? undefined : response.status === 402
-      ? "Check your available cleanup credits in Account before continuing."
+      ? "Check your available cleanup credits on the Credits page before continuing."
       : response.status === 410 ? "This cleanup has expired. Its temporary restoration state is no longer available."
       : "Cleanup could not continue. Check its status before trying again. You can manage your inbox and billing from Account."
   };
