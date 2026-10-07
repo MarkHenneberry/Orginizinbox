@@ -15,7 +15,7 @@ Set these on the Vercel Production deployment, not with `NEXT_PUBLIC_` prefixes
 | Database | `DATABASE_URL` pointing to the existing migrated PostgreSQL database. Direct `postgresql://` / `postgres://` URLs are supported; configured Prisma service URLs retain their existing client support. Do not replace the database or switch connection schemes to enable a provider. |
 | Credentials and sessions | `TOKEN_ENCRYPTION_KEY`, exactly 32 bytes decoded from base64 or 32-byte UTF-8 material. This key also signs sessions. |
 | Transient scans and cleanup | `CLEANUP_STATE_ENCRYPTION_KEY`, a separate strong 32-byte key in the same accepted formats. Do not rotate either key without a separate data/session rotation plan. |
-| Retention scheduler | `CRON_SECRET`, a strong server-only secret. Deploy the existing `vercel.json` minute schedule for `/api/cron/purge-transient-state` on a plan supporting this frequency. A configured secret alone does not prove that Cron runs. |
+| Retention scheduler | `CRON_SECRET`, a strong server-only secret. Deploy the existing `vercel.json` daily schedule for `/api/cron/purge-transient-state` on Vercel Hobby. A configured secret alone does not prove that Cron runs. |
 | Gmail OAuth | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://<your-origin>/api/oauth/google/callback`, registered exactly with Google. Existing scopes and consent requirements are unchanged. |
 | Microsoft OAuth | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_REDIRECT_URI=https://<your-origin>/api/oauth/microsoft/callback`, registered exactly as a Web callback. `MICROSOFT_TENANT_ID` defaults to `common`; retain it for personal plus organizational accounts unless deliberately restricting the audience. Existing scopes are unchanged. |
 | Production opt-ins | `GMAIL_PRODUCTION_ENABLED=true` and/or `MICROSOFT_PRODUCTION_ENABLED=true`. Missing, false or non-true values disable that provider. Credentials without an opt-in do not enable anything. |
@@ -79,7 +79,7 @@ there is no new scan TTL variable. Purge respects live leases and is asynchronou
 1. Keep both production provider flags false. Configure secrets through the deployment platform.
 2. Confirm the existing DB migrations and encryption keys are present; do not rotate keys or replace the DB.
 3. Verify OAuth app approval/audience and exact production callbacks with Google/Microsoft.
-4. Deploy with the existing Workflow build integration and minute retention Cron. Confirm authenticated purge invocations succeed without provider requests.
+4. Deploy with the existing Workflow build integration and daily retention Cron plus user-scoped opportunistic deletion. Confirm authenticated purge invocations succeed without provider requests.
 5. Enable only the provider being validated and redeploy. Verify read-only OAuth/scan/report, session isolation, process recovery and expiry on the deployed app.
 6. Check disabled providers show maintenance, `/api/dev/*` returns 404, `/app/dev/gmail-benchmark` returns 404, and `/app/cleanup` exposes no actions. No diagnostic panels or benchmark payloads should reach production clients.
 

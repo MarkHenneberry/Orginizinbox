@@ -19,6 +19,9 @@ import { GmailScalableCleanupProvider, type GmailScalableVerificationResult } fr
 import { StreamingReportAggregator } from "@/lib/domain/streaming-aggregator";
 import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
 import { postgresAuth } from "./fixtures/postgres-auth";
+import { purgeExpiredUserTransientState } from "@/lib/server/transient-state-purge";
+import { creditSnapshot } from "@/lib/billing/credits";
+import { getCreditPresentation } from "@/lib/server/credit-presentation";
 
 const scheduling = vi.hoisted(() => ({ gmail: vi.fn(async () => "test-run"), outlook: vi.fn(async () => "test-run") }));
 vi.mock("@/lib/server/session", async () => {
@@ -50,6 +53,7 @@ afterAll(async () => {
     if (users.length) {
       const scans = await prisma.scan.findMany({ where: { userId: { in: users } }, select: { id: true, cleanupJobs: { select: { id: true } } } });
       const jobs = scans.flatMap((scan) => scan.cleanupJobs.map((job) => job.id));
+      await prisma.creditJobAccounting.deleteMany({ where: { userId: { in: users } } });
       await prisma.user.deleteMany({ where: { id: { in: users } } });
       expect(await prisma.user.count({ where: { id: { in: users } } })).toBe(0);
       expect(await prisma.scanState.count({ where: { userId: { in: users } } })).toBe(0);
@@ -99,6 +103,39 @@ async function outlookJob(c: ProviderConnection, count = 10) {
 }
 
 describe.sequential("actual Postgres durability and isolation", () => {
+  it("user retention releases the expired reservation FK before credit presentation without touching active or other-user state", async () => {
+    const c = await connection(await newUser(), "gmail");
+    const other = await connection(await newUser(), "microsoft");
+    const scan = await newScan(c), otherScan = await newScan(other);
+    const past = new Date(Date.now() - 60_000), future = new Date(Date.now() + 3600_000);
+    await prisma.billingAccount.create({ data: { userId: c.userId, creditBalance: 1000 } });
+    const jobs = [];
+    for (const [userId, scanId, lockExpiresAt] of [
+      [c.userId, scan.progress.scanId, null], [c.userId, scan.progress.scanId, future],
+      [other.userId, otherScan.progress.scanId, null]
+    ] as const) {
+      const job = await prisma.cleanupJob.create({ data: { scanId } });
+      await prisma.cleanupJobState.create({ data: { jobId: job.id, userId, encryptedPayload: encryptSecret("synthetic"), expiresAt: past, lockExpiresAt } });
+      jobs.push(job);
+    }
+    await prisma.creditJobAccounting.create({ data: { jobId: jobs[0].id, userId: c.userId, activeStateJobId: jobs[0].id, requested: 500, moved: 100 } });
+    await prisma.scanState.updateMany({ where: { userId: { in: [c.userId, other.userId] } }, data: { expiresAt: past } });
+    const intentIds = [randomUUID(), randomUUID(), randomUUID()];
+    try {
+      await prisma.inboxLinkIntent.createMany({ data: intentIds.map((id, i) => ({ id, sourceUserId: i === 2 ? other.userId : c.userId,
+        sourceConnectionId: c.id, sourceGeneration: "synthetic", provider: "gmail", expiresAt: i === 1 ? future : past })) });
+      expect(await creditSnapshot(prisma, c.userId)).toMatchObject({ available: 600, reserved: 400 });
+      expect(await asUser(c, () => getCreditPresentation())).toEqual({ balance: 1000, available: 1000, reserved: 0 });
+      expect(await prisma.creditJobAccounting.findUnique({ where: { jobId: jobs[0].id } })).toMatchObject({ activeStateJobId: null, moved: 100 });
+      expect(await prisma.cleanupJobState.count({ where: { jobId: { in: jobs.map(j => j.id) } } })).toBe(2);
+      expect(await prisma.scanState.findUnique({ where: { scanId: scan.progress.scanId } })).toBeNull();
+      expect(await prisma.scanState.findUnique({ where: { scanId: otherScan.progress.scanId } })).not.toBeNull();
+      expect(await prisma.inboxLinkIntent.count({ where: { id: { in: intentIds } } })).toBe(2);
+      expect(await purgeExpiredUserTransientState(c.userId)).toMatchObject({ cleanup: { deleted: 0 } });
+    } finally {
+      await prisma.inboxLinkIntent.deleteMany({ where: { id: { in: intentIds } } });
+    }
+  });
   it("atomically accepts same-user scans while unrelated users/providers remain independent", async () => {
     const u = await newUser(), other = await newUser();
     const g = await connection(u, "gmail"), m = await connection(u, "microsoft"), g2 = await connection(other, "gmail");

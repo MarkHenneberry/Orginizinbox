@@ -28,7 +28,9 @@ describe("customer-facing encrypted retention disclosure", () => {
       expect(html).toContain("configured window is 30 minutes");
       expect(html).toContain("Final details without Undo expire after 1 minute");
       expect(html).toContain("keep temporary state for 10 minutes");
-      expect(html).toContain("scheduled deletion runs every minute");
+      expect(html).toContain("daily cleanup sweep");
+      expect(html).toContain("subsequent account/app activity");
+      expect(html).not.toContain("every minute");
       expect(html).toContain("Service outages may delay deletion");
       expect(html).toContain("Database backup retention is separate");
       expect(html).not.toMatch(/not saved to your account database|never stored|immediately erased/i);

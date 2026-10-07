@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), paid: vi.fn(), connection: vi.fn(), owned: vi.fn(),
-  start: vi.fn(), confirm: vi.fn(), undo: vi.fn(), status: vi.fn(), dispatch: vi.fn(),
+  start: vi.fn(), confirm: vi.fn(), undo: vi.fn(), status: vi.fn(), dispatch: vi.fn(), purge: vi.fn(),
   runtime: { gmailAvailable: true, microsoftAvailable: true, gmailScalableStoreAdapter: "prisma" } }));
 vi.mock("@/lib/config", () => ({ runtimeConfig: mocks.runtime }));
 vi.mock("@/lib/server/session", () => ({ getSession: mocks.session }));
+vi.mock("@/lib/server/user-transient-retention", () => ({ purgeUserTransientStateForActivity: mocks.purge }));
 vi.mock("@/lib/server/db", () => ({ prisma: { providerConnection: { findFirst: mocks.connection }, cleanupJobState: { count: mocks.owned } } }));
 vi.mock("@/lib/billing/entitlements", async (original) => ({
   ...await original<typeof import("@/lib/billing/entitlements")>(), requirePaidCleanupEntitlement: mocks.paid
@@ -59,6 +60,17 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("production cleanup rollout authorization", () => {
+  it("purges the authenticated user before forward credit checks, never on status/recovery or untrusted requests", async () => {
+    for (const action of ["start", "confirm"]) expect((await call("gmail", action, { userId: "attacker" })).status).toBe(200);
+    expect(mocks.purge).toHaveBeenCalledTimes(2);
+    expect(mocks.purge).toHaveBeenCalledWith("owner");
+    expect(mocks.purge.mock.invocationCallOrder[0]).toBeLessThan(mocks.paid.mock.invocationCallOrder[0]);
+    for (const action of ["status", "undo"]) expect((await call("gmail", action)).status).toBe(200);
+    expect((await call("gmail", "start", {}, "https://untrusted.test")).status).toBe(403);
+    mocks.session.mockResolvedValue(null);
+    expect((await call()).status).toBe(401);
+    expect(mocks.purge).toHaveBeenCalledTimes(2);
+  });
   it("defaults forward cleanup off independently of provider and Workflow configuration", () => {
     const settings = { ...configured, GMAIL_PRODUCTION_CLEANUP_ENABLED: undefined, MICROSOFT_PRODUCTION_CLEANUP_ENABLED: undefined };
     expect(resolveProductionCleanup(settings)).toEqual({ gmail: { forward: false, recovery: true }, microsoft: { forward: false, recovery: true } });

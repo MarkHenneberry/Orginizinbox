@@ -6,12 +6,14 @@ import { getSession } from "@/lib/server/session";
 import { prisma } from "@/lib/server/db";
 import { StripeBillingService } from "@/lib/billing/service";
 import { createStripeClient } from "@/lib/billing/stripe";
+import { purgeUserTransientStateForActivity } from "@/lib/server/user-transient-retention";
 
 async function load() {
   const config = getBillingConfig();
   if (!config) return null;
   const session = await getSession();
   if (!session) return null;
+  await purgeUserTransientStateForActivity(session.userId);
   const owner = await creditOwner(prisma, session.userId);
   const account = await new StripeBillingService(prisma, createStripeClient(), config).reconcile(owner);
   const sameMode = !account?.stripeCustomerId || account.livemode === config.livemode;

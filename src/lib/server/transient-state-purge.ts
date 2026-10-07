@@ -5,6 +5,7 @@ import { prisma } from "@/lib/server/db";
 
 const batchSize = 500;
 const maxBatches = 10;
+type PurgeClient = Pick<PrismaClient, "scanState" | "cleanupJobState"> & Partial<Pick<PrismaClient, "inboxLinkIntent">>;
 
 type SweepResult = {
   deleted: number;
@@ -36,14 +37,29 @@ async function sweep(input: {
 }
 
 export async function purgeExpiredTransientState(
-  client: Pick<PrismaClient, "scanState" | "cleanupJobState"> & Partial<Pick<PrismaClient, "inboxLinkIntent">> = prisma,
+  client: PurgeClient = prisma,
   now = new Date()
 ) {
+  return purge(client, now);
+}
+
+// Callers supply only the validated session user, never a request-body account ID.
+export async function purgeExpiredUserTransientState(userId: string, client: PurgeClient = prisma, now = new Date()) {
+  if (!userId) throw new Error("Authenticated user required.");
+  return purge(client, now, userId);
+}
+
+async function purge(
+  client: PurgeClient,
+  now: Date,
+  userId?: string
+) {
   const startedAt = Date.now();
-  const where = expiredUnlockedStateWhere(now);
-  const deferredWhere = { expiresAt: { lte: now }, lockExpiresAt: { gt: now } };
+  const scope = userId === undefined ? {} : { userId };
+  const where = { ...scope, ...expiredUnlockedStateWhere(now) };
+  const deferredWhere = { ...scope, expiresAt: { lte: now }, lockExpiresAt: { gt: now } };
   let linksPurged = true;
-  try { await client.inboxLinkIntent?.deleteMany({ where: { expiresAt: { lte: now } } }); }
+  try { await client.inboxLinkIntent?.deleteMany({ where: { ...(userId === undefined ? {} : { sourceUserId: userId }), expiresAt: { lte: now } } }); }
   catch { linksPurged = false; }
   const scans = await sweep({
     find: async () => (await client.scanState.findMany({

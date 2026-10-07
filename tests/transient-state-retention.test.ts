@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { PrismaClient } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { purgeExpiredTransientState } from "@/lib/server/transient-state-purge";
+import { purgeExpiredTransientState, purgeExpiredUserTransientState } from "@/lib/server/transient-state-purge";
 import { PrismaCleanupJobStateRepository, PrismaCleanupJobStore } from "@/lib/server/gmail-scalable-cleanup-durable-store";
 import { GET, HEAD } from "../app/api/cron/purge-transient-state/route";
 
@@ -22,6 +22,7 @@ type Row = {
   version: number;
 };
 type Where = {
+  userId?: string;
   expiresAt?: { lte: Date };
   OR?: Array<{ lockExpiresAt: null | { lte: Date } }>;
   lockExpiresAt?: { gt: Date };
@@ -32,6 +33,7 @@ type Where = {
 function table(key: "scanId" | "jobId", initial: Row[] = []) {
   const rows = new Map(initial.map((row) => [row.id, row]));
   const matches = (row: Row, where: Where) => {
+    if (where.userId && row.userId !== where.userId) return false;
     const ids = where[key];
     if (typeof ids === "string" ? ids !== row.id : ids && !ids.in.includes(row.id)) return false;
     if (where.expiresAt && row.expiresAt > where.expiresAt.lte) return false;
@@ -87,6 +89,26 @@ afterEach(() => {
 });
 
 describe("provider-neutral physical retention", () => {
+  it("purges only the authenticated user's expired unlocked state, rechecking concurrent renewal", async () => {
+    const records = [row("expired", { userId: "owner", expiresAt: now }), row("locked", { userId: "owner", lockExpiresAt: after }),
+      row("fresh", { userId: "owner", expiresAt: after }), row("other"), row("renewed", { userId: "owner" })];
+    const { client, scanState, cleanupJobState } = database(structuredClone(records), structuredClone(records));
+    for (const delegate of [scanState, cleanupJobState]) {
+      const remove = delegate.deleteMany.getMockImplementation()!;
+      delegate.deleteMany.mockImplementationOnce(async (args) => {
+        delegate.rows.get("renewed")!.lockExpiresAt = after;
+        return remove(args);
+      });
+    }
+    expect(await purgeExpiredUserTransientState("owner", client, now)).toMatchObject({ scans: { deleted: 1 }, cleanup: { deleted: 1 } });
+    for (const delegate of [scanState, cleanupJobState]) {
+      expect([...delegate.rows.keys()]).toEqual(["locked", "fresh", "other", "renewed"]);
+      for (const call of delegate.deleteMany.mock.calls) expect(call[0].where.userId).toBe("owner");
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await purgeExpiredUserTransientState("owner", client, now)).toMatchObject({ scans: { deleted: 0 }, cleanup: { deleted: 0 } });
+    await expect(purgeExpiredUserTransientState("", client, now)).rejects.toThrow("Authenticated user required");
+  });
   it("deletes expired Gmail/Outlook state across users, including abandoned running rows, without reading payloads", async () => {
     const { client, scanState, cleanupJobState } = database(
       [row("gmail"), row("outlook", { provider: "microsoft", status: "running", lockExpiresAt: before })],
@@ -217,9 +239,9 @@ describe("scheduled purge boundary", () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain("PRIVATE");
   });
 
-  it("schedules the authenticated endpoint every minute, without secrets in config", () => {
+  it("schedules the authenticated endpoint daily, without secrets in config", () => {
     const config = JSON.parse(readFileSync("vercel.json", "utf8"));
-    expect(config.crons).toEqual([{ path: "/api/cron/purge-transient-state", schedule: "* * * * *" }]);
+    expect(config.crons).toEqual([{ path: "/api/cron/purge-transient-state", schedule: "0 0 * * *" }]);
     expect(JSON.stringify(config)).not.toMatch(/secret|token|authorization/i);
   });
 });

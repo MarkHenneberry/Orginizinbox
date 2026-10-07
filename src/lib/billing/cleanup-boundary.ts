@@ -1,5 +1,6 @@
 import "server-only";
 import { getSession } from "@/lib/server/session";
+import { purgeUserTransientStateForActivity } from "@/lib/server/user-transient-retention";
 import { BillingError, requireBillingConfig } from "@/lib/billing/config";
 import { EntitlementDeniedError, requirePaidCleanupEntitlement } from "@/lib/billing/entitlements";
 import { ProductionCleanupError, requireProductionCleanupAccess, type CleanupProvider, type CleanupAccess } from "@/lib/server/production-cleanup";
@@ -18,6 +19,7 @@ export async function productionCleanupBoundary(request: Request, operation?: {
     }
     const session = await getSession();
     if (!session?.userId) return Response.json({ error: "Sign in before starting cleanup.", href: "/connect" }, { status: 401, headers });
+    if (operation?.access === "forward") await purgeUserTransientStateForActivity(session.userId);
     // Old callers cannot implicitly choose a production provider or recovery action.
     if (!operation) {
       await requirePaidCleanupEntitlement(session.userId);

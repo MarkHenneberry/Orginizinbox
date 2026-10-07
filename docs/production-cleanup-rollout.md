@@ -25,7 +25,7 @@ Forward Gmail additionally needs `GMAIL_PRODUCTION_ENABLED=true`; Outlook needs 
 
 Forward billing requires existing `STRIPE_BILLING_MODE`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `STRIPE_PRICE_10000_CREDITS`, `STRIPE_PRICE_50000_CREDITS`, `STRIPE_PRICE_100000_CREDITS`, with a current matching paid entitlement. `STRIPE_BILLING_ENABLED` controls checkout, not existing entitlement or recovery. Keep checkout disabled until the paid service/UI is ready to deliver. No new pricing or scopes.
 
-Keep the existing retention values and the deployed minute Cron unchanged. Do not rotate/remove keys or disconnect the provider to roll back cleanup.
+Keep the existing retention values and the deployed daily Cron plus user-scoped opportunistic deletion unchanged. Do not rotate/remove keys or disconnect the provider to roll back cleanup.
 
 ## Production API
 
@@ -50,7 +50,7 @@ Job IDs are opaque application control IDs, never mailbox IDs. Responses contain
 
 ## Staging Validation Before Enablement
 
-1. Keep live production flags OFF. Apply existing migrations and deploy a production-style staging build with working Prisma, stable encryption, compiled Workflow and minute Cron. Use only isolated accounts/disposable test inboxes and Stripe test mode; no live charges.
+1. Keep live production flags OFF. Apply existing migrations and deploy a production-style staging build with working Prisma, stable encryption, compiled Workflow and daily Cron plus user-scoped opportunistic deletion. Use only isolated accounts/disposable test inboxes and Stripe test mode; no live charges.
 2. Run `npm run test -- tests/production-cleanup-rollout.test.ts tests/outlook-cleanup-recovery.test.ts tests/cleanup-scheduling-recovery.test.ts tests/provider-work-recovery.test.ts tests/billing-cleanup-boundary.test.ts`. These use mocked provider/Stripe transports and do not contact mailboxes.
 3. With both cleanup flags false, verify paid start/confirm is refused. With the staging Gmail flag true and Microsoft false, verify only Gmail can pass; repeat the inverse. Test missing DB/key/Cron/Workflow/OAuth config in a separate isolated deployment, not by removing keys from active recovery jobs. Verify zero-balance, fully reserved, refunded or mismatched-mode credit access is denied with flags true.
 4. After explicitly authorizing a disposable-inbox test, perform a fresh scan, call `start` with exact Suggested group indices, wait for `ready` using `status`, inspect requested/approved/excluded counts, and only then POST `confirm`. Use Gmail's existing 250-message durable size or Outlook's smaller 5-message size for initial staging. This is a manual mutation test, not something the agent ran.

@@ -19,8 +19,9 @@ export function RetentionDisclosure() {
         {runtimeConfig.development ? <> Small development cleanups keep temporary state for {retentionDuration(legacyCleanupTtlMs / 1000)}.</> : null}
       </p>
       <p>
-        Expired state is no longer available. A scheduled deletion runs every minute, removing
-        expired data once any running task&apos;s ownership window ends. Service outages may delay deletion.
+        Expired state can no longer be used to continue a scan, cleanup or Undo. It is deleted during
+        subsequent account/app activity where applicable and by a daily cleanup sweep, after any
+        active task&apos;s ownership window ends. Service outages may delay deletion.
         Disconnect clears temporary state sooner, including the restoration details needed for Undo.
         Reconnecting cannot restore those details. Account records and summary cleanup receipts are
         separate from these temporary reports. Database backup retention is separate from this deletion schedule.

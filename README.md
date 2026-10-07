@@ -83,7 +83,7 @@ Inbox Reports and required scan/cleanup state are stored temporarily in encrypte
 
 ### Scheduled Retention Deletion
 
-`vercel.json` schedules `GET /api/cron/purge-transient-state` every minute in production. Configure a strong `CRON_SECRET` in Vercel Production before deploying; Vercel supplies it as a Bearer authorization header. Do not put it in a URL, browser bundle, or logs. Minute scheduling requires a supporting Vercel plan (not Hobby). Local development and preview deployments do not run this schedule automatically.
+`vercel.json` schedules `GET /api/cron/purge-transient-state` daily (`0 0 * * *`) in production. Configure a strong `CRON_SECRET` in Vercel Production before deploying; Vercel supplies it as a Bearer authorization header. Do not put it in a URL, browser bundle, or logs. Vercel Hobby is supported; no paid plan or external scheduler is required. Logical expiry is immediate. Authenticated balance loading and production cleanup start/confirmation opportunistically purge only the current user's expired, unlocked transient state before credit checks; the daily sweep covers users who never return. Local development and preview deployments do not run this schedule automatically.
 
 The purge uses stored `expiresAt`, not a new retention period. Scan/report state uses its existing one-hour window. Cleanup uses `CLEANUP_STATE_ACTIVE_TTL_SECONDS`, `CLEANUP_STATE_UNDO_TTL_SECONDS`, and `CLEANUP_STATE_TERMINAL_TTL_SECONDS` (defaults 1800/1800/60). Valid worker leases defer deletion. Each run removes at most 5,000 expired rows per table; subsequent runs drain any backlog. No provider request or decryption is involved. Normal aggregate Scan/CleanupJob records and provider credentials remain intact.
 
