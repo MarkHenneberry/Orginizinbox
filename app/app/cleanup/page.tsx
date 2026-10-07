@@ -41,7 +41,7 @@ export default async function CleanupPage() {
             availableCredits={credits?.available ?? null}
             key={`${state.provider}:${state.gmailJob?.id ?? state.outlookJob?.id ?? "selection"}`}
             bulkUndoProofEnabled={false} cleanupEnabled={true} legacyCleanupMaximum={0}
-            scalableCleanupEnabled={state.provider === "gmail"} countOptions={state.provider === "gmail" ? [250, 500] : [500]}
+            scalableCleanupEnabled={state.provider === "gmail"} countOptions={state.provider === "gmail" ? [250, 500] : [5, 25, 100, 500]}
             developmentMode={false} fixtureMode={false} productionAccess={state.access}
             groups={report ? publicCleanupGroupsFromReport(report.senders) : []}
             initialScalableJob={state.gmailJob} initialOutlookJob={state.outlookJob}

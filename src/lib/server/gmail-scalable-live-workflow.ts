@@ -1,4 +1,5 @@
 import "server-only";
+import { restorableGmailIndexes } from "@/lib/domain/permanent-delete";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
@@ -212,7 +213,7 @@ export async function undoDurableGmailScalableCleanup(userId: string, jobId: str
       job.view.expiresAt = cleanupStateExpiryFor({ now: Date.now(), undoAvailable: true, terminal: false });
       for (const sensitive of job.payload.chunks) {
         if (
-          sensitive.verifiedMovedIndexes.length > 0 &&
+          restorableGmailIndexes(job, sensitive).length > 0 &&
           sensitive.verifiedRestoredIndexes.length === 0 &&
           !sensitive.undoMutationDispatched
         ) {

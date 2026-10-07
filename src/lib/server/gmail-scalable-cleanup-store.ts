@@ -1,4 +1,5 @@
 import "server-only";
+import { blockedByPermanentDelete, type PermanentDeleteState } from "@/lib/domain/permanent-delete";
 import { createLocalRetentionSweep } from "@/lib/server/local-retention-sweep";
 import { decryptCleanupState, encryptCleanupState } from "@/lib/server/crypto";
 import type {
@@ -57,6 +58,7 @@ export type GmailScalableFixtureControl = {
 };
 
 export type GmailScalableStoredJob = {
+  permanentDeletion?: PermanentDeleteState;
   userId: string;
   acceptanceKey: string;
   version: number;
@@ -216,8 +218,9 @@ export function serializeGmailScalableJob(job: GmailScalableStoredJob | GmailSca
   return structuredClone({
     ...view,
     ...progress,
+    ...(job.permanentDeletion ? { undoAvailable: false } : {}),
     recoveryRestoreAvailable: recovery.available && recovery.mode === "recovery",
-    recoveryRestoreCount: exactVerifiedMovedLedgerCount(job),
+    recoveryRestoreCount: job.permanentDeletion ? recovery.count : exactVerifiedMovedLedgerCount(job),
     recoveryRestoreReason: recovery.reason
   });
 }
@@ -232,6 +235,16 @@ export type GmailScalableRestoreEligibility = {
 };
 
 export function getGmailScalableRestoreEligibility(job: GmailScalableStoredJob): GmailScalableRestoreEligibility {
+  if (job.permanentDeletion) {
+    if (job.view.restoreMode || job.view.expiresAt <= Date.now() || exactVerifiedMovedLedgerCount(job) === 0) {
+      return { available: false, count: 0, reason: "The restoration state is unavailable or already in use." };
+    }
+    const count = job.payload.chunks.reduce((n, chunk) => n + gmailRestorableIndexes(job, chunk).length, 0);
+    const available = count > 0 && job.permanentDeletion.status !== "running" &&
+      ["complete", "partial", "uncertain", "failed"].includes(job.view.status);
+    return { available, count: available ? count : 0, mode: available ? "recovery" : undefined,
+      reason: "Only untouched verified-moved messages remain recoverable." };
+  }
   const exactCount = exactVerifiedMovedLedgerCount(job);
   if (job.view.status === "complete") {
     const available = job.view.undoAvailable && hasCompleteExactVerifiedMovedLedger(job);
@@ -272,6 +285,11 @@ export function exactVerifiedMovedLedgerCount(job: GmailScalableStoredJob) {
     total += indexes.size;
   }
   return total;
+}
+
+export function gmailRestorableIndexes(job: GmailScalableStoredJob, chunk: GmailScalableSensitiveChunk) {
+  return chunk.verifiedMovedIndexes.filter(index => !chunk.verifiedRestoredIndexes.includes(index) &&
+    !blockedByPermanentDelete(job.permanentDeletion, `${chunk.index}:${index}`));
 }
 
 export function exactRecoverableVerifiedMovedLedgerCount(job: GmailScalableStoredJob) {

@@ -110,16 +110,29 @@ describe("Stripe credit purchases", () => {
 
 describe("verified cleanup accounting", () => {
   const progress = (moved = 0, restored = 0, closed = false) => ({ requested: 500, moved, restored, closed });
-  it("reserves without spending, charges only verified moves and restores only verified Undo once", async () => {
+  it("allows zero-balance restoration accounting and deletion replay without another debit or refund", async () => {
+    const f = billingFixture(500);
+    const save = (p: ReturnType<typeof progress>) => f.client.$transaction(tx => accountVerifiedProgress(tx, "owner", "job-1", p));
+    await save(progress());
+    await save(progress(500, 0, true));
+    expect(f.row.creditBalance).toBe(0);
+    await save(progress(500, 400, true));
+    await save(progress(500, 400, true));
+    // Permanent deletion updates a separate ledger; historical verified-move counts do not change.
+    await save(progress(500, 400, true));
+    expect(await creditSnapshot(f.client, "owner")).toEqual({ balance: 0, reserved: 0, available: 0 });
+    expect([...f.entries.values()].map(entry => entry.amount)).toEqual([-500, 0]);
+  });
+  it("reserves without spending, charges only verified moves and never refunds Undo or its replay", async () => {
     const f = billingFixture(1000);
     const save = (p = progress()) => f.client.$transaction((tx) => accountVerifiedProgress(tx, "owner", "job-1", p));
     await save(); expect(await creditSnapshot(f.client, "owner")).toEqual({ balance: 1000, reserved: 500, available: 500 });
     await save(progress(450)); await save(progress(450)); expect(f.row.creditBalance).toBe(550);
     await save(progress(450, 0, true)); expect((await creditSnapshot(f.client, "owner")).reserved).toBe(0);
-    await save(progress(450, 400, true)); await save(progress(450, 400, true)); expect(f.row.creditBalance).toBe(950);
+    await save(progress(450, 400, true)); await save(progress(450, 400, true)); expect(f.row.creditBalance).toBe(550);
     await expect(save(progress(451, 400, true))).rejects.toThrow();
     await expect(save(progress(450, 451, true))).rejects.toThrow();
-    expect([...f.entries.values()].map((value) => value.amount)).toEqual([-450, 400]);
+    expect([...f.entries.values()].map((value) => value.amount)).toEqual([-450, 0]);
   });
   it("prevents over-reservation across jobs and releases holds when transient state is deleted", async () => {
     const f = billingFixture(500);

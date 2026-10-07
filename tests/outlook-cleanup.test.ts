@@ -836,7 +836,7 @@ describe("Outlook durable cleanup", () => {
     expect(outlookWorkspace).toContain("Move up to {job.requested.toLocaleString()} to Deleted Items");
     expect(outlookWorkspace).toContain("Move up to {job.requested.toLocaleString()} messages to Deleted Items?");
     expect(outlookWorkspace).toContain("We will recheck these messages and leave protected email out.");
-    expect(outlookWorkspace).toContain("Organizinbox never permanently deletes email.");
+    expect(outlookWorkspace).toContain("Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation.");
     expect(outlookWorkspace).not.toContain("They&apos;re still recoverable in Outlook Deleted Items.");
     expect(outlookWorkspace).toContain('recovery={job.undoMode === "recovery"}');
     expect(outlookWorkspace).toContain('expiresAt={job.expiresAt}');

@@ -93,7 +93,7 @@ it("uses provider-neutral Help disclosures with truthful Undo and privacy conten
   expect(html.match(/<details/g)?.length).toBeGreaterThanOrEqual(8);
   expect(html).toContain("Disconnecting your inbox");
   expect(html).not.toContain("Disconnecting Gmail");
-  for (const text of ["Suggested", "Review", "Protected", "temporary restoration state", "never permanently deletes", "Subject lines", "encrypted"]) expect(html).toContain(text);
+  for (const text of ["Suggested", "Review", "Protected", "temporary restoration state", "permanent deletion requires separate confirmation", "Subject lines", "encrypted"]) expect(html).toContain(text);
 });
 it("shows insufficient-credit context without blocking reserved-job recovery", () => {
   const html = render("credit-context", createElement("main", { className: "container settings-page" }, createElement(CleanupCreditContext, { available: 5000, requested: 8231 })));

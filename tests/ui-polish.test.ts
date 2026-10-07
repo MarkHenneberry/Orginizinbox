@@ -7,6 +7,7 @@ import { InboxReportView } from "@/components/product/InboxReportView";
 import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
 import { GmailScanClient, OutlookScanClient } from "@/components/product/GmailScanClient";
 import { BillingActions } from "@/components/product/BillingActions";
+import { PermanentDeleteConfirmation } from "@/components/product/PostCleanupActions";
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
 import type { OutlookCleanupUiJob } from "@/lib/domain/cleanup-ui";
@@ -33,6 +34,20 @@ function render(name: string, element: ReactElement) {
 }
 
 describe("polished shared UI preserves product actions", () => {
+  it.each(["gmail", "microsoft"] as const)("requires irreversible acknowledgement in the %s deletion confirmation", provider => {
+    const props = { provider, requested: 5, acknowledged: false, sending: false, busy: false,
+      onAcknowledge: vi.fn(), onCancel: vi.fn(), onConfirm: vi.fn() };
+    const html = render(`permanent-delete-${provider}`, createElement(PermanentDeleteConfirmation, props));
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain("cannot be restored with Organizinbox Undo");
+    expect(html).toMatch(/disabled="">Permanently delete up to 5 emails/);
+    expect(html).toContain(provider === "gmail" ? "Trash" : "Deleted Items");
+    if (provider === "microsoft") expect(html).toContain("Microsoft retention or hold rules may retain internal copies");
+    expect(renderToStaticMarkup(createElement(PermanentDeleteConfirmation, { ...props, acknowledged: true }))).not.toContain("disabled");
+    expect(renderToStaticMarkup(createElement(PermanentDeleteConfirmation, { ...props, acknowledged: true, busy: true }))).toContain("disabled");
+    expect(props.onConfirm).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it.each(["overview", "senders", "categories", "old-mail"] as const)("renders the %s report with an accessible current view", (view) => {
     const html = render(`report-${view}`, createElement(InboxReportView, {
       report, source: "gmail-live", view, backHref: "/app", reportStale: false, productionCleanupAccess: "available"

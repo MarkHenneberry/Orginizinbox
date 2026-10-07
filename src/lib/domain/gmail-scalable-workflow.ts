@@ -1,4 +1,5 @@
 import type { GmailScalableStoredJob } from "@/lib/server/gmail-scalable-cleanup-store";
+import { restorableGmailIndexes } from "@/lib/domain/permanent-delete";
 
 export const gmailScalableWorkflowOperations = [
   "preflight_safety",
@@ -43,7 +44,7 @@ export function planGmailScalableWorkflowStep(
     if (job.view.status === "complete") return { outcome: "stop", reason: "waiting_for_confirmation" };
     if (job.view.status !== "undoing") return { outcome: "stop", reason: "terminal" };
     const chunk = job.payload.chunks.find(
-      (candidate) => candidate.verifiedMovedIndexes.length > 0 && candidate.verifiedRestoredIndexes.length === 0
+      (candidate) => restorableGmailIndexes(job, candidate).length > 0 && candidate.verifiedRestoredIndexes.length === 0
     );
     if (!chunk) return { outcome: "stop", reason: "complete" };
     if (chunk.undoMutationDispatched && !chunk.undoHistoryCheckpoint) return { outcome: "stop", reason: "terminal" };
@@ -83,7 +84,7 @@ export function markGmailScalableMutationDispatch(
     next.view.chunks[chunk.index].batchModifyRequests += 1;
   } else {
     const chunk = next.payload.chunks.find(
-      (candidate) => candidate.verifiedMovedIndexes.length > 0 && candidate.verifiedRestoredIndexes.length === 0
+      (candidate) => restorableGmailIndexes(job, candidate).length > 0 && candidate.verifiedRestoredIndexes.length === 0
     );
     if (!chunk || chunk.undoMutationDispatched) return undefined;
     chunk.undoMutationDispatched = true;

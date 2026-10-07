@@ -94,7 +94,7 @@ describe("actual Undo deadlines without changing retention", () => {
       expect(source.indexOf("<DisconnectUndoWarning />")).toBeLessThan(source.indexOf("<form action="));
     }
     const cleanup = readFileSync("src/components/product/GmailCleanupClient.tsx", "utf8");
-    expect(cleanup.match(/<UndoAction[^>]+expiresAt=\{job\.expiresAt\}/g)!.length).toBeGreaterThanOrEqual(5);
+    expect(cleanup.match(/<(?:UndoAction|PostCleanupActions)[^>]+expiresAt=\{job\.expiresAt\}/g)!.length).toBeGreaterThanOrEqual(5);
   });
 });
 

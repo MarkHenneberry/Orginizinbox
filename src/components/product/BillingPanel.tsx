@@ -29,7 +29,7 @@ export async function BillingPanel() {
     {state ? <>
       <dl className="credit-balances mt-4">{[["Available", state.available], ["Reserved for active cleanup", state.reserved], ["Total balance", state.balance]].map(([label, value]) =>
         <div key={label}><dt className="muted text-sm">{label}</dt><dd className="m-0 text-2xl font-bold">{Number(value).toLocaleString("en-US")}</dd></div>)}</dl>
-      <p className="muted mt-4">One credit is spent only when an email is verified as moved. Verified Undo returns the credit. Reserved credits are not spent.</p>
+      <p className="muted mt-4">One credit is spent only when an email is verified as moved. Undo restores the email but does not refund the credit. Reserved credits are not spent.</p>
       {state.needsReview ? <p role="alert">Your previous billing arrangement needs review. Contact support before purchasing credits.</p> : null}
       {state.balance < 0 ? <p role="alert">A refunded or disputed purchase needs attention before starting more cleanup.</p> : null}
       {!state.canBuy ? <p className="muted">New credit purchases are currently unavailable.</p> : null}

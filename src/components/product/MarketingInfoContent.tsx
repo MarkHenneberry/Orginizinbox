@@ -95,7 +95,7 @@ export function MarketingInfoContent({ page, appContext = false, primaryCta }: {
           <p className="pack-price">${pack.amountCents / 100} <small>USD, once</small></p>
           <p className="muted text-sm">Gmail and Outlook. Pay only for verified moves.</p>
         </article>)}</div>
-        <p className="mt-5">Use credits across your linked Gmail and Outlook inboxes. One credit pays for one email verified as moved to Trash or Deleted Items. Verified Undo returns that credit.</p>
+        <p className="mt-5">Use credits across your linked Gmail and Outlook inboxes. One credit pays for one email verified as moved to Trash or Deleted Items. Undo restores the email but does not refund the credit.</p>
         <p className="muted">Scanning and reviewing are free. Protected, excluded, failed and uncertain moves cost no credits. Purchases add to your balance. Cleanup and Undo remain subject to provider availability and the displayed Undo deadline.</p>
         {!creditSalesAvailable ? <p className="font-bold">Credit purchases are not available yet.</p> : null}
       </div></section> : null}

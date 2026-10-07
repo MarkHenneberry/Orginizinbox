@@ -10,7 +10,7 @@ describe("product copy and contextual navigation", () => {
     expect(spec).toMatch(/## Product Copy System/);
     expect(spec).toMatch(/See what's clogging your inbox/);
     expect(spec).toMatch(/Clean thousands of unwanted emails safely/);
-    expect(spec).toMatch(/Organizinbox never permanently deletes email/);
+    expect(spec).toMatch(/Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation/);
     expect(spec).toMatch(/When we're unsure, we leave it alone/);
     expect(spec).toMatch(/Primary:[\s\S]+Secondary:[\s\S]+Tertiary:/);
   });
@@ -30,7 +30,7 @@ describe("product copy and contextual navigation", () => {
 
     expect(home).toMatch(/See what&apos;s clogging your inbox/);
     expect(home).toMatch(/finds the senders and old email taking over your inbox/);
-    expect(home).toMatch(/Organizinbox never permanently deletes email/);
+    expect(home).toMatch(/Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation/);
     expect(home).toMatch(/scan the whole inbox/);
     expect(home).toMatch(/Scanning does not move or delete anything/);
     expect(home).toMatch(/Suggested, Review and Protected/);
@@ -90,7 +90,7 @@ describe("product copy and contextual navigation", () => {
     expect(cleanup).toMatch(/Move \{job\.resolvedCount\.toLocaleString\(\)\} messages to Trash/);
     expect(cleanup).toMatch(/We rechecked these messages and left protected email out/);
     expect(cleanup).toMatch(/Move \{job\.resolvedCount\.toLocaleString\(\)\} to Trash/);
-    expect(cleanup).toMatch(/Organizinbox never permanently deletes email/);
+    expect(cleanup).toMatch(/Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation/);
     expect(cleanup).toMatch(/emails moved to Trash/);
     expect(cleanup).toMatch(/retention rules still apply/);
     expect(cleanup).toMatch(/<summary[^>]*>Development cleanup details<\/summary>/);

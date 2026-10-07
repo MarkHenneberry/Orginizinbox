@@ -30,7 +30,7 @@ function render(provider: "gmail" | "microsoft", access: CleanupUiAccess, job?: 
   return renderToStaticMarkup(createElement(GmailCleanupClient, {
     groups: [], bulkUndoProofEnabled: false, cleanupEnabled: true, legacyCleanupMaximum: 0,
     scalableCleanupEnabled: provider === "gmail", fixtureMode: false, provider,
-    countOptions: provider === "gmail" ? [250, 500] : [500], reportStale: false,
+    countOptions: provider === "gmail" ? [250, 500] : [5, 25, 100, 500], reportStale: false,
     developmentMode: false, productionAccess: access,
     initialScalableJob: job && provider === "gmail" ? job as GmailCleanupUiJob : undefined,
     initialOutlookJob: job && provider === "microsoft" ? job as OutlookCleanupUiJob : undefined
@@ -45,7 +45,11 @@ describe("shared production cleanup presentation", () => {
     const html = render(provider, "available");
     expect(html).toContain("Check 500 messages");
     expect(html).toContain("Select sender groups");
-    expect(html).not.toMatch(/value="(?:5|10|25|100)"|benchmark|development|diagnostic|proof/i);
+    expect(html).not.toMatch(/benchmark|development|diagnostic|proof/i);
+    if (provider === "microsoft") {
+      for (const count of [5, 25, 100, 500]) expect(html).toContain(`value="${count}"`);
+      expect(html).not.toContain('value="1000"');
+    } else expect(html).not.toMatch(/value="(?:5|10|25|100)"/);
     expect(fetch).not.toHaveBeenCalled();
   });
   it.each(["upgrade", "past_due", "inactive", "unavailable", "reconnect"] as const)("hides starts for %s and provides appropriate account action", (access) => {
@@ -84,6 +88,15 @@ describe("shared production cleanup presentation", () => {
     expect(html).not.toContain("Undo complete");
     expect(render("gmail", "unavailable", { ...gmail, status: "uncertain", recoveryRestoreAvailable: true,
       recoveryRestoreCount: 20, uncertainCount: 5 })).toContain("Recovery Undo until");
+  });
+  it("shows one result action group for Gmail recovery and retains spent-credit copy after Undo", () => {
+    const html = render("gmail", "available", { ...gmail, recoveryRestoreAvailable: true, recoveryRestoreCount: 2 });
+    expect(html.match(/credits used/g)).toHaveLength(1);
+    expect(html.match(/Recovery Undo until/g)).toHaveLength(1);
+    for (const provider of ["gmail", "microsoft"] as const) {
+      expect(render(provider, "available", { ...(provider === "gmail" ? gmail : outlook), status: "undo_complete" }))
+        .toContain("Undo restores the email but does not refund the credit.");
+    }
   });
   it("continues to present working states and hides expired Undo", () => {
     expect(render("microsoft", "unavailable", { ...outlook, status: "running" })).toContain("Moving to Deleted Items");

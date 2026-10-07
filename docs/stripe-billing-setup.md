@@ -76,7 +76,8 @@ atomically, including Cron/disconnect/cascade deletion. It does not refund spent
   fixtures after applying the migration. Automated unit tests are not a replacement
   for these database race tests.
 - With mocked provider transports, reserve 500, verify 450 moves and leave 50
-  excluded/failed/uncertain: spend 450. Verify 400 restores: refund 400, once.
+  excluded/failed/uncertain: spend 450. Verify 400 restores: credits remain spent,
+  including on replay. Optional permanent deletion costs no additional credits.
   Replace the worker and replay every save. Counts and balance must remain stable.
 - Test concurrent jobs across linked Gmail/Outlook identities competing for one
   balance. Reservations must prevent overspending. Expire/delete transient state:

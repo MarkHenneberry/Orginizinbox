@@ -17,7 +17,7 @@ const trustItems = [
   "Doesn't read email bodies",
   "Doesn't download attachments",
   "Doesn't send email",
-  "Never permanently deletes email"
+  "Initial cleanup is reversible"
 ];
 
 export function ProviderConnectShell({

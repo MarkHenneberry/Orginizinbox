@@ -30,6 +30,8 @@ import {
 } from "@/lib/server/gmail-scalable-workflow-coordinator";
 import { GmailScalableProviderWorkflowExecutor } from "@/lib/server/gmail-scalable-workflow-executor";
 import { accountVerifiedProgress } from "@/lib/billing/credits";
+import { acceptPermanentDelete, advancePermanentDelete, type DeleteJob } from "@/lib/server/permanent-delete";
+import { getGmailScalableRestoreEligibility } from "@/lib/server/gmail-scalable-cleanup-store";
 import { billingFixture } from "./fixtures/credit-billing";
 
 const key = Buffer.alloc(32, 7);
@@ -39,6 +41,38 @@ const codec = createCleanupJobStateCodec({
 });
 
 describe("durable scalable cleanup Workflow boundary", () => {
+  it("shares the Undo lease/CAS with permanent deletion and encrypts its exact target ledger", async () => {
+    const repository = new FakeCleanupJobStateRepository();
+    const store = new PrismaCleanupJobStore<DeleteJob>(repository, codec);
+    const job = storedJob();
+    job.view.status = "complete";
+    job.payload.chunks[0].verifiedMovedIndexes = [0];
+    await store.create(job);
+    const staleUndo = await store.get("user-1", "job-1");
+    await store.claim("job-1", "undo-worker", new Date(), 60_000);
+    await expect(acceptPermanentDelete("user-1", "job-1", "gmail", store)).rejects.toThrow("state changed");
+    await store.releaseLock("job-1", "undo-worker");
+    await acceptPermanentDelete("user-1", "job-1", "gmail", store);
+    expect(await store.compareAndSet("user-1", "job-1", staleUndo!.version, current => {
+      current.view.status = "undoing"; return current;
+    })).toBeUndefined();
+    expect(getGmailScalableRestoreEligibility(await store.get("user-1", "job-1") as GmailScalableStoredJob).available).toBe(false);
+    expect(JSON.stringify(repository.rows.get("job-1"))).not.toContain("gmail-api-id-1");
+    const replacement = new PrismaCleanupJobStore<DeleteJob>(repository, codec);
+    let deletions = 0;
+    await advancePermanentDelete("job-1", replacement, async () => ({
+      recheck: async () => "eligible",
+      remove: async () => {
+        expect(await store.claim("job-1", "undo-worker", new Date(), 60_000)).toBeUndefined();
+        deletions++; return true;
+      }
+    }));
+    expect(deletions).toBe(1);
+    const result = await replacement.get("user-1", "job-1") as GmailScalableStoredJob;
+    expect(result.permanentDeletion?.targets[0]).toMatchObject({ messageId: "gmail-api-id-1", state: "verified_deleted" });
+    expect(getGmailScalableRestoreEligibility(result).available).toBe(false);
+    expect(JSON.stringify(repository.rows.get("job-1"))).not.toMatch(/gmail-api-id-1|verified_deleted/);
+  });
   it("reserves before dispatch and spends once after exact verification across process replacement", async () => {
     const financial = billingFixture(1);
     const repository = new FakeCleanupJobStateRepository();

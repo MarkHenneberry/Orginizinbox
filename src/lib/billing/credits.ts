@@ -45,7 +45,7 @@ export async function accountVerifiedProgress(tx: Prisma.TransactionClient, user
       progress.moved < prior.moved || progress.restored < prior.restored || (prior.closed && progress.moved !== prior.moved)) {
     throw new BillingError("Cleanup credit accounting changed. Recovery is still available.");
   }
-  const amount = progress.restored - prior.restored - (progress.moved - prior.moved);
+  const amount = prior.moved - progress.moved;
   if (progress.moved !== prior.moved || progress.restored !== prior.restored) {
     await tx.creditEntry.create({ data: { key: `job:${jobId}:${progress.moved}:${progress.restored}`, userId: owner, amount, kind: "verified_cleanup" } });
     await tx.billingAccount.update({ where: { userId: owner }, data: { creditBalance: account.creditBalance + amount } });

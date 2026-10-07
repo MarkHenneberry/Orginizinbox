@@ -1,4 +1,5 @@
 import "server-only";
+import { blockedByPermanentDelete, type PermanentDeleteState } from "@/lib/domain/permanent-delete";
 import {
   createEmptyOutlookCleanupHttpRoundTrips,
   createEmptyOutlookCleanupTiming,
@@ -38,6 +39,7 @@ export type OutlookCleanupTarget = {
 };
 
 export type OutlookCleanupStoredJob = {
+  permanentDeletion?: PermanentDeleteState;
   provider: "microsoft";
   userId: string;
   acceptanceKey: string;
@@ -65,8 +67,9 @@ export function createPrismaOutlookCleanupStore(): OutlookCleanupStore {
 
 export function getOutlookCleanupLedgers(job: OutlookCleanupStoredJob) {
   return {
-    verifiedMoved: job.payload.targets.filter((target) =>
-      target.state === "moved_verified" && Boolean(target.movedMessageId) && Boolean(target.originalFolderId)),
+    verifiedMoved: job.payload.targets.filter((target, index) =>
+      target.state === "moved_verified" && Boolean(target.movedMessageId) && Boolean(target.originalFolderId) &&
+      !blockedByPermanentDelete(job.permanentDeletion, String(index))),
     failed: job.payload.targets.filter((target) => target.state === "move_failed" || target.state === "restore_failed"),
     uncertain: job.payload.targets.filter((target) => target.state.endsWith("_uncertain"))
   };
@@ -74,7 +77,7 @@ export function getOutlookCleanupLedgers(job: OutlookCleanupStoredJob) {
 
 export function refreshOutlookRecovery(job: OutlookCleanupStoredJob) {
   const ledgers = getOutlookCleanupLedgers(job);
-  job.view.uncertain = ledgers.uncertain.length;
+  job.view.uncertain = ledgers.uncertain.length + (job.permanentDeletion?.targets.filter(t => t.state === "uncertain" || t.state === "dispatching").length ?? 0);
   job.view.failed = ledgers.failed.length;
   job.view.movedVerified = job.payload.targets.filter((target) =>
     target.state === "moved_verified" || target.state.startsWith("restore")

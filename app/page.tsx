@@ -61,7 +61,7 @@ export default async function HomePage() {
                 </Link>
               </div>
               <ul className="mt-8 grid gap-3 p-0 text-sm font-bold text-[var(--navy)] sm:grid-cols-2" aria-label="Trust statements">
-                {["You review what gets cleaned", "Organizinbox never permanently deletes email", "We don't sell your inbox data", "Use Undo before disconnecting"].map((item) => (
+                {["You review what gets cleaned", "Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation", "We don't sell your inbox data", "Use Undo before disconnecting"].map((item) => (
                   <li className="list-none" key={item}>
                     <span className="mr-2 text-[var(--teal)]" aria-hidden="true">&#10003;</span>
                     {item}
@@ -212,7 +212,7 @@ export default async function HomePage() {
         <section className="section border-t border-[var(--line)] bg-white">
           <div className="container max-w-3xl text-center">
             <h2 className="section-title">See what&apos;s filling your inbox.</h2>
-            <p className="muted mt-4 text-lg">{runtimeConfig.development ? "Approved email moves to Trash or Deleted Items. Organizinbox never permanently deletes email." : "Read-only scanning for enabled providers. Cleanup is not available."}</p>
+            <p className="muted mt-4 text-lg">{runtimeConfig.development ? "Initial cleanup moves email to Trash or Deleted Items. Permanent deletion requires separate confirmation." : "Read-only scanning for enabled providers. Cleanup is not available."}</p>
             <Link className="btn btn-primary focus-ring mt-6" href={primaryCta.href}>
               {primaryCta.label}
             </Link>

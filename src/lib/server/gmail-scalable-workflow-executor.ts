@@ -1,4 +1,5 @@
 import "server-only";
+import { restorableGmailIndexes } from "@/lib/domain/permanent-delete";
 import { createCleanupRequestFence } from "@/lib/server/provider-work-fence";
 import { prisma } from "@/lib/server/db";
 import { runtimeConfig } from "@/lib/config";
@@ -340,11 +341,12 @@ async function verifyUndo(
   });
   job.view.suggestedDeltas = addGroupDeltas(job.view.suggestedDeltas, safeTargetsByGroup(sensitive, verified), "restored");
   const hasMore = job.payload.chunks.some(
-    (candidate) => candidate.verifiedMovedIndexes.length > 0 && candidate.verifiedRestoredIndexes.length === 0
+    (candidate) => restorableGmailIndexes(job, candidate).length > 0 && candidate.verifiedRestoredIndexes.length === 0
   );
   setJobStatus(
     job,
-    result.uncertainIds.length ? "uncertain" : result.failedIds.length ? "partial" : hasMore ? "undoing" : "undo_complete",
+    result.uncertainIds.length ? "uncertain" : result.failedIds.length ? "partial" : hasMore ? "undoing"
+      : job.permanentDeletion?.status === "uncertain" ? "uncertain" : job.permanentDeletion ? "partial" : "undo_complete",
     now
   );
   if (job.payload.fixture?.enabled && result.verifiedIds.length > 0) {
@@ -390,7 +392,7 @@ function activeSensitiveChunk(job: GmailScalableStoredJob) {
 
 function activeUndoChunk(job: GmailScalableStoredJob) {
   const chunk = job.payload.chunks.find(
-    (candidate) => candidate.verifiedMovedIndexes.length > 0 && candidate.verifiedRestoredIndexes.length === 0
+    (candidate) => restorableGmailIndexes(job, candidate).length > 0 && candidate.verifiedRestoredIndexes.length === 0
   );
   if (!chunk) throw new Error("No exact verified-moved Undo chunk exists.");
   return chunk;
@@ -407,7 +409,7 @@ function activeSafeTargetIds(job: GmailScalableStoredJob) {
 
 function activeUndoTargetIds(job: GmailScalableStoredJob) {
   const chunk = activeUndoChunk(job);
-  return chunk.verifiedMovedIndexes.map((index) => {
+  return restorableGmailIndexes(job, chunk).map((index) => {
     const target = chunk.targets[index];
     if (!target) throw new Error("The Undo target ledger is invalid.");
     return target.apiMessageId;

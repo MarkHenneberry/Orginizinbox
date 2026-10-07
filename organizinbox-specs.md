@@ -174,7 +174,7 @@ Current implemented provider:
 
 > **Works with Gmail.**
 
-Outlook.com, Hotmail, and Microsoft 365 remain incomplete production mailbox-provider targets. In non-production development, a valid Microsoft connection may scan read-only, build a transient Inbox Report and, only behind the explicit Outlook cleanup gate, run the bounded 500-message move/verify/Undo validation defined in the Microsoft section. It must never permanently delete, send or create messages, and public Outlook pages must continue to present production Outlook support as coming soon rather than exposing the development capability as normal product behavior.
+Outlook.com, Hotmail, and Microsoft 365 remain incomplete production mailbox-provider targets. In non-production development, a valid Microsoft connection may scan read-only, build a transient Inbox Report and, only behind the explicit Outlook cleanup gate, run the bounded 500-message move/verify/Undo validation defined in the Microsoft section. It must never send or create messages; permanent deletion is restricted to the separately confirmed post-cleanup path, and public Outlook pages must continue to present production Outlook support as coming soon rather than exposing the development capability as normal product behavior.
 
 The research rates "See what's clogging your inbox" as the strongest differentiating positioning angle and "Clean without deleting anything important" as one of the strongest trust/conversion messages.
 
@@ -210,7 +210,7 @@ The standard supporting explanation is:
 
 The standard cleanup reassurance is:
 
-> Approved email moves to Trash or Deleted Items. Organizinbox never permanently deletes email. Your email provider's retention rules still apply.
+> Initial cleanup moves email to Trash or Deleted Items. Permanent deletion requires separate confirmation. Your email provider's retention rules still apply.
 
 User-facing copy must use short sentences, plain language and concrete verbs. Lead with what the user gets. Keep paragraphs short. Remove repeated reassurance and implementation detail from normal product surfaces. Terms such as IMAP, OAuth state, provider connection, API identifiers, metadata pipeline, worker architecture and token introspection belong in implementation or narrowly relevant technical documentation, not ordinary product copy.
 
@@ -222,7 +222,7 @@ Guides, help and landing pages describe Organizinbox as a whole-inbox, scan-firs
 4. **Confirm cleanup.** Where cleanup is available, Organizinbox runs final safety checks and moves only approved messages to Gmail Trash or Outlook Deleted Items.
 5. **Review the result.** Use Undo within the displayed deadline if needed, or scan again to see what remains.
 
-Marketing and SEO pages may use natural search language such as `delete old emails` and `delete thousands of emails`. When describing the actual Organizinbox action, use `Move to Trash` for Gmail and `Move to Deleted Items` for Outlook. Qualify permanent-deletion claims as actions Organizinbox does not perform, not a promise that providers retain mail forever. Cleanup requires explicit confirmation and must not be advertised as currently available when its production gate is off.
+Marketing and SEO pages may use natural search language such as `delete old emails` and `delete thousands of emails`. When describing the actual Organizinbox action, use `Move to Trash` for Gmail and `Move to Deleted Items` for Outlook. Explain that permanent deletion is separately confirmed after verified cleanup, and that provider retention/hold rules still apply. Cleanup requires explicit confirmation and must not be advertised as currently available when its production gate is off.
 
 Undo UI displays the current job's actual `expiresAt` deadline with a date, time and timezone, not a guessed fixed window. Distinguish Undo, Recovery Undo of only confirmed moved messages, expired Undo, and unavailable Undo. Expiry updates the UI even after terminal polling stops. Undo needs the temporary restoration state and a connected provider; expiry or disconnect can remove that ability, and provider-side recovery is separate and not guaranteed. Warn before Disconnect and Google authorization removal that any remaining Undo/recovery ability is lost. This is presentation only: do not extend expiry, alter server eligibility, retry uncertain targets, or change restore semantics. Retention disclosures use the existing configured durations and explain scheduled deletion and outage/backup caveats.
 
@@ -370,14 +370,14 @@ Version 1 does NOT need:
 - Yahoo
 - iCloud
 - generic third-party IMAP providers beyond Gmail IMAP/XOAUTH2
-- permanent deletion
+- permanent deletion during initial cleanup
 - enterprise admin tools
 
 ---
 
 # 7. Critical Product Principle
 
-## Never permanently delete email in MVP.
+## Initial cleanup is reversible; permanent deletion requires separate confirmation.
 
 For Gmail, scanning uses Gmail IMAP/XOAUTH2 because it is the preferred large-mailbox scan transport. The scalable path derives native Gmail API IDs from explicitly proven `X-GM-MSGID` values and performs an exact IMAP mutable-state recheck plus REST-only Personal/category protection immediately before mutation. Approved Gmail cleanup mutation uses the Gmail REST API because Trash movement is explicit and auditable. The controlled 100-message path retains its existing Gmail REST resolution and safety implementation until the scalable path is separately mutation-validated.
 
@@ -396,10 +396,10 @@ Gmail cleanup flow:
 - move only approved messages to Trash using the Gmail API
 - prior tiny development validation may use Gmail `users.messages.trash` for explicit per-message Trash semantics
 - the controlled 100-message development validation remains unchanged: it uses exactly one Gmail `users.messages.batchModify` request with `addLabelIds: ["TRASH"]` and `removeLabelIds: []`, followed by separate per-message verification
-- never implement `users.messages.delete`
+- `users.messages.delete` is restricted to separately confirmed post-cleanup permanent deletion
 - never implement `users.messages.batchDelete`
 - never implement IMAP `EXPUNGE` as an Organizinbox cleanup action
-- never permanently delete mail
+- never permanently delete mail during initial cleanup
 
 The scalable path may use ImapFlow's `message.emailId` only after runtime provenance is explicit: the session must advertise `X-GM-EXT-1`, must not select the RFC `OBJECTID` branch, and the installed ImapFlow implementation must be pinned/audited to issue `FETCH X-GM-MSGID` and map that exact response to `emailId`. If those conditions are absent, the bridge is unavailable and large cleanup must remain disabled. The development live proof checked 10 mailbox messages and produced 10 explicit values, 10 exact Gmail API ID matches, zero mismatches and zero unavailable values, with matching canonical sender and shared system-label evidence. The proof fetched no bodies, snippets or attachments and performed no Gmail mutation.
 
@@ -457,7 +457,7 @@ The normal secondary Outlook path leads to honest Outlook information while prod
 
 Trust statements directly below:
 
-- Organizinbox never permanently deletes email; provider retention rules still apply.
+- Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation; provider retention rules still apply.
 - Unwanted email goes to Trash.
 - We don't sell your inbox data.
 - Disconnect when you're finished.
@@ -491,7 +491,7 @@ Then list the concrete limits:
 - We don't read email bodies.
 - We don't download attachments.
 - We don't send email.
-- We don't permanently delete email.
+- Permanent deletion is optional and separately confirmed after verified cleanup.
 - We don't store your inbox.
 
 Primary action: **Connect Gmail**
@@ -573,7 +573,7 @@ The normal Graph connection requests exactly `openid profile email offline_acces
 
 The development-only Outlook IMAP benchmark requires a separate Microsoft authorization request for `openid profile email offline_access https://outlook.office.com/IMAP.AccessAsUser.All`. Microsoft access tokens are resource-specific, so never combine the Graph and Outlook resource scopes into one token request or use a Graph-audience token for IMAP XOAUTH2. The IMAP callback must verify the same signed Microsoft identity as the existing ProviderConnection before it stores encrypted IMAP access/refresh tokens, expiry and normalized IMAP scope on that connection. It must not replace the encrypted Graph credentials used by scanning, cleanup or Undo. A pre-existing Microsoft connection requires this additional consent before the IMAP benchmark becomes available; a later normal Graph reconnect clears the benchmark token and requires IMAP consent again. The IMAP permission and token fields remain development-only and Disconnect scrubs them with the other Microsoft credentials.
 
-Microsoft does not expose a narrower delegated move/restore-only permission: `Mail.ReadWrite` also technically permits broader message writes, draft creation, delete and permanent-delete APIs. Organizinbox must disclose this technical permission boundary accurately while constraining deployed behavior. The development Microsoft implementation uses Graph scanning plus the explicitly gated bounded cleanup flow below. It must not include attachment operations, draft/send operations, delete/permanent-delete operations or mutation operations outside move-to-Deleted-Items and exact move-based restoration.
+Microsoft does not expose a narrower delegated move/restore-only permission: `Mail.ReadWrite` also technically permits broader message writes, draft creation, delete and permanent-delete APIs. Organizinbox must disclose this technical permission boundary accurately while constraining deployed behavior. The development Microsoft implementation uses Graph scanning plus the explicitly gated bounded cleanup flow below. It must not include attachment operations, draft/send operations, mutation operations outside move-to-Deleted-Items, exact move-based restoration and separately confirmed permanent deletion.
 
 The callback consumes state once before handling denial or code errors, exchanges the code with the matching PKCE verifier and server-only client secret, requires an access token, refresh token and ID token, and positively verifies the explicit access-token scope when Microsoft returns it. Because Microsoft documents the response `scope` field as optional, omission means the initial requested resource scope; an explicit returned scope without `Mail.ReadWrite` fails closed. Validate the ID-token signature against Microsoft OIDC metadata/JWKS, exact audience, tenant-bound issuer, signing-key issuer, expiry/not-before and the stored nonce before trusting `tid`, `sub`, `email` or `preferred_username`. Never trust or parse a Microsoft Graph access token as application identity.
 
@@ -635,13 +635,13 @@ After explicit confirmation, refresh and persist the participated-conversation a
 
 Move approved targets with independent JSON batch subrequests using `POST /me/messages/{original-id}/move` and only `destinationId` for the locale-independent Deleted Items folder. Each target is independent, so do not add `dependsOn` serialization: Graph may execute subrequests concurrently and return responses in any order. Correlate every response to its exact target by the unique batch request ID, inspect every subresponse independently and never infer response order. Graph can change message IDs during move, so require a valid returned destination ID for every successful subrequest and batch-verify those exact IDs with read-only GETs whose `parentFolderId` is Deleted Items. Persist dispatch intent before the non-idempotent batch, then persist returned IDs in a distinct dispatched state before verification. A replacement process may resume read-only verification from that dispatched state, but a dispatching state with no durably recorded response is uncertain and must never repeat the move. Persist the target IDs, returned moved IDs, original folder IDs and whole-job folder/participation safety context only inside authenticated encrypted transient `CleanupJobState`; never place them in normal `CleanupJob`, `Scan` or `ProviderConnection` columns, terminal snapshots, logs, browser payloads or URLs. Stop dispatching later batches after an ambiguous batch transport result, malformed success response, uncertain subresponse or uncertain verification. Set mutation-capable Workflow steps to zero automatic retries; never automatically repeat an ambiguous or non-idempotent Graph move.
 
-Outlook keeps separate exact verified-moved, failed and uncertain ledgers as partitions of the encrypted per-target state, not duplicate plaintext identifier lists. Any uncertain forward move or verification permanently stops further forward cleanup for that job. It does not block separately confirmed Recovery Undo of other exact positively verified moved targets. The only restorable targets are `moved_verified` entries with both the returned moved ID and original folder ID; failed, uncertain, pending, unverified-dispatched and already-restored targets are never substituted or retried. Use the cleanup job's existing effective batch size. For every eligible Undo ledger entry, issue an independent move subrequest using its returned moved ID and encrypted original folder ID. Require each restore response's possibly changed ID, correlate it by request ID, persist it in a dispatched state, then batch-verify those exact restored IDs against their original `parentFolderId` values. Never restore from the pre-move ID, guess a folder, retry a mutation subrequest automatically or permanently delete.
+Outlook keeps separate exact verified-moved, failed and uncertain ledgers as partitions of the encrypted per-target state, not duplicate plaintext identifier lists. Any uncertain forward move or verification permanently stops further forward cleanup for that job. It does not block separately confirmed Recovery Undo of other exact positively verified moved targets. The only restorable targets are `moved_verified` entries with both the returned moved ID and original folder ID; failed, uncertain, pending, unverified-dispatched and already-restored targets are never substituted or retried. Use the cleanup job's existing effective batch size. For every eligible Undo ledger entry, issue an independent move subrequest using its returned moved ID and encrypted original folder ID. Require each restore response's possibly changed ID, correlate it by request ID, persist it in a dispatched state, then batch-verify those exact restored IDs against their original `parentFolderId` values. Never restore from the pre-move ID, guess a folder, retry a mutation subrequest automatically or permanently delete during Undo.
 
 Pre-existing forward uncertainty remains unresolved while Recovery Undo automatically processes its verified ledger. New restore uncertainty stops that recovery attempt; a later explicit Recovery Undo may restore only the remaining untouched verified-moved targets, never the uncertain restore targets. A replacement worker verifies durably recorded restore responses instead of moving them again. Dispatch intent without a durably recorded returned ID becomes exact target uncertainty once, not a repeated aggregate increment. Keep a bounded existing Undo-window expiry when a verified recovery ledger remains. Aggregate diagnostics/UI show recovery mode, remaining recoverable count, verified restored count, failures and unresolved uncertainty without IDs or folders. Even when every recovery target is restored, a job with any uncertainty retains `uncertain` job/Undo status, never `undo_complete` or full restoration copy. A known restore failure without uncertainty is `partial`; only zero uncertainty and verification of every previously verified moved target permits full Undo completion. Expiry, disconnect, ownership and dispatch fencing remain unchanged.
 
 The browser receives only an aggregate CleanupJob view and a copyable development diagnostic containing Requested, Checked, Approved, Excluded by safety, Moved/verified, Restored/verified, Failed, Uncertain, effective batch size, cleanup chunks and batches completed/total, Undo batches completed/total, current chunk/batch, total HTTP round trips, HTTP round trips by preflight/final recheck/move/verification/Undo move/Undo verification phase, Graph subrequests, Retries, Job status, Undo status and aggregate milliseconds for those same phases. HTTP round trips count actual fetches to Graph, while Graph subrequests count logical operations inside and outside JSON batches; do not conflate the two. Intermediate chunk or batch completion remains `running` and must never be presented as final completion. Sender context may reuse the sanitized frozen Review Cleanup groups already displayed by the normal UX, but no message ID, Subject, sender address, folder ID, token, raw header, mailbox metadata or provider body may cross the encrypted-state boundary. A full success requires every approved message to be moved and verified with zero uncertainty. A full Undo requires every verified moved message to be restored and verified. Partial and uncertain states must remain explicit and must not claim mailbox completion.
 
-The same privacy restrictions apply: no bodies, no attachments, no permanent mailbox metadata persistence, and no permanent deletion. Where Subject protection is implemented, Subject lines may be processed transiently only to derive protection signals under the rules in Data Retrieved During Scan; raw Subject text must not enter the normalized aggregate model or persistence.
+The same privacy restrictions apply: no bodies, no attachments, no permanent mailbox metadata persistence, and no permanent deletion during initial cleanup. Where Subject protection is implemented, Subject lines may be processed transiently only to derive protection signals under the rules in Data Retrieved During Scan; raw Subject text must not enter the normalized aggregate model or persistence.
 
 Microsoft provides `Mail.ReadBasic` for basic mailbox properties and `Mail.ReadWrite` for read/write operations. `Mail.ReadBasic` is insufficient for move/restore, so the eventual-product OAuth grant uses delegated `Mail.ReadWrite`. It is available for personal Microsoft accounts and does not inherently require admin consent, although an organization's policies may separately restrict third-party applications.
 
@@ -800,8 +800,7 @@ The application-facing provider capability surface must not expose operations Or
 - `getFullMessage()`
 - `getMessageBody()`
 - `downloadAttachment()`
-- `permanentlyDelete()`
-- `deleteForever()`
+- generic `permanentlyDelete()` / `deleteForever()` outside the exact verified-job follow-up path
 - `expungeMailbox()`
 - arbitrary provider fetch/query methods that can request full message content
 
@@ -1556,7 +1555,7 @@ Organizinbox sells account-level, non-expiring cleanup credits through one-time 
 
 Use three server-only configurable one-time Stripe Price IDs: `STRIPE_PRICE_10000_CREDITS`, `STRIPE_PRICE_50000_CREDITS`, and `STRIPE_PRICE_100000_CREDITS`. Checkout validates the selected pack's currency, amount, one-time price type, quantity and test/live mode. Never accept a price, amount, customer identifier, balance or entitlement from browser state. Purchases accumulate; prices and allowances are the offer, not mailbox-operation limits.
 
-One credit equals one message VERIFIED successfully moved to Gmail Trash or Outlook Deleted Items. Scanning, reviewing, protected messages, safety exclusions, failed moves and uncertain moves consume no credits. Verified successful Undo restores one credit for each corresponding previously debited message. Uncertain or failed Undo does not restore credits. Repeated verification, webhook delivery, confirmation, Workflow re-entry or Undo cannot charge or restore twice.
+One credit equals one message VERIFIED successfully moved to Gmail Trash or Outlook Deleted Items. Scanning, reviewing, protected messages, safety exclusions, failed moves and uncertain moves consume no credits. Undo restores email but does not refund spent credits. Permanent deletion after cleanup costs no additional credits. Repeated verification, webhook delivery, confirmation, Workflow re-entry, Undo or deletion cannot double-spend. Cleaning restored messages in a future job spends credits normally.
 
 ## Durable Accounting
 
@@ -1570,6 +1569,12 @@ Release unused reservations after forward work becomes terminal, cancellation, d
 
 ## Payment Safety
 
+### Optional permanent deletion after cleanup
+
+Normal cleanup remains reversible. Permanent deletion is a separately confirmed follow-up action for exact verified-moved targets only, with an explicit irreversible acknowledgement. Recheck Gmail TRASH or the exact Outlook returned moved ID and verified Deleted Items folder before each delete. Missing, restored, relocated, ambiguous or unverifiable targets are excluded/uncertain, never substituted. No client-supplied mailbox IDs are accepted.
+
+Keep pending, dispatching, verified_deleted, excluded and uncertain target states in encrypted CleanupJobState. Persist dispatch intent before requests. Unresolved dispatch after interruption is uncertain and must never be retried automatically; uncertainty stops later deletion. Only authoritative success counts as verified deletion. Deleted or deletion-uncertain targets cannot be Undone. Preserve safe untouched recovery and existing expiry windows. Gmail uses exact messages.delete; Outlook uses v1.0 permanentDelete. No OAuth scope, production flag, TTL or second credit charge is added. Outlook copy describes permanent removal from normal Outlook access, not erasure from retention/hold infrastructure. Production Outlook sizes are 5/25/100/500; maximum remains 500.
+
 Billing remains server-only and default-off through `STRIPE_BILLING_ENABLED`. Test/live mode remains explicit through `STRIPE_BILLING_MODE`. Use hosted Checkout with `mode: "payment"`; no subscription creation, renewal, saved off-session charging or Customer Portal dependency. A return redirect never grants credits.
 
 Durable purchase attempts and Stripe idempotency keys prevent duplicate charges. Grant credits only for a server-verified paid Checkout purchase with the exact supported price/amount/currency and account ownership. Payment fulfillment and its idempotency record commit atomically. Signed webhooks may arrive repeatedly or out of order; reconcile authoritative current Stripe payment state rather than trusting event order. Delayed/failed payment grants nothing until success is verified. Refund/dispute handling must not leave refunded purchases spendable; record reversals idempotently and prevent further spending when net available credits are insufficient. Do not invent or promise a customer refund guarantee.
@@ -1578,9 +1583,9 @@ Preserve bounded reconciliation for missed delivery, durable billing leases and 
 
 ## Product and Rollout
 
-The core positioning is: "See what's clogging your inbox. Clean thousands of unwanted emails safely." Supporting copy: "Pay once. No subscription. Credits don't expire." Explain that only verified moves spend credits, verified Undo returns them, and per-job safety limits still apply. Do not promise an exact number of eligible emails, instant completion, unlimited throughput or permanent deletion.
+The core positioning is: "See what's clogging your inbox. Clean thousands of unwanted emails safely." Supporting copy: "Pay once. No subscription. Credits don't expire." Explain that only verified moves spend credits, Undo does not refund them, and per-job safety limits still apply. Do not promise an exact number of eligible emails, instant completion, unlimited throughput or erasure of all provider-retained copies.
 
-Customers can connect an available provider and inspect a free Inbox Report before paying. Free scanning does not include free cleanup credits. `/app/credits` is the authenticated purchase destination, showing available, reserved and total credits, the three existing one-time packs (50,000 Recommended), and payment-status reconciliation when applicable. Account shows only a compact balance summary linking to Manage credits, alongside inbox connection and explicitly authenticated inbox linking. No monthly plans, subscription status, renewals or portal-management UI. Existing shared ownership, purchase validation, reservation, verified-move spending and verified-Undo credit restoration are unchanged.
+Customers can connect an available provider and inspect a free Inbox Report before paying. Free scanning does not include free cleanup credits. `/app/credits` is the authenticated purchase destination, showing available, reserved and total credits, the three existing one-time packs (50,000 Recommended), and payment-status reconciliation when applicable. Account shows only a compact balance summary linking to Manage credits, alongside inbox connection and explicitly authenticated inbox linking. No monthly plans, subscription status, renewals or portal-management UI. Existing shared ownership, purchase validation, reservation, verified-move spending and non-refunding Undo accounting apply.
 
 Production cleanup still requires provider availability, valid connection, durable Workflow/database/encryption infrastructure, explicit independent default-off cleanup flags and sufficient server-verified credits. Development cleanup remains unchanged. Existing-job status, verification and eligible Undo/Recovery Undo are not paywalled or disabled by turning off new cleanup. Buying credits cannot bypass rollout gates or authorize uncertain mutations.
 
@@ -1636,7 +1641,7 @@ Use the canonical session-aware primary CTA.
 
 ### Immediate trust
 
-- Nothing permanently deleted
+- Nothing permanently deleted during initial cleanup
 - Review before cleanup
 - No inbox-data selling
 - Disconnect anytime
@@ -2841,7 +2846,7 @@ Explicitly exclude:
 - Yahoo
 - iCloud
 - IMAP
-- permanent delete
+- permanent deletion without separate confirmation
 - sending email
 - reading full messages
 - attachment inspection
@@ -2948,7 +2953,7 @@ The MVP is not launch-ready until:
 
 ### Safety
 
-- permanent delete is impossible from product UI
+- permanent delete requires an explicit second confirmation and verified-moved targets
 - recent messages protected
 - flagged/starred/important protection tested
 - user can deselect any recommendation

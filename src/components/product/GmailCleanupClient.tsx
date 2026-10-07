@@ -13,6 +13,7 @@ import {
   type OutlookCleanupUiJob as OutlookCleanupJobView
 } from "@/lib/domain/cleanup-ui";
 import { UndoAction } from "@/components/product/UndoAction";
+import { PostCleanupActions } from "@/components/product/PostCleanupActions";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
@@ -736,7 +737,7 @@ export function GmailCleanupClient({
                   <Row label="Excluded during the final safety check" value={job.excludedMessageCount.toLocaleString()} />
                 </dl>
                 <p className="muted m-0 mt-4 text-sm">Protected and Review messages were left alone.</p>
-                <p className="muted m-0 mt-2 text-sm">Organizinbox never permanently deletes email. Your email provider&apos;s retention rules still apply.</p>
+                <p className="muted m-0 mt-2 text-sm">Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation. Your email provider&apos;s retention rules still apply.</p>
                 <SenderGroupFailureNotice job={job} />
 
                 {!busy && !finalStep ? (
@@ -751,7 +752,7 @@ export function GmailCleanupClient({
                   <div className="mt-5 grid gap-2 border-t border-[var(--line)] pt-4">
                     <p className="m-0 font-extrabold text-[var(--navy)]">Move {job.resolvedCount.toLocaleString()} messages to Trash?</p>
                     <p className="muted m-0 text-sm">We rechecked these messages and left protected email out.</p>
-                    <p className="muted m-0 text-sm">Organizinbox never permanently deletes email.</p>
+                    <p className="muted m-0 text-sm">Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation.</p>
                     <button className="btn btn-secondary focus-ring w-full" onClick={() => setFinalStep(false)} type="button">Cancel</button>
                     <button className="btn btn-primary focus-ring w-full" onClick={confirmCleanup} type="button">Move {job.resolvedCount.toLocaleString()} to Trash</button>
                   </div>
@@ -913,7 +914,7 @@ function OutlookCleanupWorkspace({
               <Row label="Selected sender groups" value={job.groupIndices.length.toLocaleString()} />
             </dl>
             <p className="muted m-0 mt-4 text-sm">We will recheck these messages and leave protected email out.</p>
-            <p className="muted m-0 mt-2 text-sm">Organizinbox never permanently deletes email. Your email provider&apos;s retention rules still apply.</p>
+            <p className="muted m-0 mt-2 text-sm">Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation. Your email provider&apos;s retention rules still apply.</p>
             {!finalStep ? (
               <button className="btn btn-primary focus-ring mt-5 w-full" onClick={() => onToggleFinalStep(true)} type="button">
                 Move up to {job.requested.toLocaleString()} to Deleted Items
@@ -922,7 +923,7 @@ function OutlookCleanupWorkspace({
               <div className="mt-5 grid gap-2 border-t border-[var(--line)] pt-4">
                 <p className="m-0 font-extrabold text-[var(--navy)]">Move up to {job.requested.toLocaleString()} messages to Deleted Items?</p>
                 <p className="muted m-0 text-sm">We will recheck these messages and leave protected email out.</p>
-                <p className="muted m-0 text-sm">Organizinbox never permanently deletes email.</p>
+                <p className="muted m-0 text-sm">Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation.</p>
                 <button className="btn btn-secondary focus-ring w-full" onClick={() => onToggleFinalStep(false)} type="button">Cancel</button>
                 <button className="btn btn-primary focus-ring w-full" onClick={onConfirm} type="button">Move up to {job.requested.toLocaleString()} to Deleted Items</button>
               </div>
@@ -943,7 +944,7 @@ function OutlookCleanupWorkspace({
             </dl>
             {job.uncertain > 0 ? <Notice text="Some messages remain unresolved and are excluded from Recovery Undo. Check their state in Outlook before starting another cleanup." /> : null}
             {job.status === "failed" ? <Notice text="The Outlook cleanup job stopped safely. No replacement messages were selected." /> : null}
-            <UndoAction available={job.undoAvailable} expiresAt={job.expiresAt} recovery={job.undoMode === "recovery"} busy={busy} onUndo={onUndo} />
+            <PostCleanupActions key={job.id} jobId={job.id} provider="microsoft" moved={job.movedVerified} development={developmentMode} available={job.undoAvailable} expiresAt={job.expiresAt} recovery={job.undoMode === "recovery"} busy={busy} onUndo={onUndo} />
             <button className="btn btn-primary focus-ring w-full" disabled={busy} onClick={onRescan} type="button">Rescan inbox</button>
             <ContextBackAction className="w-full" href="/app/report" label="Back to Inbox Report" />
           </div>
@@ -952,6 +953,7 @@ function OutlookCleanupWorkspace({
         {job.status === "undo_complete" ? (
           <div className="mt-4 grid gap-2 border-t border-[var(--line)] pt-4">
             <p className="m-0 text-lg font-extrabold text-[var(--navy)]">{job.restoredVerified.toLocaleString()} messages restored from Deleted Items.</p>
+            {!developmentMode ? <p className="m-0 text-sm">{job.movedVerified.toLocaleString()} credits used. Undo restores the email but does not refund the credit.</p> : null}
             <dl className="grid gap-2 text-sm">
               <Row label="Verified restored" value={job.restoredVerified.toLocaleString()} />
               <Row label="Failed" value={job.failed.toLocaleString()} />
@@ -1089,10 +1091,11 @@ function ScalableCleanupWorkspace({
             </div>
           ) : null}
 
-          {job.recoveryRestoreAvailable && (job.recoveryRestoreCount ?? 0) > 0 ? (
+          {job.status !== "complete" && ((job.recoveryRestoreAvailable && (job.recoveryRestoreCount ?? 0) > 0) ||
+            (!developmentMode && job.verifiedCount > 0 && ["partial", "uncertain", "failed"].includes(job.status))) ? (
             <div className="mt-4 grid gap-2">
-              <p className="m-0">{job.recoveryRestoreCount!.toLocaleString()} messages available for recovery.</p>
-              <UndoAction available expiresAt={job.expiresAt} recovery busy={busy} onUndo={onUndo} />
+              {job.recoveryRestoreAvailable ? <p className="m-0">{job.recoveryRestoreCount!.toLocaleString()} messages available for recovery.</p> : null}
+              <PostCleanupActions key={job.id} jobId={job.id} provider="gmail" moved={job.verifiedCount} development={developmentMode} available={Boolean(job.recoveryRestoreAvailable)} expiresAt={job.expiresAt} recovery busy={busy} onUndo={onUndo} />
             </div>
           ) : null}
 
@@ -1113,7 +1116,7 @@ function ScalableCleanupWorkspace({
               ) : (
                 <div className="mt-5 grid gap-2 border-t border-[var(--line)] pt-4">
                   <p className="m-0 font-extrabold text-[var(--navy)]">Move up to {job.safeCount.toLocaleString()} messages to Trash?</p>
-                  <p className="muted m-0 text-sm">We recheck your selected messages before moving them. Newly protected messages stay where they are. Organizinbox never permanently deletes email.</p>
+                  <p className="muted m-0 text-sm">We recheck your selected messages before moving them. Newly protected messages stay where they are. Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation.</p>
                   <button className="btn btn-secondary focus-ring w-full" onClick={() => onToggleFinalStep(false)} type="button">Cancel</button>
                   <button className="btn btn-primary focus-ring w-full" onClick={onConfirm} type="button">Move up to {job.safeCount.toLocaleString()} to Trash</button>
                 </div>
@@ -1128,7 +1131,7 @@ function ScalableCleanupWorkspace({
                 <Row label="Messages checked" value={job.requestedCount.toLocaleString()} />
                 {job.excludedCount > 0 ? <Row label="Left alone after the final safety check" value={job.excludedCount.toLocaleString()} /> : null}
               </dl>
-              <UndoAction available={job.undoAvailable} expiresAt={job.expiresAt} busy={busy} onUndo={onUndo} />
+              <PostCleanupActions key={job.id} jobId={job.id} provider="gmail" moved={job.verifiedCount} development={developmentMode} available={job.undoAvailable || Boolean(job.recoveryRestoreAvailable)} expiresAt={job.expiresAt} recovery={job.recoveryRestoreAvailable} busy={busy} onUndo={onUndo} />
               <button className="btn btn-primary focus-ring w-full" disabled={busy} onClick={onRescan} type="button">Rescan inbox</button>
               <ContextBackAction className="w-full" href="/app/report" label="Back to Inbox Report" />
             </div>
@@ -1147,6 +1150,7 @@ function ScalableCleanupWorkspace({
           {job.status === "undo_complete" ? (
             <div className="mt-4 grid gap-2">
               <p className="m-0 text-xl font-extrabold text-[var(--navy)]">{job.verifiedRestoredCount.toLocaleString()} messages restored from Trash.</p>
+              {!developmentMode ? <p className="m-0 text-sm">{job.verifiedCount.toLocaleString()} credits used. Undo restores the email but does not refund the credit.</p> : null}
               <Row label="Attempted restore" value={(job.verifiedRestoredCount + job.failedRestoreCount + job.uncertainRestoreCount).toLocaleString()} />
               <Row label="Verified restored" value={job.verifiedRestoredCount.toLocaleString()} />
               <Row label="Failed" value={job.failedRestoreCount.toLocaleString()} />
@@ -1165,7 +1169,8 @@ function ScalableCleanupWorkspace({
             </div>
           ) : null}
 
-          {["partial", "uncertain", "failed", "expired"].includes(job.status) && !job.recoveryRestoreAvailable ? (
+          {["partial", "uncertain", "failed", "expired"].includes(job.status) && !job.recoveryRestoreAvailable &&
+            (developmentMode || job.verifiedCount === 0 || job.status === "expired") ? (
             <UndoAction available={false} expiresAt={job.expiresAt} onUndo={onUndo} />
           ) : null}
 
@@ -1488,7 +1493,7 @@ function CompletedResult({
   return (
     <div className="mt-4 grid gap-2 border-t border-[var(--line)] pt-4">
       <p className="m-0 text-xl font-extrabold text-[var(--navy)]">{job.verifiedTrashCount.toLocaleString()} emails moved to Trash.</p>
-      <p className="muted m-0 text-sm">Organizinbox never permanently deletes email. Gmail&apos;s retention rules still apply.</p>
+      <p className="muted m-0 text-sm">Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation. Gmail&apos;s retention rules still apply.</p>
       {canRunBulkUndoProof ? <button className="btn btn-secondary focus-ring w-full" disabled={busy} onClick={onBulkUndoProof} type="button">Run bulk Undo proof</button> : null}
       <UndoAction available={job.undoAvailable} expiresAt={job.expiresAt} busy={busy} onUndo={onUndo} />
       <button className="btn btn-primary focus-ring w-full" disabled={busy} onClick={onRescan} type="button">Rescan inbox</button>

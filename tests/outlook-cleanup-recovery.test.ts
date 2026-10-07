@@ -87,7 +87,7 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("credit accounting through actual Outlook worker recovery", () => {
-  it("charges only verified targets and returns only verified recovery credits across worker re-entry", async () => {
+  it("charges only verified targets and never refunds recovery credits across worker re-entry", async () => {
     const financial = billingFixture(3);
     Object.assign(job, { creditBilling: true });
     job.payload.confirmedAt = Date.now();
@@ -113,10 +113,10 @@ describe("credit accounting through actual Outlook worker recovery", () => {
     await undoOutlookCleanup("same-job");
     await advanceOutlookCleanupJob("same-job", "undo");
     expect(mocks.move).toHaveBeenLastCalledWith([{ messageId: "exact-returned", destinationFolderId: "inbox" }]);
-    expect(financial.row.creditBalance).toBe(3);
+    expect(financial.row.creditBalance).toBe(2);
     await advanceOutlookCleanupJob("same-job", "undo");
-    expect(financial.row.creditBalance).toBe(3);
-    expect([...financial.entries.values()].map((entry) => entry.amount)).toEqual([-1, 1]);
+    expect(financial.row.creditBalance).toBe(2);
+    expect([...financial.entries.values()].map((entry) => entry.amount)).toEqual([-1, 0]);
     expect(job.view.status).not.toBe("undo_complete");
     expect(JSON.stringify([...financial.entries.values()])).not.toMatch(/original-|exact-returned|folder|inbox|sender/);
   });
@@ -204,6 +204,25 @@ describe("Outlook worker checkpoint performance", () => {
 });
 
 describe("Outlook Recovery Undo acceptance", () => {
+  it("blocks Undo during permanent deletion and restores only untouched targets after deletion uncertainty", async () => {
+    job.payload.targets = [0, 1, 2].map(index => ({ originalMessageId: `original-${index}`, movedMessageId: `returned-${index}`,
+      originalFolderId: `folder-${index}`, groupIndex: 0, state: "moved_verified" }));
+    job.permanentDeletion = { status: "running", targets: [
+      { key: "0", messageId: "returned-0", state: "verified_deleted" },
+      { key: "1", messageId: "returned-1", state: "dispatching" },
+      { key: "2", messageId: "returned-2", state: "pending" }
+    ] };
+    await expect(undoOutlookCleanup("same-job")).rejects.toThrow("No exact verified");
+    expect(mocks.start).not.toHaveBeenCalled();
+    job.permanentDeletion.status = "uncertain";
+    job.permanentDeletion.targets[1].state = "uncertain";
+    await undoOutlookCleanup("same-job");
+    await advanceOutlookCleanupJob("same-job", "undo");
+    expect(mocks.move).toHaveBeenCalledExactlyOnceWith([{ messageId: "returned-2", destinationFolderId: "folder-2" }]);
+    await advanceOutlookCleanupJob("same-job", "undo");
+    expect(job.view).toMatchObject({ status: "uncertain", restoredVerified: 1, movedVerified: 3, uncertain: 1 });
+    expect(mocks.move).toHaveBeenCalledTimes(1);
+  });
   it("accepts the exact verified ledger despite the old blanket Undo-disabled flag", async () => {
     const view = await undoOutlookCleanup("same-job");
     expect(view).toMatchObject({ status: "undoing", undoMode: "recovery", recoverableCount: 1, uncertain: 1, failed: 1 });
