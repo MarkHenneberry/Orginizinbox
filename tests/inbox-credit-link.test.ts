@@ -51,17 +51,19 @@ describe("explicit authenticated inbox linking", () => {
     expect(mocks.createAccount).toHaveBeenCalledExactlyOnceWith({ data: { userId: "target" } });
     expect(mocks.source).toHaveBeenCalledWith({ where: expect.objectContaining({ sessionGeneration: "generation", disconnectedAt: null }) });
   });
-  it.each(["expired", "consumed", "provider", "disconnected"])("rejects %s intents before linking", async (reason) => {
+  it.each(["expired", "consumed", "provider", "disconnected", "generation", "same-inbox"])("rejects %s intents before linking", async (reason) => {
     if (reason === "expired") mocks.intent.mockResolvedValue({ provider: "microsoft", expiresAt: new Date(0) });
     if (reason === "consumed") mocks.intent.mockResolvedValue({ provider: "microsoft", consumedAt: new Date() });
     if (reason === "disconnected") mocks.source.mockResolvedValue(0);
-    await expect(completeInboxLink("intent", "target", reason === "provider" ? "gmail" : "microsoft")).rejects.toThrow();
+    if (reason === "generation") mocks.source.mockResolvedValue(0);
+    await expect(completeInboxLink("intent", reason === "same-inbox" ? "original" : "target", reason === "provider" ? "gmail" : "microsoft")).rejects.toThrow();
     expect(mocks.updateUser).not.toHaveBeenCalled();
   });
-  it.each(["funded", "members", "cleanup", "checkout-race", "other-account"])("refuses %s rather than moving financial ownership", async (reason) => {
+  it.each(["funded", "members", "cleanup", "accounting", "checkout-race", "other-account"])("refuses %s rather than moving financial ownership", async (reason) => {
     if (reason === "funded") mocks.funded.mockResolvedValue(1);
     if (reason === "members") mocks.members.mockResolvedValue(1);
     if (reason === "cleanup") mocks.states.mockResolvedValue(1);
+    if (reason === "accounting") mocks.jobs.mockResolvedValue(1);
     if (reason === "checkout-race") mocks.createAccount.mockRejectedValue(new Error("unique billing row claimed by checkout"));
     if (reason === "other-account") mocks.user.mockImplementation(async ({ where }) => where.id === "original" ? { id: "original" } : { id: "target", creditOwnerId: "unrelated" });
     await expect(completeInboxLink("intent", "target", "microsoft")).rejects.toThrow();

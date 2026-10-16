@@ -49,6 +49,19 @@ vi.mock("@/lib/server/db", async () => {
 });
 
 describe("Microsoft OAuth callback", () => {
+  it.each(["denied", "link-rejected"])("preserves source session and link recovery on %s", async (failure) => {
+    const { createOAuthState, setSessionCookie, SESSION_COOKIE } = await import("@/lib/server/session");
+    const { GET } = await import("../app/api/oauth/microsoft/callback/route");
+    await setSessionCookie({ userId: "user-1", providerConnectionId: "connection-1", createdAt: Date.now() });
+    const original = cookieHarness.jar.get(SESSION_COOKIE);
+    const state = await createOAuthState("/app/account?linked=1", { provider: "microsoft", codeVerifier: "verifier", nonce: "nonce", linkIntentId: "private-intent" });
+    if (failure === "link-rejected") oauth.upsertMicrosoftConnection.mockRejectedValueOnce(new Error("rejected"));
+    const response = await GET(new NextRequest(`http://localhost:3000/api/oauth/microsoft/callback?${failure === "denied" ? "error=access_denied" : "code=test-code"}&state=${state}`));
+    expect(response.headers.get("location")).toContain("link=failed");
+    expect(response.headers.get("location")).not.toContain("private-intent");
+    expect(cookieHarness.jar.get(SESSION_COOKIE)).toBe(original);
+    if (failure === "link-rejected") expect(oauth.upsertMicrosoftConnection).toHaveBeenCalledWith(expect.any(Object), "private-intent");
+  });
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
   beforeEach(() => {
     vi.clearAllMocks();

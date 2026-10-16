@@ -30,12 +30,17 @@ type MicrosoftCallbackReason =
   | "session_failed";
 
 export async function GET(request: NextRequest) {
+  let linkAttempt = request.nextUrl.searchParams.get("state")?.startsWith("link.") === true;
+  let linkCompleted = false;
+  const errorRedirect = (request: NextRequest, reason: MicrosoftCallbackReason) =>
+    redirectError(request, reason, linkAttempt ? linkCompleted ? "activation_failed" : "failed" : undefined);
   if (!runtimeConfig.microsoftAvailable) {
     return Response.json({ error: "Microsoft OAuth is not enabled." }, { status: 404 });
   }
   let stateResult: Awaited<ReturnType<typeof consumeOAuthState>>;
   try {
     stateResult = await consumeOAuthState(request.nextUrl.searchParams.get("state"), "microsoft");
+    linkAttempt ||= stateResult.ok ? Boolean(stateResult.linkIntentId) : Boolean(stateResult.linkAttempt);
   } catch {
     return errorRedirect(request, "state_invalid");
   }
@@ -90,15 +95,14 @@ export async function GET(request: NextRequest) {
 
   let saved: Awaited<ReturnType<typeof upsertMicrosoftConnection>>;
   try {
-    saved = await upsertMicrosoftConnection(verified);
+    saved = stateResult.linkIntentId
+      ? await upsertMicrosoftConnection(verified, stateResult.linkIntentId)
+      : await upsertMicrosoftConnection(verified);
+    linkCompleted = Boolean(stateResult.linkIntentId);
   } catch {
     return errorRedirect(request, "connection_save_failed");
   }
   try {
-    if (stateResult.linkIntentId) {
-      const { completeInboxLink } = await import("@/lib/billing/inbox-link");
-      await completeInboxLink(stateResult.linkIntentId, saved.user.id, "microsoft");
-    }
     await setSessionCookie({
       userId: saved.user.id,
       providerConnectionId: saved.connection.id,
@@ -111,9 +115,9 @@ export async function GET(request: NextRequest) {
   return noStoreRedirect(new URL(stateResult.returnTo ?? "/app/account", request.url));
 }
 
-function errorRedirect(request: NextRequest, reason: MicrosoftCallbackReason) {
+function redirectError(request: NextRequest, reason: MicrosoftCallbackReason, link?: "failed" | "activation_failed") {
   logSafeMicrosoftCallback(reason);
-  return noStoreRedirect(new URL(`/connect/microsoft?reason=${reason}`, request.url));
+  return noStoreRedirect(new URL(`/connect/microsoft?reason=${reason}${link ? `&link=${link}` : ""}`, request.url));
 }
 
 function noStoreRedirect(url: URL) {

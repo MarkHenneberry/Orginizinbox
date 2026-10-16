@@ -81,6 +81,14 @@ it("makes Account a connection/linked-inbox settings page without purchase packs
   expect(html).not.toContain("credit-pack");
   expect(html).toContain("Disconnect");
 });
+it("confirms linking using authoritative balance and linked count without claiming reports merged", async () => {
+  vi.mocked(getCreditPresentation).mockResolvedValue({ available: 59990, reserved: 0, balance: 59990 });
+  vi.mocked(getAccountConnectionState).mockResolvedValue({ mode: "connected", provider: "gmail", status: "Connected", hasActiveReport: false, accountEmail: "fixture@example.test" });
+  const html = render("linked-account", await AccountPage({ searchParams: Promise.resolve({ linked: "1" }) }));
+  for (const copy of ["Gmail linked successfully", "59,990-credit available balance", "2 linked inboxes", "Reports remain separate", "Reconnect another linked inbox"]) expect(html).toContain(copy);
+  vi.mocked(getLinkedInboxCount).mockResolvedValue(1);
+  expect(render("unlinked-account", await AccountPage({ searchParams: Promise.resolve({ linked: "1" }) }))).not.toContain("linked successfully");
+});
 it("keeps old Checkout return URLs pointing at the existing reconciliation presentation", async () => {
   await expect(AccountPage({ searchParams: Promise.resolve({ billing: "returned" }) })).rejects.toThrow("/app/credits?billing=returned");
 });

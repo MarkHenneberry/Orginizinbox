@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { InboxLinkFailure } from "@/components/product/InboxLinkFailure";
 import Link from "next/link";
 import { DisconnectMicrosoftConfirmation } from "@/components/product/DisconnectMicrosoftConfirmation";
 import { ProviderConnectShell } from "@/components/product/ProviderConnectShell";
@@ -21,8 +22,12 @@ const errorCopy = {
 export default async function MicrosoftConnectPage({
   searchParams
 }: {
-  searchParams: Promise<{ reason?: string }>;
+  searchParams: Promise<{ reason?: string; link?: string }>;
 }) {
+  const { reason, link } = await searchParams;
+  if (link === "failed" || link === "activation_failed") {
+    return <InboxLinkFailure provider="Outlook" activationFailed={link === "activation_failed"} />;
+  }
   const showDevOAuth = runtimeConfig.microsoftAvailable;
   const connection = await getCurrentProviderConnection();
   const outlookCleanupEnabled = isOutlookCleanupDevelopmentEnabled({
@@ -31,7 +36,6 @@ export default async function MicrosoftConnectPage({
     fixtureMode: runtimeConfig.fixtureMode,
     nodeEnv: process.env.NODE_ENV
   });
-  const { reason } = await searchParams;
   const error = reason && reason in errorCopy ? errorCopy[reason as keyof typeof errorCopy] : undefined;
 
   return (

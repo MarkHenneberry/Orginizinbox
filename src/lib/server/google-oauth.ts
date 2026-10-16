@@ -270,7 +270,7 @@ export async function fetchGoogleUserInfo(accessToken: string): Promise<GoogleUs
   return (await response.json()) as GoogleUserInfo;
 }
 
-export async function upsertGoogleConnection(tokens: VerifiedGoogleTokenResponse, profile: GoogleUserInfo) {
+export async function upsertGoogleConnection(tokens: VerifiedGoogleTokenResponse, profile: GoogleUserInfo, linkIntentId?: string) {
   if (!tokens.access_token) throw new Error("Google token response did not include an access token.");
   if (!profile.sub) throw new Error("Google profile did not include a stable subject.");
   if (!hasRequiredGmailImapScope(tokens.scope)) throw new GmailImapScopeNotGrantedError();
@@ -288,6 +288,10 @@ export async function upsertGoogleConnection(tokens: VerifiedGoogleTokenResponse
       update: {},
       create: { emailHash: emailHash ?? providerIdentityHash }
     });
+    if (linkIntentId) {
+      const { completeInboxLinkInTransaction } = await import("@/lib/billing/inbox-link");
+      await completeInboxLinkInTransaction(transaction, linkIntentId, user.id, "gmail");
+    }
     const connection = await transaction.providerConnection.upsert({
       where: { userId_provider: { userId: user.id, provider: "gmail" } },
       update: {
@@ -315,7 +319,7 @@ export async function upsertGoogleConnection(tokens: VerifiedGoogleTokenResponse
       }
     });
     return { user, connection };
-  });
+  }, linkIntentId ? { isolationLevel: "Serializable" } : undefined);
 }
 
 export class GmailImapScopeNotGrantedError extends Error {

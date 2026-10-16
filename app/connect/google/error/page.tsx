@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { InboxLinkFailure } from "@/components/product/InboxLinkFailure";
 import { runtimeConfig } from "@/lib/config";
 import { ProviderUnavailable } from "@/components/product/ProviderUnavailable";
 import { Footer } from "@/components/marketing/Footer";
@@ -32,8 +33,11 @@ export const metadata: Metadata = {
   }
 };
 
-export default async function GoogleOAuthErrorPage({ searchParams }: { searchParams?: Promise<{ reason?: string }> }) {
+export default async function GoogleOAuthErrorPage({ searchParams }: { searchParams?: Promise<{ reason?: string; link?: string }> }) {
   const params = await searchParams;
+  if (params?.link === "failed" || params?.link === "activation_failed") {
+    return <InboxLinkFailure provider="Gmail" activationFailed={params.link === "activation_failed"} />;
+  }
   const reason = params?.reason ?? "state_invalid";
   const error = connectionErrors[reason] ?? connectionErrors.state_invalid;
   const developmentErrorCode = getSafeOAuthDevelopmentErrorCode(reason);

@@ -292,7 +292,7 @@ function microsoftAuthorityBase() {
   return `https://${microsoftHost}/${encodeURIComponent(env.MICROSOFT_TENANT_ID)}`;
 }
 
-export async function upsertMicrosoftConnection(tokens: VerifiedMicrosoftTokenResponse) {
+export async function upsertMicrosoftConnection(tokens: VerifiedMicrosoftTokenResponse, linkIntentId?: string) {
   const identityKey = `${tokens.identity.tenantId}:${tokens.identity.subject}`;
   const providerIdentityHash = sha256Base64Url(identityKey);
   const normalizedEmail = tokens.identity.email?.toLowerCase();
@@ -302,6 +302,10 @@ export async function upsertMicrosoftConnection(tokens: VerifiedMicrosoftTokenRe
       update: {},
       create: { microsoftIdentityHash: providerIdentityHash }
     });
+    if (linkIntentId) {
+      const { completeInboxLinkInTransaction } = await import("@/lib/billing/inbox-link");
+      await completeInboxLinkInTransaction(transaction, linkIntentId, user.id, "microsoft");
+    }
     const encryptedAccountEmail = normalizedEmail ? encryptSecret(normalizedEmail) : null;
     const data = {
       mailboxExternalIdHash: providerIdentityHash,
@@ -325,7 +329,7 @@ export async function upsertMicrosoftConnection(tokens: VerifiedMicrosoftTokenRe
       create: { userId: user.id, provider: "microsoft", ...data, tokenVersion: 0 }
     });
     return { user, connection };
-  });
+  }, linkIntentId ? { isolationLevel: "Serializable" } : undefined);
 }
 
 export async function saveMicrosoftImapCredentials(input: {

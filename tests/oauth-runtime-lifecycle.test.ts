@@ -83,6 +83,45 @@ vi.mock("@/lib/server/db", async () => {
 });
 
 describe("oauth runtime lifecycle", () => {
+  it.each(["denied", "save-failed", "missing-cookie", "mismatch", "expired", "missing-state"])("keeps %s link failures out of standalone retry and preserves the source cookie", async (failure) => {
+    const { createOAuthState, setSessionCookie, SESSION_COOKIE, OAUTH_STATE_COOKIE } = await import("@/lib/server/session");
+    const { GET } = await import("../app/api/oauth/google/callback/route");
+    await setSessionCookie({ userId: "user-1", providerConnectionId: "connection-1", createdAt: Date.now() });
+    const original = cookieHarness.jar.get(SESSION_COOKIE);
+    const state = await createOAuthState("/app/account?linked=1", { provider: "google", linkIntentId: "private-intent" });
+    if (failure === "missing-cookie") cookieHarness.jar.delete(OAUTH_STATE_COOKIE);
+    if (failure === "save-failed") googleMocks.upsertGoogleConnection.mockRejectedValueOnce(new Error("link rejected"));
+    const clock = failure === "expired" ? vi.spyOn(Date, "now").mockReturnValue(Date.now() + 601000) : undefined;
+    try {
+      const query = failure === "denied" ? "error=access_denied" : "code=test-code";
+      const response = await GET(new NextRequest(`http://localhost:3000/api/oauth/google/callback?${query}${failure === "missing-state" ? "" : `&state=${failure === "mismatch" ? "wrong" : state}`}`));
+      expect(response.headers.get("location")).toContain("link=failed");
+      expect(response.headers.get("location")).not.toContain("private-intent");
+      expect(cookieHarness.jar.get(SESSION_COOKIE)).toBe(original);
+      expect(cookieHarness.setCalls.filter(call => call.name === SESSION_COOKIE)).toHaveLength(1);
+    } finally { clock?.mockRestore(); }
+    const fresh = await createOAuthState("/app/account?linked=1", { provider: "google", linkIntentId: "fresh-intent" });
+    expect(fresh).not.toBe(state);
+  });
+
+  it("commits the link before target session activation and distinguishes activation failure", async () => {
+    const { createOAuthState } = await import("@/lib/server/session");
+    const { GET } = await import("../app/api/oauth/google/callback/route");
+    const state = await createOAuthState("/app/account?linked=1", { provider: "google", linkIntentId: "private-intent" });
+    googleMocks.upsertGoogleConnection.mockImplementationOnce(async (...args) => {
+      expect(args[2]).toBe("private-intent");
+      expect(cookieHarness.jar.has("organizinbox_session")).toBe(false);
+      return { user: { id: "user-1" }, connection: { id: "connection-1" } };
+    });
+    const response = await GET(new NextRequest(`http://localhost:3000/api/oauth/google/callback?code=test-code&state=${state}`));
+    expect(response.headers.get("location")).toBe("http://localhost:3000/app/account?linked=1");
+    expect(cookieHarness.jar.has("organizinbox_session")).toBe(true);
+    const next = await createOAuthState("/app/account?linked=1", { provider: "google", linkIntentId: "next-intent" });
+    cookieHarness.failSessionSet();
+    const failed = await GET(new NextRequest(`http://localhost:3000/api/oauth/google/callback?code=test-code&state=${next}`));
+    expect(failed.headers.get("location")).toContain("link=activation_failed");
+  });
+
   beforeEach(() => {
     vi.resetModules();
     vi.unstubAllEnvs();

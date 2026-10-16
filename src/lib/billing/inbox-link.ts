@@ -1,14 +1,21 @@
 import "server-only";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/server/db";
 import { BillingError } from "@/lib/billing/config";
 
 export async function completeInboxLink(intentId: string, targetUserId: string, provider: "gmail" | "microsoft") {
   await prisma.$transaction(async (tx) => {
+    await completeInboxLinkInTransaction(tx, intentId, targetUserId, provider);
+  }, { isolationLevel: "Serializable" });
+}
+
+export async function completeInboxLinkInTransaction(tx: Prisma.TransactionClient, intentId: string, targetUserId: string, provider: "gmail" | "microsoft") {
     const intent = await tx.inboxLinkIntent.findUnique({ where: { id: intentId } });
     if (!intent || intent.provider !== provider || intent.consumedAt || intent.expiresAt.getTime() <= Date.now()) throw new BillingError("Inbox linking expired. Start again from Account.", 409);
     const source = await tx.providerConnection.count({ where: { id: intent.sourceConnectionId, userId: intent.sourceUserId,
       sessionGeneration: intent.sourceGeneration, disconnectedAt: null, encryptedAccessToken: { not: null } } });
     if (source !== 1) throw new BillingError("Sign in to your original inbox and start linking again.", 409);
+    if (intent.sourceUserId === targetUserId) throw new BillingError("Choose another inbox to link from Account.", 409);
     const sourceUser = await tx.user.findUniqueOrThrow({ where: { id: intent.sourceUserId } });
     const owner = sourceUser.creditOwnerId ?? sourceUser.id;
     const target = await tx.user.findUniqueOrThrow({ where: { id: targetUserId }, include: { billingAccount: true } });
@@ -24,5 +31,4 @@ export async function completeInboxLink(intentId: string, targetUserId: string, 
     }
     const consumed = await tx.inboxLinkIntent.updateMany({ where: { id: intent.id, consumedAt: null, expiresAt: { gt: new Date() } }, data: { consumedAt: new Date() } });
     if (consumed.count !== 1) throw new BillingError("Inbox linking changed. Start again from Account.", 409);
-  }, { isolationLevel: "Serializable" });
 }

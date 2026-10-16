@@ -12,7 +12,7 @@ import { getAccountConnectionState } from "@/lib/server/account-state";
 import { getOptionalActiveReportState } from "@/lib/server/report-state";
 import { getCreditPresentation, getLinkedInboxCount } from "@/lib/server/credit-presentation";
 
-export default async function AccountPage({ searchParams }: { searchParams?: Promise<{ billing?: string }> } = {}) {
+export default async function AccountPage({ searchParams }: { searchParams?: Promise<{ billing?: string; linked?: string }> } = {}) {
   const query = await searchParams;
   // Keep existing Checkout return URLs working without changing Stripe configuration.
   if (query?.billing === "returned" || query?.billing === "cancelled") redirect(`/app/credits?billing=${query.billing}`);
@@ -24,6 +24,13 @@ export default async function AccountPage({ searchParams }: { searchParams?: Pro
   return <main className="settings-page"><div className="container settings-width">
     <BackToReportAction activeReport={activeReport} />
     <header className="settings-heading"><h1>Account</h1><p>Manage your inbox connection and account settings.</p></header>
+    {query?.linked === "1" && connected && linked !== null && linked > 1 ? <div className="notice" role="status">
+      <p className="font-bold">{account.provider === "gmail" ? "Gmail" : "Outlook"} linked successfully.</p>
+      <p>You are now viewing this {account.provider === "gmail" ? "Gmail" : "Outlook"} inbox. {credits
+        ? `Your ${credits.available.toLocaleString("en-US")}-credit available balance is shared across ${linked} linked inboxes.`
+        : `Your credit balance is shared across ${linked} linked inboxes. The balance is currently unavailable.`}</p>
+      <p>Reports remain separate. Reconnect another linked inbox to make it active.</p>
+    </div> : null}
     <section className="connection-section" aria-label="Inbox connection">
       {account.mode === "unavailable" ? <ProviderUnavailable provider={account.provider} /> : null}
       {connected ? <>

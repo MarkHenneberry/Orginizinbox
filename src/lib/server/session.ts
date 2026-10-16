@@ -134,7 +134,8 @@ export async function clearSessionCookie() {
 }
 
 export async function createOAuthState(returnTo?: string, options: OAuthStateOptions = {}): Promise<string> {
-  const state = randomBytes(24).toString("base64url");
+  // This public prefix is a recovery hint only; the signed state still authorizes the attempt.
+  const state = `${options.linkIntentId ? "link." : ""}${randomBytes(24).toString("base64url")}`;
   const payload: OAuthStatePayload = {
     state,
     createdAt: Date.now(),
@@ -156,21 +157,24 @@ export async function consumeOAuthState(
   codeVerifier?: string;
   nonce?: string;
   microsoftFlow?: "graph" | "imap";
-} | { ok: false; reason: string }> {
+} | { ok: false; reason: string; linkAttempt?: boolean }> {
+  let linkAttempt = receivedState?.startsWith("link.") === true;
+  const fail = (reason: string) => ({ ok: false as const, reason, ...(linkAttempt ? { linkAttempt: true } : {}) });
   const cookieStore = await cookies();
   const signed = cookieStore.get(OAUTH_STATE_COOKIE)?.value;
   cookieStore.set(OAUTH_STATE_COOKIE, "", expiredCookieOptions());
-  if (!receivedState) return { ok: false, reason: "Missing OAuth state." };
-  if (!signed) return { ok: false, reason: "Missing OAuth state cookie." };
+  if (!signed) return fail(receivedState ? "Missing OAuth state cookie." : "Missing OAuth state.");
   const verified = verifySignedValue(signed);
-  if (!verified) return { ok: false, reason: "Invalid OAuth state cookie." };
+  if (!verified) return fail("Invalid OAuth state cookie.");
 
   try {
     const payload = JSON.parse(Buffer.from(verified, "base64url").toString("utf8")) as OAuthStatePayload;
-    if (Date.now() - payload.createdAt > oauthStateTtlMs) return { ok: false, reason: "OAuth state expired." };
-    if (payload.state !== receivedState) return { ok: false, reason: "OAuth state mismatch." };
+    linkAttempt ||= Boolean(payload.linkIntentId);
+    if (!receivedState) return fail("Missing OAuth state.");
+    if (Date.now() - payload.createdAt > oauthStateTtlMs) return fail("OAuth state expired.");
+    if (payload.state !== receivedState) return fail("OAuth state mismatch.");
     if (expectedProvider && payload.provider && payload.provider !== expectedProvider) {
-      return { ok: false, reason: "OAuth provider mismatch." };
+      return fail("OAuth provider mismatch.");
     }
     return {
       ok: true,
@@ -181,7 +185,7 @@ export async function consumeOAuthState(
       ...(payload.microsoftFlow ? { microsoftFlow: payload.microsoftFlow } : {})
     };
   } catch {
-    return { ok: false, reason: "Invalid OAuth state payload." };
+    return fail("Invalid OAuth state payload.");
   }
 }
 

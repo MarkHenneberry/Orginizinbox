@@ -24,11 +24,16 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
+  let linkAttempt = request.nextUrl.searchParams.get("state")?.startsWith("link.") === true;
+  let linkCompleted = false;
+  const errorRedirect = (request: NextRequest, diagnostic: OAuthCallbackDiagnostic, reason: SafeOAuthErrorReason) =>
+    redirectError(request, diagnostic, reason, linkAttempt ? linkCompleted ? "activation_failed" : "failed" : undefined);
   if (!runtimeConfig.gmailAvailable) return Response.json({ error: "Gmail is temporarily unavailable." }, { status: 503 });
   const diagnostic = createOAuthCallbackDiagnostic();
   let stateResult: Awaited<ReturnType<typeof consumeOAuthState>>;
   try {
     stateResult = await consumeOAuthState(request.nextUrl.searchParams.get("state"), "google");
+    linkAttempt ||= stateResult.ok ? Boolean(stateResult.linkIntentId) : Boolean(stateResult.linkAttempt);
   } catch {
     diagnostic.state_validation = "failure";
     return errorRedirect(request, diagnostic, "callback_failed");
@@ -109,7 +114,10 @@ export async function GET(request: NextRequest) {
 
   let savedConnection: Awaited<ReturnType<typeof upsertGoogleConnection>>;
   try {
-    savedConnection = await upsertGoogleConnection(verifiedTokens, profile);
+    savedConnection = stateResult.linkIntentId
+      ? await upsertGoogleConnection(verifiedTokens, profile, stateResult.linkIntentId)
+      : await upsertGoogleConnection(verifiedTokens, profile);
+    linkCompleted = Boolean(stateResult.linkIntentId);
     diagnostic.provider_connection_save = "success";
   } catch {
     diagnostic.provider_connection_save = "failure";
@@ -117,10 +125,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    if (stateResult.linkIntentId) {
-      const { completeInboxLink } = await import("@/lib/billing/inbox-link");
-      await completeInboxLink(stateResult.linkIntentId, savedConnection.user.id, "gmail");
-    }
     await setSessionCookie({
       userId: savedConnection.user.id,
       providerConnectionId: savedConnection.connection.id,
@@ -143,10 +147,10 @@ function noStoreRedirect(url: URL) {
   return response;
 }
 
-function errorRedirect(request: NextRequest, diagnostic: OAuthCallbackDiagnostic, reason: SafeOAuthErrorReason) {
+function redirectError(request: NextRequest, diagnostic: OAuthCallbackDiagnostic, reason: SafeOAuthErrorReason, link?: "failed" | "activation_failed") {
   diagnostic.final_result = safeOAuthDevelopmentErrorCodes[reason];
   logOAuthCallbackDiagnostic(diagnostic);
-  return noStoreRedirect(new URL(`/connect/google/error?reason=${reason}`, request.url));
+  return noStoreRedirect(new URL(`/connect/google/error?reason=${reason}${link ? `&link=${link}` : ""}`, request.url));
 }
 
 function applyScopeVerification(
