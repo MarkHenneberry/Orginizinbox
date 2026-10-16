@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { OperationStatus } from "@/components/product/OperationStatus";
+import { useCleanupCreditRefresh } from "@/components/product/useCleanupCreditRefresh";
 import {
   createDefaultCleanupSelection,
   eligibleCleanupGroupIndices,
@@ -110,6 +111,7 @@ export function GmailCleanupClient({
   const [finalStep, setFinalStep] = useState(false);
   const [activeOperation, setActiveOperation] = useState<ActiveCleanupOperation | null>(null);
   const [operationStartedAt, setOperationStartedAt] = useState<number | undefined>();
+  const [outlookClock, setOutlookClock] = useState<{ operation: ActiveCleanupOperation; startedAt: number }>();
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const displayError = error ?? pollError;
@@ -123,6 +125,10 @@ export function GmailCleanupClient({
   const outlookJobId = outlookJob?.id;
   const busy = activeOperation !== null || scalableRunning || outlookPollingActive;
   const activeJobId = job?.id;
+  useCleanupCreditRefresh(outlookJob
+    ? { id: outlookJob.id, status: outlookJob.status, moved: outlookJob.movedVerified }
+    : scalableJob ? { id: scalableJob.id, status: scalableJob.status, moved: scalableJob.verifiedCount } : null,
+  !developmentMode, router.refresh);
 
   const visibleGroups = useMemo(() => filterAndSortCleanupGroups(groups, search, sortKey), [groups, search, sortKey]);
   const selectedGroups = groups.filter((group) => selectedGroupIndices.has(group.index));
@@ -219,6 +225,7 @@ export function GmailCleanupClient({
     setPollError(null);
     setActiveOperation(operation);
     setOperationStartedAt(Date.now());
+    if (provider === "microsoft") setOutlookClock({ operation, startedAt: performance.now() });
     return true;
   }
 
@@ -483,6 +490,8 @@ export function GmailCleanupClient({
       {!developmentMode ? <CleanupAccessNotice access={availability.access} /> : null}
       {!developmentMode && outlookJob.status === "ready" ? <CleanupCreditContext available={availableCredits} requested={outlookJob.requested} reserved /> : null}
       <OutlookCleanupWorkspace
+        activeOperation={activeOperation}
+        operationClock={outlookClock}
         developmentMode={developmentMode}
         canStart={canStart}
         busy={busy}
@@ -681,6 +690,7 @@ export function GmailCleanupClient({
 
             {activeOperation ? (
               <CleanupOperationStatus
+                monotonicStartedAt={provider === "microsoft" ? outlookClock?.startedAt : undefined}
                 job={job}
                 operation={activeOperation}
                 requestedCount={requestedCount}
@@ -714,6 +724,7 @@ export function GmailCleanupClient({
 
             {activeOperation ? (
               <CleanupOperationStatus
+                monotonicStartedAt={provider === "microsoft" ? outlookClock?.startedAt : undefined}
                 job={job}
                 operation={activeOperation}
                 requestedCount={requestedCount}
@@ -808,6 +819,8 @@ function cleanupWorkspaceHeading(state: CleanupWorkspaceState, job: GmailCleanup
 }
 
 function OutlookCleanupWorkspace({
+  activeOperation,
+  operationClock,
   developmentMode,
   canStart,
   busy,
@@ -821,6 +834,8 @@ function OutlookCleanupWorkspace({
   onUndo,
   reportGroups
 }: {
+  activeOperation: ActiveCleanupOperation | null;
+  operationClock?: { operation: ActiveCleanupOperation; startedAt: number };
   developmentMode: boolean;
   canStart: boolean;
   busy: boolean;
@@ -834,7 +849,9 @@ function OutlookCleanupWorkspace({
   onUndo: () => void;
   reportGroups: CleanupSenderGroup[];
 }) {
-  const working = shouldPollOutlookCleanup(job);
+  const phase = activeOperation === "trash" || activeOperation === "undo" ? activeOperation
+    : job.status === "undoing" ? "undo" : job.status === "running" ? "trash" : "resolution";
+  const working = shouldPollOutlookCleanup(job) || activeOperation === "trash" || activeOperation === "undo";
   const frozenJob: FrozenSenderJob = {
     suggestedDeltas: [],
     verifiedCount: 0,
@@ -868,15 +885,17 @@ function OutlookCleanupWorkspace({
         {working ? (
           <>
             <OperationStatus
-              description={job.status === "undoing"
+              key={`${job.id}:${phase}`}
+              elapsedMs={0}
+              monotonicStartedAt={operationClock?.operation === phase ? operationClock.startedAt : undefined}
+              description={phase === "undo"
                   ? "We're restoring messages to their original folders and checking each result."
-                  : job.status === "running"
+                  : phase === "trash"
                     ? "We're checking your selected messages before moving them to Deleted Items."
                     : "We're checking your selected Suggested messages for this review."}
-              startedAt={job.updatedAt}
-              title={job.status === "undoing"
+              title={phase === "undo"
                 ? "Restoring messages..."
-                : job.status === "running"
+                : phase === "trash"
                   ? `Moving up to ${job.requested.toLocaleString()} messages to Deleted Items...`
                   : "Checking your selected messages"}
             />
@@ -1514,17 +1533,20 @@ function CleanupOperationStatus({
   operation,
   requestedCount,
   job,
+  monotonicStartedAt,
   startedAt
 }: {
   operation: ActiveCleanupOperation;
   requestedCount: number;
   job: GmailCleanupJobView | null;
+  monotonicStartedAt?: number;
   startedAt?: number;
 }) {
   if (operation === "resolution") {
     return (
       <OperationStatus
         description="We're checking your selected messages before anything is moved."
+        monotonicStartedAt={monotonicStartedAt}
         startedAt={startedAt}
         title="Checking your selected messages"
       />

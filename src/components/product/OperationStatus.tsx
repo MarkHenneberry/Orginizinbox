@@ -7,11 +7,13 @@ export function OperationStatus({
   title,
   description,
   startedAt,
+  monotonicStartedAt,
   elapsedMs
 }: {
   title: string;
   description: string;
   startedAt?: number;
+  monotonicStartedAt?: number;
   elapsedMs?: number;
 }) {
   const fallbackStartedAt = useRef<number | null>(null);
@@ -22,7 +24,9 @@ export function OperationStatus({
     const updateElapsed = () => {
       fallbackStartedAt.current ??= Date.now();
       setElapsedSeconds(
-        Math.max(0, Math.floor((elapsedMs !== undefined
+        Math.max(0, Math.floor((monotonicStartedAt !== undefined
+          ? Math.max(0, performance.now() - monotonicStartedAt)
+          : elapsedMs !== undefined
           ? advanceScanElapsed(elapsedMs, receivedAt, performance.now())
           : Date.now() - (startedAt ?? fallbackStartedAt.current)) / 1000))
       );
@@ -30,7 +34,7 @@ export function OperationStatus({
     updateElapsed();
     const interval = window.setInterval(updateElapsed, 1000);
     return () => window.clearInterval(interval);
-  }, [startedAt, elapsedMs]);
+  }, [startedAt, elapsedMs, monotonicStartedAt]);
 
   return (
     <div
