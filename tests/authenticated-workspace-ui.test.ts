@@ -9,6 +9,8 @@ import { CleanupCreditContext } from "@/components/product/CleanupCreditContext"
 import { BillingActions } from "@/components/product/BillingActions";
 import { getCreditPresentation, getLinkedInboxCount } from "@/lib/server/credit-presentation";
 import { getAccountConnectionState } from "@/lib/server/account-state";
+import { getLinkedInboxes } from "@/lib/server/linked-inboxes";
+import type { LinkedInbox } from "@/lib/domain/linked-inboxes";
 import AccountPage from "../app/app/account/page";
 import HelpPage from "../app/app/help/page";
 import CreditsPage from "../app/app/credits/page";
@@ -20,12 +22,17 @@ vi.mock("@/lib/server/report-state", () => ({ getOptionalActiveReportState: asyn
 vi.mock("@/lib/server/account-state", () => ({ getAccountConnectionState: vi.fn() }));
 vi.mock("@/lib/billing/config", () => ({ getBillingConfig: () => ({}) }));
 vi.mock("@/lib/server/credit-presentation", () => ({ getCreditPresentation: vi.fn(), getLinkedInboxCount: vi.fn() }));
+vi.mock("@/lib/server/linked-inboxes", () => ({ getLinkedInboxes: vi.fn() }));
 vi.mock("@/components/product/BillingPanel", () => ({ BillingPanel: () => createElement("section", { className: "credits-content" },
   createElement("p", {}, "Pay once. No subscription. Credits don't expire."),
   createElement("dl", { className: "credit-balances" }, ...[["Available", "60,000"], ["Reserved for active cleanup", "500"], ["Total balance", "60,500"]].map(([label, amount]) => createElement("div", { key: label }, createElement("dt", {}, label), createElement("dd", {}, amount)))),
   createElement(BillingActions, { canBuy: true, canRefresh: true })) }));
 
 const headerProps = { logoPath: "oi-logo.png", provider: "microsoft" as const, availableCredits: 60000, reportAvailable: true, scanAvailable: true, cleanupAvailable: true };
+const inboxes: LinkedInbox[] = [
+  { id: "outlook", provider: "microsoft", email: "a.long.fixture.address@example.test", active: true, state: "ready" },
+  { id: "gmail", provider: "gmail", email: "another.long.fixture.address@example.test", active: false, state: "ready" }
+];
 it("loads dedicated workspace styles from the authenticated layout", () => {
   expect(readFileSync("app/app/layout.tsx", "utf8")).toContain('import "./workspace-v2.css"');
   const css = readFileSync("app/app/workspace-v2.css", "utf8");
@@ -37,7 +44,7 @@ it("loads dedicated workspace styles from the authenticated layout", () => {
   expect(css).toMatch(/\.app-header-inner \{[^}]*display: flex;[^}]*flex-wrap: nowrap;/);
 });
 function render(name: string, content: React.ReactNode) {
-  const html = renderToStaticMarkup(createElement("div", { className: "product-shell" }, createElement(AppHeader, headerProps), createElement("div", { className: "product-content" }, content), createElement(AppFooter)));
+  const html = renderToStaticMarkup(createElement("div", { className: "product-shell" }, createElement(AppHeader, { ...headerProps, inboxes }), createElement("div", { className: "product-content" }, content), createElement(AppFooter)));
   if (process.env.UI_PREVIEW_DIR) {
     mkdirSync(process.env.UI_PREVIEW_DIR, { recursive: true });
     writeFileSync(join(process.env.UI_PREVIEW_DIR, `${name}.html`), `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="compiled.css"><title>UI fixture</title></head><body>${html}</body></html>`);
@@ -48,6 +55,7 @@ beforeEach(() => {
   navigation.path = "/app/report";
   vi.mocked(getCreditPresentation).mockResolvedValue({ available: 60000, reserved: 500, balance: 60500 });
   vi.mocked(getLinkedInboxCount).mockResolvedValue(2);
+  vi.mocked(getLinkedInboxes).mockResolvedValue(inboxes);
   vi.mocked(getAccountConnectionState).mockResolvedValue({ mode: "connected", provider: "microsoft", status: "Connected", hasActiveReport: true, accountEmail: "a.long.fixture.address@example.test" });
 });
 it("shows the supplied available balance and contextual desktop/mobile navigation", () => {
@@ -85,9 +93,24 @@ it("confirms linking using authoritative balance and linked count without claimi
   vi.mocked(getCreditPresentation).mockResolvedValue({ available: 59990, reserved: 0, balance: 59990 });
   vi.mocked(getAccountConnectionState).mockResolvedValue({ mode: "connected", provider: "gmail", status: "Connected", hasActiveReport: false, accountEmail: "fixture@example.test" });
   const html = render("linked-account", await AccountPage({ searchParams: Promise.resolve({ linked: "1" }) }));
-  for (const copy of ["Gmail linked successfully", "59,990-credit available balance", "2 linked inboxes", "Reports remain separate", "Reconnect another linked inbox"]) expect(html).toContain(copy);
+  for (const copy of ["Gmail linked successfully", "59,990-credit available balance", "2 linked inboxes", "Reports remain separate", "Switch linked inboxes"]) expect(html).toContain(copy);
   vi.mocked(getLinkedInboxCount).mockResolvedValue(1);
   expect(render("unlinked-account", await AccountPage({ searchParams: Promise.resolve({ linked: "1" }) }))).not.toContain("linked successfully");
+});
+it("lists linked inboxes in the menu and Account, keeps one-inbox menus compact, and distinguishes reconnect", async () => {
+  const menu = renderToStaticMarkup(createElement(AppHeader, { ...headerProps, inboxes }));
+  for (const copy of ["Inboxes", "Active", "Switch inbox", "a.long.fixture.address@example.test", "another.long.fixture.address@example.test"]) expect(menu).toContain(copy);
+  expect(menu).not.toContain("Disconnect");
+  const account = renderToStaticMarkup(await AccountPage());
+  expect(account).toContain("Switch inbox");
+  expect(account).toContain("another.long.fixture.address@example.test");
+  const single = renderToStaticMarkup(createElement(AppHeader, { ...headerProps, inboxes: [inboxes[0]] }));
+  expect(single).not.toContain("Switch inbox");
+  expect(single).not.toContain('class="menu-inboxes"');
+  const expired = renderToStaticMarkup(createElement(AppHeader, { ...headerProps, inboxes: [inboxes[0], { ...inboxes[1], state: "needs_reconnect" }] }));
+  expect(expired).toContain("Needs reconnect");
+  expect(expired).toContain("Reconnect Gmail");
+  expect(expired).not.toContain("Switch inbox");
 });
 it("keeps old Checkout return URLs pointing at the existing reconciliation presentation", async () => {
   await expect(AccountPage({ searchParams: Promise.resolve({ billing: "returned" }) })).rejects.toThrow("/app/credits?billing=returned");

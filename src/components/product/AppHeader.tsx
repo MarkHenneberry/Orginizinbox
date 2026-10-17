@@ -3,8 +3,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRef } from "react";
+import type { LinkedInbox } from "@/lib/domain/linked-inboxes";
+import { LinkedInboxList } from "./LinkedInboxList";
 
-export function AppHeader({ provider, availableCredits, reportAvailable, scanAvailable, cleanupAvailable, cleanupStartAvailable = false, logoPath }: {
+export function AppHeader({ provider, availableCredits, reportAvailable, scanAvailable, cleanupAvailable, cleanupStartAvailable = false, logoPath, inboxes = [] }: {
+  inboxes?: LinkedInbox[];
   logoPath: string;
   provider?: "gmail" | "microsoft";
   availableCredits: number | null;
@@ -37,7 +40,9 @@ export function AppHeader({ provider, availableCredits, reportAvailable, scanAva
       }}>
         <summary className="focus-ring"><span>{provider === "gmail" ? "Gmail" : provider === "microsoft" ? "Microsoft" : "Account"}</span><svg className="account-menu-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></summary>
         <nav className="account-menu-items" aria-label="Account and mobile navigation" onClick={(event) => { if ((event.target as HTMLElement).closest("a")) close(); }}>
-          {provider ? <p className="menu-caption">{provider === "gmail" ? "Gmail" : "Microsoft"} connected</p> : null}
+          {inboxes.length > 1 ? <section aria-label="Linked inboxes" className="menu-inboxes">
+            <p className="menu-caption">Inboxes</p><LinkedInboxList inboxes={inboxes} onSwitch={close} /><div className="menu-divider" />
+          </section> : provider ? <p className="menu-caption">{provider === "gmail" ? "Gmail" : "Microsoft"} connected</p> : null}
           <div className="mobile-workflow-nav">{workflow.map((item) => <Link key={item.href} href={item.href} aria-current={path === item.href ? "page" : undefined}>{item.label}</Link>)}</div>
           <Link href="/app/credits" aria-current={path === "/app/credits" ? "page" : undefined}>Manage credits</Link>
           <Link href="/app/account" aria-current={path === "/app/account" ? "page" : undefined}>Account</Link>

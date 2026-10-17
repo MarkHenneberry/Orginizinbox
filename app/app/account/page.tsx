@@ -11,6 +11,8 @@ import { getBillingConfig } from "@/lib/billing/config";
 import { getAccountConnectionState } from "@/lib/server/account-state";
 import { getOptionalActiveReportState } from "@/lib/server/report-state";
 import { getCreditPresentation, getLinkedInboxCount } from "@/lib/server/credit-presentation";
+import { getLinkedInboxes } from "@/lib/server/linked-inboxes";
+import { LinkedInboxList } from "@/components/product/LinkedInboxList";
 
 export default async function AccountPage({ searchParams }: { searchParams?: Promise<{ billing?: string; linked?: string }> } = {}) {
   const query = await searchParams;
@@ -20,6 +22,7 @@ export default async function AccountPage({ searchParams }: { searchParams?: Pro
   const account = await getAccountConnectionState(Boolean(activeReport));
   const credits = await getCreditPresentation();
   const linked = await getLinkedInboxCount();
+  const inboxes = await getLinkedInboxes();
   const connected = account.mode === "connected";
   return <main className="settings-page"><div className="container settings-width">
     <BackToReportAction activeReport={activeReport} />
@@ -29,7 +32,7 @@ export default async function AccountPage({ searchParams }: { searchParams?: Pro
       <p>You are now viewing this {account.provider === "gmail" ? "Gmail" : "Outlook"} inbox. {credits
         ? `Your ${credits.available.toLocaleString("en-US")}-credit available balance is shared across ${linked} linked inboxes.`
         : `Your credit balance is shared across ${linked} linked inboxes. The balance is currently unavailable.`}</p>
-      <p>Reports remain separate. Reconnect another linked inbox to make it active.</p>
+      <p>Reports remain separate. Switch linked inboxes from the inbox menu or Account.</p>
     </div> : null}
     <section className="connection-section" aria-label="Inbox connection">
       {account.mode === "unavailable" ? <ProviderUnavailable provider={account.provider} /> : null}
@@ -53,7 +56,8 @@ export default async function AccountPage({ searchParams }: { searchParams?: Pro
       </section>
       <section id="linked-inboxes" aria-labelledby="linked-title"><h2 id="linked-title">Linked inboxes</h2>
         <p className="muted">{linked === null ? "Connect an inbox to manage your shared balance." : `${linked} ${linked === 1 ? "inbox uses" : "inboxes share"} this credit balance.`}</p>
-        <p className="muted text-sm">One inbox is active at a time. Reconnect a linked inbox to use its report.</p>
+        <LinkedInboxList inboxes={inboxes} />
+        <p className="muted text-sm">One inbox is active at a time. Switch inboxes to view their separate reports.</p>
         {connected && getBillingConfig() ? <details className="link-inbox-disclosure"><summary className="text-link focus-ring">Link another inbox</summary>
           <BillingActions canBuy={false} canRefresh={false} gmail={runtimeConfig.gmailAvailable} microsoft={runtimeConfig.microsoftAvailable} />
         </details> : null}

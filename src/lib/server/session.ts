@@ -2,6 +2,7 @@ import "server-only";
 import { cookies } from "next/headers.js";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { verifySignedValue, signValue } from "./crypto";
 
@@ -63,14 +64,14 @@ function expiredCookieOptions() {
   };
 }
 
-export async function setSessionCookie(payload: Omit<SessionPayload, "sessionGeneration">) {
+export async function setSessionCookie(payload: Omit<SessionPayload, "sessionGeneration">, authorize?: (tx: Prisma.TransactionClient) => Promise<void>) {
   const cookieStore = await cookies();
   const session = sessionSchema.parse({
     ...payload,
     createdAt: Date.now(),
     sessionGeneration: randomBytes(32).toString("hex")
   });
-  await prisma.providerConnection.update({
+  const activate = (db: Pick<Prisma.TransactionClient, "providerConnection">) => db.providerConnection.update({
     where: {
       id: session.providerConnectionId,
       userId: session.userId,
@@ -80,6 +81,11 @@ export async function setSessionCookie(payload: Omit<SessionPayload, "sessionGen
     data: { sessionGeneration: session.sessionGeneration },
     select: { id: true }
   });
+  if (authorize) {
+    await prisma.$transaction(async (tx) => { await authorize(tx); await activate(tx); }, { isolationLevel: "Serializable" });
+  } else {
+    await activate(prisma);
+  }
   cookieStore.set(SESSION_COOKIE, signValue(Buffer.from(JSON.stringify(session), "utf8").toString("base64url")), appSessionCookieOptions());
 }
 

@@ -7,6 +7,7 @@ import { getOptionalActiveReportState } from "@/lib/server/report-state";
 import { getCreditPresentation } from "@/lib/server/credit-presentation";
 import { getProductionCleanupUiState } from "@/lib/server/production-cleanup-ui";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
+import { getLinkedInboxes } from "@/lib/server/linked-inboxes";
 
 export const metadata: Metadata = {
   title: "Inbox Report",
@@ -20,6 +21,7 @@ export default async function ProductLayout({ children }: { children: React.Reac
   const connection = await getCurrentProviderConnection();
   const report = await getOptionalActiveReportState();
   const credits = await getCreditPresentation();
+  const inboxes = await getLinkedInboxes();
   const production = process.env.NODE_ENV === "production";
   const cleanup = production ? await getProductionCleanupUiState() : null;
   const connected = connection.mode === "connected";
@@ -29,7 +31,7 @@ export default async function ProductLayout({ children }: { children: React.Reac
 
   return (
     <div className="product-shell">
-      <AppHeader logoPath={siteConfig.logoPath} provider={connected ? connection.provider : undefined} availableCredits={credits?.available ?? null}
+      <AppHeader inboxes={inboxes} logoPath={siteConfig.logoPath} provider={connected ? connection.provider : undefined} availableCredits={credits?.available ?? null}
         reportAvailable={Boolean(report)} scanAvailable={connected}
         cleanupStartAvailable={production ? cleanup?.access === "available" : developmentCleanup}
         cleanupAvailable={production ? Boolean(cleanup?.hasJob || (report && cleanup?.access === "available")) : Boolean(report && developmentCleanup)} />

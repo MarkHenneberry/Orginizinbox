@@ -21,6 +21,18 @@
 .account-menu-items a { display: block; padding: 10px 12px; border-radius: 4px; font-size: 14px; }
 .menu-caption { margin: 4px 12px 8px; font-size: 12px; color: var(--muted); }
 .menu-divider { border-top: 1px solid var(--line); margin: 6px 0; }
+.account-menu-items { max-height: min(640px, calc(100dvh - 96px)); overflow-y: auto; overscroll-behavior: contain; }
+.linked-inbox-list { list-style: none; padding: 0; margin: 0; }
+.linked-inbox-row { padding: 12px 0; border-bottom: 1px solid var(--line); display: grid; gap: 6px; min-width: 0; }
+.linked-inbox-row:last-child { border-bottom: 0; }
+.linked-inbox-identity { display: grid; gap: 3px; min-width: 0; }
+.linked-inbox-identity strong { font-size: 14px; overflow-wrap: anywhere; }
+.linked-inbox-identity span { font-size: 12px; color: var(--muted); }
+.linked-inbox-row[data-active="true"] .linked-inbox-identity span { color: var(--teal-dark); font-weight: 650; }
+.linked-inbox-row button { justify-self: start; padding: 6px 0; text-align: left; font-size: 13px; cursor: pointer; }
+.linked-inbox-row button:disabled { opacity: 0.6; cursor: wait; }
+.menu-inboxes .linked-inbox-row { padding: 10px 12px; }
+.linked-inbox-error { color: #9b2424; font-size: 13px; overflow-wrap: anywhere; margin: 8px 0; }
 .mobile-workflow-nav { display: none; }
 .app-utility-footer { border-top: 1px solid var(--line); padding: 12px 0; font-size: 12px; color: var(--muted); }
 .app-utility-footer nav a { padding-block: 8px; }
