@@ -13,11 +13,14 @@ import type {
 import type { ReportRecentCleanupAction } from "@/lib/domain/report-recent-action";
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getLiveScan } from "@/lib/server/live-scan-store";
+import { isLiveReportUsable } from "@/lib/domain/report-readiness";
+import type { OutlookVerification } from "@/lib/domain/outlook-progressive";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 import { getSession } from "@/lib/server/session";
 import { getLatestGmailScalableUndoReportContext } from "@/lib/server/gmail-scalable-terminal-report";
 
 export type ActiveReportState = {
+  outlookVerification?: OutlookVerification;
   report: InboxReport;
   source: ReportSource;
   scanId: string;
@@ -51,14 +54,14 @@ export async function getActiveReportStateOrRedirect(): Promise<ActiveReportStat
 
   const liveScan = await getLiveScan(session.userId, connection.provider);
   if (
-    !liveScan?.report ||
-    liveScan.progress.status !== "completed" ||
+    !isLiveReportUsable(liveScan) ||
     liveScan.progress.provider !== connection.provider
   ) {
     redirect("/app");
   }
 
   return {
+    outlookVerification: liveScan.progress.outlookVerification,
     report: sanitizeReportForClient(liveScan.report),
     source: liveScan.progress.provider === "microsoft" ? "microsoft-live" : "gmail-live",
     scanId: liveScan.progress.scanId,
@@ -115,8 +118,7 @@ export async function getOptionalActiveReportState(): Promise<OptionalReportStat
 
   const liveScan = await getLiveScan(session.userId, connection.provider);
   if (
-    !liveScan?.report ||
-    liveScan.progress.status !== "completed" ||
+    !isLiveReportUsable(liveScan) ||
     liveScan.progress.provider !== connection.provider
   ) return null;
 

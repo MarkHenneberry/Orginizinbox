@@ -4,6 +4,8 @@ import { scanStateTtlMs } from "@/lib/domain/transient-retention";
 import { Prisma, type EmailProviderName, type PrismaClient, type ScanState } from "@prisma/client";
 import type { InboxReport } from "@/lib/domain/types";
 import type { GmailScalableCleanupTarget } from "@/lib/providers/gmail/scalable-targets";
+import type { OutlookProgressiveState, OutlookVerification } from "@/lib/domain/outlook-progressive";
+import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { decryptCleanupState, encryptCleanupState } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
 import { retrySerializableTransaction } from "@/lib/server/retry-serializable-transaction";
@@ -13,6 +15,12 @@ export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "can
 export type LiveScanProvider = "gmail" | "microsoft";
 
 export type BenchmarkProgress = {
+  reportUsableMs?: number;
+  outlookVerification?: OutlookVerification;
+  enrichmentDurationMs?: number;
+  baseGraphPages?: number;
+  baseGraphRequests?: number;
+  enrichmentBatchRequests?: number;
   phase?: "preparing" | "sent_conversations" | "messages";
   scanId: string;
   provider: LiveScanProvider;
@@ -86,6 +94,7 @@ export type BenchmarkProgress = {
 };
 
 export type LiveScanSession = {
+  outlookProgressive?: OutlookProgressiveState;
   progress: BenchmarkProgress;
   report?: InboxReport;
   participatedConversationIds?: Set<string>;
@@ -200,6 +209,9 @@ export class DurableLiveScanStore {
       if (lockOwner && (row.status !== "running" || row.lockOwner !== lockOwner ||
           row.expiresAt <= new Date() || !row.lockExpiresAt || row.lockExpiresAt <= new Date())) return undefined;
       const stored = normalizeSession(session);
+      if (lockOwner && stored.outlookProgressive) {
+        stored.reportStale ||= decodeAndValidate(row).reportStale;
+      }
       const replaced = await this.repository.replace({
         userId,
         provider,
@@ -565,7 +577,7 @@ export const transientReportStore = {
   delete: clearLiveScan,
   async hasActiveReport(userId: string, provider?: LiveScanProvider) {
     const session = await getLiveScan(userId, provider);
-    return Boolean(session?.report && session.progress.status === "completed");
+    return isLiveReportUsable(session);
   }
 };
 
@@ -615,6 +627,7 @@ function isRetryableAcceptanceError(error: unknown) {
 
 export function serializeBenchmark(progress: BenchmarkProgress) {
   return {
+    ...(progress.reportUsableMs !== undefined ? { reportUsableMs: progress.reportUsableMs, outlookVerification: progress.outlookVerification } : {}),
     elapsedMs: Math.max(0, (progress.completedAt ?? Date.now()) - progress.startedAt),
     phase: progress.phase,
     scanId: progress.scanId,
@@ -680,6 +693,7 @@ export function serializeBenchmark(progress: BenchmarkProgress) {
 export function serializeScanProgress(progress: BenchmarkProgress) {
   if (process.env.NODE_ENV !== "production") return serializeBenchmark(progress);
   return {
+    ...(progress.reportUsableMs !== undefined ? { reportUsableMs: progress.reportUsableMs, outlookVerification: progress.outlookVerification } : {}),
     elapsedMs: Math.max(0, (progress.completedAt ?? Date.now()) - progress.startedAt),
     phase: progress.phase,
     scanId: progress.scanId,

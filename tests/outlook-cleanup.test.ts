@@ -27,6 +27,16 @@ import {
 } from "@/lib/server/outlook-cleanup-store";
 
 describe("Outlook durable cleanup", () => {
+  it("restricts progressive cleanup to the frozen verified report identities even if pending siblings now have headers", async () => {
+    const job = storedJob(2, "created");
+    job.payload.reportVerifiedMessageIds = ["verified-1", "verified-2"];
+    const provider = fakeProvider({ async *scanMetadata() {
+      yield { records: [record("pending-sibling"), record("verified-1"), record("verified-2")] };
+    } });
+    await prepareOutlookJob(job, provider, async () => undefined);
+    expect(job.view.status).toBe("ready");
+    expect(job.payload.targets.map(target => target.originalMessageId)).toEqual(["verified-1", "verified-2"]);
+  });
   it("retains all 155 encrypted recovery checkpoints for 500 moves and Undo", async () => {
     const job = storedJob(500, "created");
     const checkpoints: OutlookCleanupStoredJob[] = [];

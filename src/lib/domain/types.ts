@@ -240,6 +240,7 @@ export type OutlookScanDiagnostic = {
 };
 
 export type SenderAggregate = {
+  pendingVerificationCount?: number;
   senderKey: string;
   senderSecondaryLabel?: string;
   diagnosticSenderIdentity?: string;

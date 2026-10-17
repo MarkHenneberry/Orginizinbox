@@ -7,6 +7,8 @@ import { ReportPreview } from "@/components/product/ReportPreview";
 import { pricingConfig, runtimeConfig } from "@/lib/config";
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getPublicPrimaryCta } from "@/lib/server/app-state";
+import { getHomeProviderActions, homepageAvailability } from "@/lib/server/home-provider-actions";
+import { HomeProviderActions } from "@/components/marketing/HomeProviderActions";
 
 const popularGuides = [
   { href: "/delete-old-emails", label: "Delete old emails" },
@@ -19,7 +21,7 @@ const popularGuides = [
 
 const productPaths = [
   { href: "/gmail-cleaner", label: "Gmail Cleaner", body: "Find recurring senders, old mail, and Gmail clutter." },
-  { href: "/outlook-cleaner", label: "Outlook Cleaner", body: "See how Outlook cleanup will work. Support is coming soon." },
+  { href: "/outlook-cleaner", label: "Outlook Cleaner", body: "Explore Outlook scanning, safety checks and cleanup availability." },
   { href: "/guides", label: "Guides", body: "Get practical help for common inbox cleanup problems." },
   { href: "/pricing", label: "Pricing", body: "Start with a free Inbox Scan." },
   { href: "/security", label: "Security", body: "See how Organizinbox protects access and cleanup actions." }
@@ -27,7 +29,7 @@ const productPaths = [
 
 export const metadata: Metadata = {
   title: "See what's clogging your inbox",
-  description: runtimeConfig.development ? "Clean thousands of unwanted Gmail and Outlook emails safely after reviewing a transparent Inbox Report." : "Read-only Inbox Reports for enabled providers. Check current Gmail and Outlook availability. Cleanup is not available.",
+  description: `See what's clogging your Gmail or Outlook inbox with a free Inbox Report. ${homepageAvailability().cleanupCopy}`,
   alternates: {
     canonical: "/"
   }
@@ -36,6 +38,8 @@ export const metadata: Metadata = {
 export default async function HomePage() {
   const report = getFixtureInboxReport();
   const primaryCta = await getPublicPrimaryCta();
+  const actions = await getHomeProviderActions();
+  const availability = homepageAvailability();
 
   return (
     <>
@@ -45,21 +49,14 @@ export default async function HomePage() {
         <section className="home-hero border-b border-[var(--line)] bg-[var(--soft)]">
           <div className="container grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
             <div>
-              <p className="eyebrow">{runtimeConfig.development ? "Gmail + Outlook cleanup" : "Read-only Inbox Reports"}</p>
+              <p className="eyebrow">Gmail + Outlook Inbox Reports</p>
               <h1 className="mt-3 text-5xl font-extrabold leading-none text-[var(--navy)] md:text-7xl">
                 See what&apos;s clogging your inbox.
               </h1>
               <p className="mt-6 max-w-2xl text-xl font-bold text-[var(--navy)]">
-                {runtimeConfig.development ? "Organizinbox finds the senders and old email taking over your inbox, then helps you clean thousands of messages safely." : "View an Inbox Report when your provider is enabled. Cleanup is not available."}
+                {availability.anyCleanup ? "Clean thousands of unwanted emails safely. Start with a free scan, then review what to clean." : "Find the senders and old email filling your inbox. Start with a free, read-only scan."}
               </p>
-              <div className="mt-8 flex flex-wrap gap-3">
-                <Link href={primaryCta.href} className="btn btn-primary focus-ring">
-                  {primaryCta.label}
-                </Link>
-                <Link href="/outlook-cleaner" className="btn btn-secondary focus-ring">
-                  Outlook support
-                </Link>
-              </div>
+              <HomeProviderActions actions={actions} />
               <ul className="mt-8 grid gap-3 p-0 text-sm font-bold text-[var(--navy)] sm:grid-cols-2" aria-label="Trust statements">
                 {["You review what gets cleaned", "Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation", "We don't sell your inbox data", "Use Undo before disconnecting"].map((item) => (
                   <li className="list-none" key={item}>
@@ -102,7 +99,7 @@ export default async function HomePage() {
               {productPaths.map((path) => (
                 <Link className="panel focus-ring block p-5 hover:border-[var(--teal)]" href={path.href} key={path.href}>
                   <span className="font-extrabold text-[var(--navy)]">{path.label}</span>
-                  <span className="muted mt-2 block text-sm leading-6">{!runtimeConfig.development && ["/gmail-cleaner", "/outlook-cleaner"].includes(path.href) ? "Check current connection and read-only scan availability." : path.body}</span>
+                  <span className="muted mt-2 block text-sm leading-6">{path.body}</span>
                 </Link>
               ))}
             </div>
@@ -123,7 +120,7 @@ export default async function HomePage() {
                       "Connect Gmail or Outlook when available and scan the whole inbox. Scanning does not move or delete anything.",
                       "See Suggested, Review and Protected messages, and where the clutter comes from.",
                       "Review suggested sender groups and messages, then choose what you want moved.",
-                      runtimeConfig.development ? "Organizinbox runs final safety checks and moves only approved messages to Trash or Deleted Items." : "Where cleanup is available, Organizinbox runs final safety checks and moves only approved messages to Trash or Deleted Items. Production cleanup is not available yet.",
+                      `Where cleanup is enabled, Organizinbox runs final safety checks and moves only approved messages to Trash or Deleted Items. ${availability.cleanupCopy}`,
                       "Check the result. Use Undo within the displayed deadline if needed, before disconnecting. Or scan again to see what remains."
                     ][index]}
                   </p>
@@ -166,7 +163,7 @@ export default async function HomePage() {
             <div>
               <p className="eyebrow">Compatibility</p>
               <h2 className="mt-3 text-3xl font-extrabold text-[var(--navy)]">Provider availability</h2>
-              <p className="muted">Gmail: {runtimeConfig.gmailAvailable ? "read-only scanning available" : "currently unavailable"}. Outlook: {runtimeConfig.microsoftAvailable ? "read-only scanning available" : "currently unavailable"}. Cleanup is not available in production.</p>
+              <p className="muted">Gmail: {runtimeConfig.gmailAvailable ? "scanning available" : "currently unavailable"}. Outlook: {runtimeConfig.microsoftAvailable ? "scanning available" : "currently unavailable"}. {availability.cleanupCopy}</p>
             </div>
             <div>
               <p className="eyebrow">Pricing</p>
@@ -182,9 +179,9 @@ export default async function HomePage() {
             <h2 className="section-title">FAQ</h2>
             <div className="mt-8 grid gap-4 md:grid-cols-2">
               {[
-                ["Does Organizinbox permanently delete email?", runtimeConfig.development ? "No. Approved cleanup moves mail to Trash or Deleted Items. Your provider's retention rules still apply." : "No. Production scanning is read-only and cleanup is not available."],
+                ["Does Organizinbox permanently delete email?", `Initial cleanup moves mail to Trash or Deleted Items. Permanent deletion requires separate confirmation. Your provider's retention rules still apply. ${availability.cleanupCopy}`],
                 ["Does Organizinbox read my emails?", "We use basic email details and process Subject lines temporarily for protection. We don't fetch email bodies or attachments. Reports and required restoration state are stored temporarily in encrypted form."],
-                ["Can I use it with Outlook?", runtimeConfig.microsoftAvailable ? "Read-only Outlook scanning is available. Production cleanup is not available." : "Outlook is currently unavailable. Check provider availability for updates."],
+                ["Can I use it with Outlook?", runtimeConfig.microsoftAvailable ? `Outlook scanning is available. ${availability.outlookCleanup ? "Outlook cleanup is available with credits." : "Outlook cleanup is currently unavailable."}` : "Outlook is currently unavailable. Check provider availability for updates."],
                 ["What if Organizinbox is unsure?", "We leave the message alone. You review every cleanup group before anything moves to Trash."]
               ].map(([question, answer]) => (
                 <div className="panel p-5" key={question}>
@@ -212,7 +209,7 @@ export default async function HomePage() {
         <section className="section border-t border-[var(--line)] bg-white">
           <div className="container max-w-3xl text-center">
             <h2 className="section-title">See what&apos;s filling your inbox.</h2>
-            <p className="muted mt-4 text-lg">{runtimeConfig.development ? "Initial cleanup moves email to Trash or Deleted Items. Permanent deletion requires separate confirmation." : "Read-only scanning for enabled providers. Cleanup is not available."}</p>
+            <p className="muted mt-4 text-lg">{availability.cleanupCopy}</p>
             <Link className="btn btn-primary focus-ring mt-6" href={primaryCta.href}>
               {primaryCta.label}
             </Link>

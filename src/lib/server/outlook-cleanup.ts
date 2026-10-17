@@ -15,6 +15,8 @@ import {
   outlookCleanupChunkSize
 } from "@/lib/domain/outlook-cleanup";
 import { assessMessage } from "@/lib/domain/recommendations";
+import { verifiedOutlookMessageIds } from "@/lib/domain/outlook-progressive";
+import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { MicrosoftProvider } from "@/lib/providers/microsoft/provider";
 import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
 import { sha256Base64Url } from "@/lib/server/crypto";
@@ -63,8 +65,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
   const session = await requireSession();
   const liveScan = await getLiveScan(session.userId, "microsoft");
   if (
-    !liveScan?.report ||
-    liveScan.progress.status !== "completed" ||
+    !isLiveReportUsable(liveScan) ||
     liveScan.progress.provider !== "microsoft" ||
     liveScan.reportStale ||
     !liveScan.participatedConversationIds
@@ -131,6 +132,11 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
       expiresAt: cleanupStateExpiryFor({ now, undoAvailable: false, terminal: false })
     },
     payload: {
+      ...(liveScan.outlookProgressive ? {
+        reportVerifiedMessageIds: verifiedOutlookMessageIds(liveScan.outlookProgressive,
+          { ...liveScan.report, senders: selectedGroups.map(group => liveScan.report.senders[group.index]) },
+          liveScan.participatedConversationIds).slice(0, requested)
+      } : {}),
       scanId: liveScan.progress.scanId,
       providerConnectionId: connection.connection.id,
       selectedSenders: selectedGroups.map((group) => ({
@@ -148,7 +154,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
     await retrySerializableTransaction(() => prisma.$transaction(async (transaction) => {
       await transaction.scan.upsert({
         where: { id: liveScan.progress.scanId },
-        update: { status: "completed", completedAt: new Date(now) },
+        update: liveScan.progress.status === "running" ? {} : { status: "completed", completedAt: new Date(now) },
         create: {
           id: liveScan.progress.scanId,
           userId: session.userId,
@@ -366,8 +372,10 @@ export async function prepareOutlookJob(
       job.payload.participatedConversationIds = [...participated];
       const frozenTargets: OutlookCleanupTarget[] = [];
       const seenMessageIds = new Set<string>();
+      const allowedIds = job.payload.reportVerifiedMessageIds ? new Set(job.payload.reportVerifiedMessageIds) : undefined;
       for await (const batch of provider.scanMetadata({ batchSize: 100, limit: "full" })) {
         for (const record of batch.records) {
+          if (allowedIds && !allowedIds.has(record.providerMessageId)) continue;
           const groupIndex = selected.get(record.senderAddress.toLowerCase());
           if (groupIndex === undefined) continue;
           if (!assessMessage(record, { participatedConversationIds: participated }).eligibleForCleanup) continue;

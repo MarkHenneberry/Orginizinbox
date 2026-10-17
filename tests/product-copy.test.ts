@@ -29,7 +29,7 @@ describe("product copy and contextual navigation", () => {
     const home = read("app/page.tsx");
 
     expect(home).toMatch(/See what&apos;s clogging your inbox/);
-    expect(home).toMatch(/finds the senders and old email taking over your inbox/);
+    expect(home).toMatch(/Find the senders and old email filling your inbox/);
     expect(home).toMatch(/Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation/);
     expect(home).toMatch(/scan the whole inbox/);
     expect(home).toMatch(/Scanning does not move or delete anything/);

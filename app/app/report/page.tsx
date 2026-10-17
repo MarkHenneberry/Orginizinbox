@@ -14,6 +14,7 @@ export default async function ReportPage({ searchParams }: { searchParams?: Prom
 
   return (
     <InboxReportView
+      outlookVerification={activeReport.outlookVerification}
       productionCleanupAccess={cleanup?.access}
       existingCleanup={cleanup?.hasJob}
       backHref={activeReport.backHref}

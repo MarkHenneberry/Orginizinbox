@@ -16,6 +16,32 @@ import {
 } from "@/lib/providers/microsoft/provider";
 
 describe("Microsoft Graph read-only client", () => {
+  it("retries only throttled read subrequests with bounded waits, preserves successes and records aggregate metrics", async () => {
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const requests = JSON.parse(String(init?.body)).requests as Array<{ id: string }>;
+      if (fetchImpl.mock.calls.length === 1) return jsonResponse({ responses: requests.map(request => ({ id: request.id,
+        status: request.id === "1" ? 429 : 200, headers: { "Retry-After": "1" }, body: { id: request.id } })) });
+      expect(requests.map(request => request.id)).toEqual(["1"]);
+      return jsonResponse({ responses: [{ id: "1", status: 200, body: { id: "1" } }] });
+    });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const client = new MicrosoftGraphClient({ accessToken: "fixture", fetchImpl: fetchImpl as typeof fetch, sleep, random: () => 0 });
+    const responses = await client.readBatchJson([{ id: "0", method: "GET", url: "/me/messages/a" }, { id: "1", method: "GET", url: "/me/messages/b" }], "header_enrichment");
+    expect(responses.map(response => response.id)).toEqual(["0", "1"]);
+    expect(sleep).toHaveBeenCalledWith(1000);
+    expect(client.getMetrics()).toMatchObject({ retries: 1, throttles429: 1, throttleWaitMs: 1000, requests: 2 });
+    await expect(client.readBatchJson([{ id: "0", method: "POST", url: "/me/messages/a/move" }], "header_enrichment")).rejects.toThrow();
+  });
+  it("leaves exhausted read throttles explicit and refreshes saved authorization at most once", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const refreshAccessToken = vi.fn().mockResolvedValue("refreshed");
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockImplementation(async () => jsonResponse({ responses: [{ id: "0", status: 429, headers: { "Retry-After": "0" } }] }));
+    const client = new MicrosoftGraphClient({ accessToken: "fixture", fetchImpl: fetchImpl as typeof fetch, sleep, refreshAccessToken, maxRetries: 2, random: () => 0 });
+    const result = await client.readBatchJson([{ id: "0", method: "GET", url: "/me/messages/a" }], "header_enrichment");
+    expect(result[0].status).toBe(429); expect(refreshAccessToken).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
   it("times body consumption separately and attributes only main-message JSON to the main scan", async () => {
     let clock = 0;
     const timer = vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -216,6 +242,46 @@ describe("Microsoft Graph read-only client", () => {
 });
 
 describe("Microsoft Graph metadata scan", () => {
+  it("publishes base metadata at 500 without headers and restarts the entire attempt at 100 after an invalid page", async () => {
+    const sizes: string[] = [];
+    let mainCalls = 0;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1.0/me/messages") {
+        if (url.searchParams.has("$select")) expect(url.searchParams.get("$select")).not.toContain("internetMessageHeaders");
+        mainCalls++; sizes.push(url.searchParams.get("$top")!);
+        if (mainCalls === 1) return jsonResponse({ value: [message("first", "inbox-id", "one")], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?$top=500&$skiptoken=next" });
+        if (mainCalls === 2) return jsonResponse({ value: "invalid" });
+        return jsonResponse({ value: [message("first", "inbox-id", "one"), message("second", "inbox-id", "two")] });
+      }
+      if (url.pathname === "/v1.0/me/mailFolders") return jsonResponse({ value: [] });
+      const kind = url.pathname.split("/").at(-1);
+      return jsonResponse(folder(kind === "inbox" ? "inbox-id" : `${kind}-id`));
+    });
+    const provider = new MicrosoftProvider("fixture", { fetchImpl: fetchImpl as typeof fetch });
+    const ids: string[] = [];
+    await provider.processMetadataWithAdaptiveFallback({ baseOnly: true, scan: { limit: "full", batchSize: 250 },
+      onBatch(batch) { ids.push(...batch.records.map(record => record.providerMessageId)); expect(batch.records.every(record => !record.listId && !record.hasListUnsubscribe)).toBe(true); },
+      onFallback() { ids.length = 0; } });
+    expect(sizes).toEqual(["500", "500", "100"]);
+    expect(ids).toEqual(["first", "second"]);
+  });
+
+  it("fetches exact headers in bounded JSON batches, correlates response order and rejects mismatched or missing evidence", async () => {
+    const fetchImpl = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const requests = JSON.parse(String(init?.body)).requests as Array<{ id: string; method: string; url: string }>;
+      expect(requests.every(request => request.method === "GET" && new URL(request.url, "https://graph.microsoft.com").searchParams.get("$select") === "id,internetMessageHeaders")).toBe(true);
+      return jsonResponse({ responses: [...requests].reverse().map(request => ({ id: request.id, status: 200,
+        body: { id: request.id === "1" ? "wrong-message" : `message-${request.id}`,
+          ...(request.id === "2" ? {} : { internetMessageHeaders: [{ name: "List-Id", value: "fixture-list" }, { name: "X-Secret", value: "discard" }] }) } })) });
+    });
+    const provider = new MicrosoftProvider("fixture", { fetchImpl: fetchImpl as typeof fetch });
+    const result = await provider.getHeaderEvidence(["message-0", "message-1", "message-2"]);
+    expect(result[0]?.listId).toBe("fixture-list"); expect(result[1]).toBeUndefined(); expect(result[2]).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("discard");
+    await expect(provider.getHeaderEvidence(Array.from({ length: 21 }, (_, i) => String(i)))).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
   it("scans one sequential mailbox-wide full-evidence chain and preserves folder safety", async () => {
     const requestedUrls: URL[] = [];
     const mailboxMessages = [

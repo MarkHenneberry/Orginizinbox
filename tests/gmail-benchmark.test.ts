@@ -96,7 +96,7 @@ describe("gmail live benchmark guardrails", () => {
   it("does not serialize mailbox path, tokens, or report content in benchmark progress", () => {
     const store = readFileSync("src/lib/server/live-scan-store.ts", "utf8");
     const serializer = store.slice(store.indexOf("export function serializeBenchmark"));
-    expect(serializer).not.toMatch(/mailboxPath|encrypted|accessToken|refreshToken|report/);
+    expect(serializer).not.toMatch(/mailboxPath|encrypted|accessToken|refreshToken|report\s*:/);
   });
 
   it("gates the report route when fixture mode is disabled", () => {

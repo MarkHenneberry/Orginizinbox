@@ -4,6 +4,7 @@ export async function providerScanWorkflow(scanId: string) {
   "use workflow";
   while (true) {
     const result = await runProviderScanStep(scanId);
+    if (result.outcome === "continue") continue;
     if (result.outcome !== "locked") return result;
     await sleep(new Date(Date.now() + 60_000));
   }

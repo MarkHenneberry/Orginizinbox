@@ -4,6 +4,7 @@ import Link from "next/link";
 import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { getProductionCleanupUiState } from "@/lib/server/production-cleanup-ui";
 import { getLiveScan } from "@/lib/server/live-scan-store";
+import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
 import {
@@ -29,7 +30,7 @@ export default async function CleanupPage() {
     // Recovery does not depend on an unexpired report or permission to start another cleanup.
     const live = state.userId && state.provider ? await getLiveScan(state.userId, state.provider).catch(() => undefined) : undefined;
     const hasJob = Boolean(state.gmailJob || state.outlookJob);
-    const report = live?.progress.status === "completed" && (!hasJob || state.jobScanId === live.progress.scanId)
+    const report = isLiveReportUsable(live) && (!hasJob || state.jobScanId === live.progress.scanId)
       ? live.report : undefined;
     return (
       <main className="py-8"><div className="container">

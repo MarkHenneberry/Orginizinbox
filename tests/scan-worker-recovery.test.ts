@@ -137,7 +137,8 @@ describe("scan performance without weaker recovery", () => {
     ]);
     expect(mocks.fence).toHaveBeenCalledTimes(101);
     const final = await mocks.save.mock.results.at(-1)!.value as LiveScanSession;
-    expect(final.progress).toMatchObject({ status: "completed", processed: 10000 });
+    expect(final.progress).toMatchObject({ status: "running", processed: 10000, reportUsableMs: expect.any(Number),
+      outlookVerification: { status: "running" } });
     expect(final.report).toBeDefined();
     expect(console.info).toHaveBeenCalledWith("Outlook scan metrics", expect.objectContaining({
       credentialResolutionMs: expect.any(Number), folderResolutionMs: expect.any(Number),

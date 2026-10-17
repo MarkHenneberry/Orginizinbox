@@ -17,7 +17,8 @@ export async function runDurableProviderScan(scanId: string) {
       await runGmailBenchmark({ scanId, lockOwner: owner });
     }
     const latest = await getLiveScanById(scanId);
-    return { outcome: latest?.progress.status === "completed" ? "completed" as const : "stopped" as const };
+    return { outcome: latest?.progress.status === "completed" ? "completed" as const :
+      latest?.progress.status === "running" && latest.outlookProgressive ? "continue" as const : "stopped" as const };
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") return { outcome: "stopped" as const };
     throw error;

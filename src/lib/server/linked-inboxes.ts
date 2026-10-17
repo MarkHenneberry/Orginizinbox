@@ -9,6 +9,7 @@ import { hasRequiredMicrosoftMailScope } from "@/lib/providers/microsoft/scopes"
 import { decryptSecret } from "./crypto";
 import { prisma } from "./db";
 import { getLiveScan } from "./live-scan-store";
+import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { appSessionCookieOptions, getSession, setSessionCookie } from "./session";
 
 const select = {
@@ -70,7 +71,7 @@ export async function switchLinkedInbox(source: Session, targetId: string) {
   // Preflight obtains only a verified target identity. Repeat authorization inside activation.
   const target = await authorizedTarget(prisma, source, targetId);
   const report = await getLiveScan(target.userId, target.provider);
-  const url = report?.report && report.progress.status === "completed" && report.progress.provider === target.provider ? "/app/report" : "/app/scan";
+  const url = isLiveReportUsable(report) && report.progress.provider === target.provider ? "/app/report" : "/app/scan";
   if (target.id === source.providerConnectionId) return { url };
   await setSessionCookie({ userId: target.userId, providerConnectionId: target.id, createdAt: Date.now() }, async tx => {
     const current = await authorizedTarget(tx, source, targetId);

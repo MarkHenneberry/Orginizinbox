@@ -46,6 +46,7 @@ export type OutlookCleanupStoredJob = {
   version: number;
   view: OutlookCleanupJobView;
   payload: {
+    reportVerifiedMessageIds?: string[];
     scanId: string;
     providerConnectionId: string;
     selectedSenders: Array<{ groupIndex: number; senderKey: string }>;

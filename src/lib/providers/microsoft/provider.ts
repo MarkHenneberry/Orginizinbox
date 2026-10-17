@@ -223,12 +223,15 @@ export class MicrosoftProvider implements MailboxProcessor {
 
   // Temporary diagnostic path only; it never supplies a report to the application.
   async *scanBaseMetadataForCandidateCount(input: ScanMetadataInput): AsyncIterable<ScanMetadataBatch> {
+    yield* this.scanMailboxMetadata(input, false, 100);
+  }
+
+  async *scanBaseMetadata(input: ScanMetadataInput): AsyncIterable<ScanMetadataBatch> {
     yield* this.scanMailboxMetadata(input, false);
   }
 
-  private async *scanMailboxMetadata(input: ScanMetadataInput, includeHeaders = true): AsyncIterable<ScanMetadataBatch> {
+  private async *scanMailboxMetadata(input: ScanMetadataInput, includeHeaders = true, pageSize = this.mainMessagePageSize): AsyncIterable<ScanMetadataBatch> {
     const folders = await this.getFolderIndex(input.signal);
-    const pageSize = includeHeaders ? this.mainMessagePageSize : 100;
     const numericLimit = input.limit === undefined || input.limit === "full" ? undefined : input.limit;
     const outputBatchSize = boundedPageSize(input.batchSize);
     let processed = 0;
@@ -372,13 +375,14 @@ export class MicrosoftProvider implements MailboxProcessor {
   }
 
   async processMetadataWithAdaptiveFallback(input: {
+    baseOnly?: boolean;
     scan: ScanMetadataInput;
     onBatch: (batch: ScanMetadataBatch) => void | Promise<void>;
     onFallback: () => void | Promise<void>;
   }) {
     while (true) {
       try {
-        for await (const batch of this.scanMetadata(input.scan)) {
+        for await (const batch of input.baseOnly ? this.scanBaseMetadata(input.scan) : this.scanMetadata(input.scan)) {
           await input.onBatch(batch);
         }
         return;
@@ -387,6 +391,25 @@ export class MicrosoftProvider implements MailboxProcessor {
         await input.onFallback();
       }
     }
+  }
+
+  async getHeaderEvidence(messageIds: readonly string[]) {
+    const requests = messageIds.map((messageId, index): MicrosoftGraphBatchRequest => ({
+      id: String(index), method: "GET", url: collectionPath(`/me/messages/${encodeURIComponent(messageId)}`, {
+        "$select": "id,internetMessageHeaders"
+      })
+    }));
+    const responses = await this.graph.readBatchJson(requests, "header_enrichment");
+    return responses.map((response, index) => {
+      const message = response.body as GraphMessage | undefined;
+      if (response.status !== 200 || !message || message.id !== messageIds[index] || !Array.isArray(message.internetMessageHeaders) ||
+          message.internetMessageHeaders.some(header => !header || typeof header !== "object" ||
+            typeof header.name !== "string" || typeof header.value !== "string")) return undefined;
+      const headers = allowlistedHeaders(message.internetMessageHeaders);
+      message.internetMessageHeaders = undefined;
+      return { listId: headers.get("list-id"), hasListUnsubscribe: Boolean(headers.get("list-unsubscribe")),
+        precedence: headers.get("precedence")?.trim().toLowerCase(), autoSubmitted: headers.get("auto-submitted")?.trim().toLowerCase() };
+    });
   }
 
   async *searchCleanupGroup(_input: SearchCleanupGroupInput): AsyncIterable<SearchCleanupGroupBatch> {

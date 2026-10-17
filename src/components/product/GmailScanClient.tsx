@@ -7,6 +7,7 @@ import { startAdaptivePolling } from "@/lib/adaptive-polling";
 import { scanClockStart } from "@/lib/scan-clock";
 
 type ScanProgress = {
+  reportUsableMs?: number;
   elapsedMs?: number;
   phase?: "preparing" | "sent_conversations" | "messages";
   scanId: string;
@@ -67,7 +68,11 @@ function MailboxScanClient({
   const endpoint = outlook ? "/api/app/microsoft-scan" : "/api/app/gmail-scan";
 
   const isRunning = progress?.status === "running";
-  const working = pending || isRunning;
+  const reportReady = progress?.status === "completed" || (outlook && progress?.reportUsableMs !== undefined);
+  const working = pending || (isRunning && !reportReady);
+  useEffect(() => {
+    if (outlook && reportReady && isRunning) window.location.replace("/app/report");
+  }, [outlook, reportReady, isRunning]);
   const percent = useMemo(() => {
     if (!progress?.mailboxExists) return 0;
     return Math.min(100, Math.round((progress.processed / progress.mailboxExists) * 100));
@@ -124,9 +129,9 @@ function MailboxScanClient({
     <section aria-busy={working} className="mt-6 border-t border-[var(--line)] py-6">
       {pollError ? <p role="alert">Status could not be refreshed. Retrying...</p> : null}
       <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">
-        {isRunning
+        {isRunning && !reportReady
           ? outlook ? "Scanning Outlook inbox..." : "Scanning your inbox..."
-          : progress?.status === "completed"
+          : reportReady
             ? "Your Inbox Report is ready."
             : outlook ? "Ready to scan Outlook" : "Ready to scan your inbox"}
       </h2>
@@ -192,7 +197,7 @@ function MailboxScanClient({
       {progress?.errors.length ? <p className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{progress.errors[0]}</p> : null}
 
       <div className="mt-6 flex flex-wrap gap-3">
-        {progress?.status === "completed" ? (
+        {reportReady ? (
           <Link className="btn btn-primary focus-ring" href="/app/report">
             View Inbox Report
           </Link>
@@ -201,7 +206,7 @@ function MailboxScanClient({
             {working ? "Scanning..." : outlook ? "Scan Outlook inbox" : "Scan my inbox"}
           </button>
         )}
-        {progress?.status === "completed" ? (
+        {reportReady && !isRunning ? (
           <button className="btn btn-secondary focus-ring" disabled={working} onClick={() => startScan("rescan")} type="button">
             {pending && operationMode === "rescan" ? "Rescanning..." : "Rescan inbox"}
           </button>

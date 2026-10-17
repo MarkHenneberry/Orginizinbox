@@ -259,10 +259,56 @@ export class MicrosoftGraphClient {
     }
   }
 
+  async readBatchJson(requests: readonly MicrosoftGraphBatchRequest[], operation: MicrosoftGraphOperation): Promise<MicrosoftGraphBatchResponse[]> {
+    if (requests.some(request => request.method !== "GET")) throw new MicrosoftGraphMalformedResponseError();
+    let pending = [...requests];
+    const completed = new Map<string, MicrosoftGraphBatchResponse>();
+    let refreshed = false;
+    const refresh = async () => {
+      if (refreshed || !this.refreshAccessToken) throw new MicrosoftGraphReconnectRequiredError();
+      refreshed = true;
+      this.accessToken = await this.refreshAccessToken();
+      if (!this.accessToken) throw new MicrosoftGraphReconnectRequiredError();
+      this.metrics.tokenRefreshes += 1;
+    };
+    for (let attempt = 0; pending.length; attempt++) {
+      let responses: MicrosoftGraphBatchResponse[];
+      try { responses = await this.batchJson(pending, operation, { mutation: false, signal: AbortSignal.timeout(30_000) }); }
+      catch (error) {
+        if (error instanceof MicrosoftGraphReconnectRequiredError && !refreshed && this.refreshAccessToken) { await refresh(); continue; }
+        if (!(error instanceof MicrosoftGraphUnavailableError) || attempt >= this.maxRetries ||
+            (error.status !== undefined && error.status !== 429 && error.status < 500)) throw error;
+        const delay = backoffMs(attempt + 1, this.random);
+        this.metrics.retries += 1;
+        if (error.status === 429) this.metrics.throttleWaitMs += delay;
+        await this.sleep(delay); continue;
+      }
+      if (responses.some(response => response.status === 401) && !refreshed && this.refreshAccessToken) {
+        await refresh();
+        for (const response of responses) if (response.status !== 401 && response.status !== 429 && response.status < 500) completed.set(response.id, response);
+        pending = pending.filter(request => !completed.has(request.id));
+        continue;
+      }
+      const retryIds = new Set(responses.filter(response => (response.status === 429 || response.status >= 500) && attempt < this.maxRetries).map(response => response.id));
+      for (const response of responses) if (!retryIds.has(response.id)) completed.set(response.id, response);
+      pending = pending.filter(request => retryIds.has(request.id));
+      if (!pending.length) break;
+      const waits = responses.filter(response => retryIds.has(response.id)).map(response => {
+        const header = Object.entries(response.headers).find(([name]) => name.toLowerCase() === "retry-after")?.[1];
+        return retryAfterMs(typeof header === "string" ? header : null) ?? backoffMs(attempt + 1, this.random);
+      });
+      const delay = Math.min(maxRetryDelayMs, Math.max(...waits) + Math.round(250 * this.random()));
+      this.metrics.retries += 1;
+      if (responses.some(response => response.status === 429)) this.metrics.throttleWaitMs += delay;
+      await this.sleep(delay);
+    }
+    return requests.map(request => completed.get(request.id)!);
+  }
+
   async batchJson(
     requests: readonly MicrosoftGraphBatchRequest[],
     operation: MicrosoftGraphOperation,
-    input: { mutation: boolean }
+    input: { mutation: boolean; signal?: AbortSignal }
   ): Promise<MicrosoftGraphBatchResponse[]> {
     assertBatchRequests(requests);
     const url = toTrustedGraphUrl("/$batch");
@@ -276,7 +322,8 @@ export class MicrosoftGraphClient {
           Authorization: `Bearer ${this.accessToken}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ requests })
+        body: JSON.stringify({ requests }),
+        signal: input.signal
       }));
     } catch {
       this.recordNonHttpFailure(operation, "network");

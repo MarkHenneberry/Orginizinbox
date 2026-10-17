@@ -3,6 +3,7 @@ import { sanitizeReportForClient } from "@/lib/domain/report-sanitizer";
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 import { getLiveScan, hasExpiredLiveScan } from "@/lib/server/live-scan-store";
+import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { providerAvailability } from "@/lib/providers/availability";
 import { runtimeConfig } from "@/lib/config";
 
@@ -56,8 +57,7 @@ export async function getAppHomeState(): Promise<AppHomeState> {
 
   const liveScan = await getLiveScan(connection.userId, connection.provider);
   if (
-    liveScan?.report &&
-    liveScan.progress.status === "completed" &&
+    isLiveReportUsable(liveScan) &&
     liveScan.progress.provider === connection.provider
   ) {
     const report = sanitizeReportForClient(liveScan.report);

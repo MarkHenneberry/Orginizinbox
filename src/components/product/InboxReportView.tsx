@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import type { OutlookVerification } from "@/lib/domain/outlook-progressive";
+import { OutlookVerificationNotice } from "./OutlookVerificationNotice";
 import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { useCleanupAvailability } from "@/components/product/useCleanupAvailability";
 import type { CleanupUiAccess } from "@/lib/domain/cleanup-ui";
@@ -54,6 +56,7 @@ const senderSortOptions: Array<{ value: SenderSortKey; label: string }> = [
 const developmentDiagnosticsEnabled = process.env.NODE_ENV !== "production";
 
 export function InboxReportView({
+  outlookVerification,
   report,
   reportStale,
   recentCleanupAction,
@@ -66,6 +69,7 @@ export function InboxReportView({
   productionCleanupAccess = "unavailable",
   existingCleanup = false
 }: {
+  outlookVerification?: OutlookVerification;
   report: InboxReport;
   reportStale: boolean;
   recentCleanupAction?: ReportRecentCleanupAction;
@@ -109,6 +113,7 @@ export function InboxReportView({
         </div>
 
         {production && availability.hasJob ? <Link className="btn btn-secondary focus-ring mb-6" href="/app/cleanup">View cleanup and Undo</Link> : null}
+        {outlookVerification ? <OutlookVerificationNotice verification={outlookVerification} /> : null}
 
         {recentCleanupAction ? (
           <PostUndoReportNotice action={recentCleanupAction} />
@@ -344,6 +349,7 @@ function SendersView({
                         </span>
                       </button>
                       <p className="muted m-0 text-xs">{senderIdentityLabel(sender)}</p>
+                      {sender.pendingVerificationCount ? <p className="muted m-0 text-xs">{sender.pendingVerificationCount.toLocaleString()} awaiting verification (Review)</p> : null}
                     </td>
                     <td className="p-4 text-right font-bold">{sender.totalMessages.toLocaleString()}</td>
                     <td className="p-4 text-right">{sender.cleanupCandidateCount.toLocaleString()}</td>
@@ -418,6 +424,7 @@ function SenderMobileRow({
         <CompactMetric label="Review" value={sender.reviewMessages} />
         <CompactMetric label="Protected" value={sender.protectedMessages} />
       </span>
+      {sender.pendingVerificationCount ? <span className="muted text-xs">{sender.pendingVerificationCount.toLocaleString()} awaiting verification (Review)</span> : null}
       <span className="flex items-center justify-between gap-3">
         <span className="muted text-xs">Oldest {formatDate(sender.oldestMessageAt)}</span>
         <span className="badge">{recommendationLabel(sender.cleanupConfidence)}</span>
@@ -538,6 +545,7 @@ function SenderDetail({
     >
       <p className="eyebrow">Sender detail</p>
       <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{sender.displayName}</h2>
+      {sender.pendingVerificationCount ? <p className="muted text-sm">{sender.pendingVerificationCount.toLocaleString()} awaiting verification in Review. Only the Suggested count is available for cleanup.</p> : null}
       <p className="muted">
         {sender.senderSecondaryLabel ?? sender.domain ?? "Sender"} - {sender.totalMessages.toLocaleString()} emails
       </p>
