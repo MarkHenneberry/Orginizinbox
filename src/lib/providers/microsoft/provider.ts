@@ -412,6 +412,61 @@ export class MicrosoftProvider implements MailboxProcessor {
     });
   }
 
+  async getEnrichmentCollectionPage(input: {
+    nextLink?: string;
+    pageSize: 500 | 100;
+    pendingIds: ReadonlySet<string>;
+    folders: MicrosoftCleanupSafetyContext;
+  }) {
+    const firstPath = (size: number) => collectionPath("/me/messages", {
+      "$select": microsoftMessageSelect.join(","), "$top": String(size)
+    });
+    const read = async (path: string) => {
+      const value = await this.graph.getJson<unknown>(path, undefined, "header_enrichment");
+      try { return assertCollectionPage<GraphMessage>(value); }
+      catch (error) {
+        this.graph.recordNonHttpFailure("header_enrichment", "invalid_shape");
+        throw error;
+      }
+    };
+    let pageSize = input.pageSize;
+    let fallback = false;
+    let page: GraphCollectionPage<GraphMessage>;
+    try { page = await read(input.nextLink ?? firstPath(pageSize)); }
+    catch (error) {
+      const metrics = this.graph.getMetrics();
+      const invalid = error instanceof MicrosoftGraphMalformedResponseError &&
+        metrics.lastNonHttpFailureOperation === "header_enrichment" &&
+        ["invalid_json", "invalid_shape"].includes(metrics.lastNonHttpFailureCategory ?? "");
+      if (pageSize !== 500 || !(invalid || error instanceof MicrosoftGraphClientResponseError && error.status === 413)) throw error;
+      pageSize = 100; fallback = true;
+      page = await read(firstPath(pageSize));
+    }
+    this.graphPages++;
+    const folders = folderIndexFromCleanupContext(input.folders);
+    const records = new Map<string, NormalizedMailboxRecord | undefined>();
+    for (const message of page.value) {
+      if (!message || typeof message !== "object") continue;
+      try {
+        if (typeof message.id !== "string" || !input.pendingIds.has(message.id)) continue;
+        // Ambiguous duplicate IDs and incomplete headers never supply evidence.
+        if (records.has(message.id) || !Array.isArray(message.internetMessageHeaders) ||
+            !["low", "normal", "high"].includes(String(message.importance)) ||
+            typeof message.isDraft !== "boolean" || typeof message.subject !== "string" ||
+            typeof message.conversationId !== "string" || !message.conversationId ||
+            !Array.isArray(message.categories) || message.categories.some(category => typeof category !== "string") ||
+            message.internetMessageHeaders.some(header => !header || typeof header !== "object" ||
+              typeof header.name !== "string" || typeof header.value !== "string")) {
+          records.set(message.id, undefined);
+          continue;
+        }
+        records.set(message.id, normalizeMicrosoftMessage(message, folders));
+      } finally { message.internetMessageHeaders = undefined; }
+    }
+    page.value.length = 0;
+    return { records, nextLink: page["@odata.nextLink"], pageSize, fallback };
+  }
+
   async *searchCleanupGroup(_input: SearchCleanupGroupInput): AsyncIterable<SearchCleanupGroupBatch> {
     void _input;
     throw new Error("Outlook cleanup is not available.");

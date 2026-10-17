@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createOutlookProgressiveState, applyOutlookEvidence, snapshotOutlookProgressive, outlookVerification, verifiedOutlookMessageIds } from "@/lib/domain/outlook-progressive";
+import { createOutlookProgressiveState, applyOutlookEvidence, applyOutlookCollectionRecord, snapshotOutlookProgressive, outlookVerification, verifiedOutlookMessageIds } from "@/lib/domain/outlook-progressive";
 import { StreamingReportAggregator } from "@/lib/domain/streaming-aggregator";
 import type { NormalizedMailboxRecord } from "@/lib/domain/types";
 
@@ -65,5 +65,39 @@ describe("progressive Outlook classifier safety", () => {
     const state = createOutlookProgressiveState(records, new Set(), now);
     expect(state.records[state.queue[0]].record.senderAddress).toBe("largest@example.test");
     expect(state.queue).toHaveLength(13);
+  });
+  it.each([
+    { isStarred: true }, { isImportant: true }, { isSent: true }, { isDraft: true },
+    { isDeleted: true, isExcludedMailboxLocation: true }, { isExcludedMailboxLocation: true },
+    { subjectProtection: "transactional" as const }, { subjectProtection: "security_account" as const },
+    { receivedAt: new Date(now) }, { conversationId: "participated" }, { hasUncertainMetadata: true }
+  ])("rechecks current collection metadata rather than trusting the old base protection: %j", protection => {
+    const participated = new Set(["participated"]);
+    const state = createOutlookProgressiveState([record(1), record(2), record(3)], participated, now);
+    applyOutlookCollectionRecord(state, 0, record(1, { ...evidence, ...protection }));
+    const report = snapshotOutlookProgressive(state, participated);
+    expect(report.totals).toMatchObject({ messages: 3, cleanupCandidates: 0, protectedMessages: 1 });
+    expect(verifiedOutlookMessageIds(state, report, participated)).toEqual([]);
+  });
+  it("joins exact candidates only, applies current categories, and never transfers evidence to siblings", () => {
+    const state = createOutlookProgressiveState([record(1), record(2), record(3), record(4, { isStarred: true })], new Set(), now);
+    applyOutlookCollectionRecord(state, 3, record(4, evidence));
+    applyOutlookCollectionRecord(state, 0, record(99, evidence));
+    applyOutlookCollectionRecord(state, 1, record(2, { ...evidence, userLabels: ["Keep"] }));
+    applyOutlookCollectionRecord(state, 2, record(3, { hasListUnsubscribe: false }));
+    expect(snapshotOutlookProgressive(state, new Set()).totals.cleanupCandidates).toBe(0);
+    expect(state.records[3].record.isStarred).toBe(true);
+    expect(state.records[0].verification).toBe("failed");
+    expect(JSON.stringify(state)).not.toContain("private-list-id");
+  });
+  it("uses only the exact current message's evidence and is idempotent on replay", () => {
+    const state = createOutlookProgressiveState([record(1), record(2), record(3)], new Set(), now);
+    applyOutlookCollectionRecord(state, 0, record(1, evidence));
+    applyOutlookCollectionRecord(state, 1, record(2));
+    const before = snapshotOutlookProgressive(state, new Set());
+    expect(before.totals).toMatchObject({ messages: 3, cleanupCandidates: 1, reviewMessages: 2 });
+    applyOutlookCollectionRecord(state, 0, record(1, evidence));
+    expect(snapshotOutlookProgressive(state, new Set()).totals).toEqual(before.totals);
+    expect(verifiedOutlookMessageIds(state, before, new Set())).toEqual(["message-1"]);
   });
 });

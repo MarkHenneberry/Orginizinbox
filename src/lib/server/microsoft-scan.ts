@@ -21,7 +21,7 @@ import {
 } from "@/lib/server/live-scan-store";
 import { startProviderScanWorkflow } from "@/lib/server/provider-scan-workflow-start";
 import { createProviderRequestCoordinator } from "@/lib/server/provider-request-coordinator";
-import { applyOutlookEvidence, createOutlookProgressiveState, outlookVerification, snapshotOutlookProgressive } from "@/lib/domain/outlook-progressive";
+import { applyOutlookCollectionRecord, applyOutlookEvidence, createOutlookProgressiveState, outlookVerification, snapshotOutlookProgressive } from "@/lib/domain/outlook-progressive";
 import type { NormalizedMailboxRecord } from "@/lib/domain/types";
 import type { LiveScanSession } from "@/lib/server/live-scan-store";
 
@@ -303,28 +303,54 @@ async function advanceMicrosoftEnrichment(input: { userId: string; providerConne
   const state = input.session.outlookProgressive!;
   const progress = input.session.progress;
   const participated = input.session.participatedConversationIds ?? new Set<string>();
-  const unitStarted = performance.now();
   let unavailable = input.session.reportStale === true;
   let provider: MicrosoftProvider | undefined;
+  let requestMs = 0;
+  let coordinationMs = 0;
   try {
     if (!unavailable) {
       const active = await getActiveMicrosoftConnection(input.userId, input.providerConnectionId);
       if (!active) throw new Error("Connection unavailable.");
+      const coordinate = createProviderRequestCoordinator(active.connection.id, {
+        fenceAfterClaimOnly: process.env.NODE_ENV === "production",
+        beforeRequest: createScanRequestFence(progress.scanId, input.lockOwner, "microsoft")
+      });
       provider = new MicrosoftProvider(active.accessToken, {
         refreshAccessToken: () => forceRefreshMicrosoftConnection(input.userId, input.providerConnectionId),
-        requestCoordinator: createProviderRequestCoordinator(active.connection.id, {
-          fenceAfterClaimOnly: process.env.NODE_ENV === "production",
-          beforeRequest: createScanRequestFence(progress.scanId, input.lockOwner, "microsoft")
-        })
+        requestCoordinator: async request => {
+          const started = performance.now();
+          let transportMs = 0;
+          try {
+            return await coordinate(async () => {
+              const transportStarted = performance.now();
+              try { return await request(); }
+              finally { transportMs += performance.now() - transportStarted; }
+            });
+          } finally {
+            requestMs += transportMs;
+            coordinationMs += performance.now() - started - transportMs;
+          }
+        }
       });
-      // One durable unit handles at most ten sequential 20-request Graph batches.
-      // The scan lease is the sole queue owner; re-entry skips committed entries.
-      const pending = state.queue.filter(index => state.records[index].verification === "pending").slice(0, 200);
-      for (let offset = 0; offset < pending.length; offset += 20) {
-        if (offset > 0 && performance.now() - unitStarted >= 20_000) break;
-        const indices = pending.slice(offset, offset + 20);
-        const evidence = await provider.getHeaderEvidence(indices.map(index => state.records[index].record.providerMessageId));
-        indices.forEach((index, position) => applyOutlookEvidence(state, index, evidence[position]));
+      // Cursor, normalized results and aggregates commit together under the scan lease.
+      // A lost checkpoint replays only read-only work; committed exact IDs are skipped.
+      const pending = new Map(state.queue.filter(index => state.records[index].verification === "pending")
+        .map(index => [state.records[index].record.providerMessageId, index]));
+      const sweep = input.session.outlookEnrichment ?? {
+        pageSize: 500 as const, folders: await provider.getCleanupSafetyContext()
+      };
+      const page = await provider.getEnrichmentCollectionPage({ ...sweep, pendingIds: new Set(pending.keys()) });
+      for (const [id, record] of page.records) {
+        const index = pending.get(id);
+        if (index !== undefined) applyOutlookCollectionRecord(state, index, record);
+      }
+      input.session.outlookEnrichment = { folders: sweep.folders, nextLink: page.nextLink, pageSize: page.pageSize };
+      progress.enrichmentCollectionPages = (progress.enrichmentCollectionPages ?? 0) + 1;
+      progress.enrichmentPageFallbacks = (progress.enrichmentPageFallbacks ?? 0) + Number(page.fallback);
+      if (!page.nextLink) {
+        for (const index of state.queue) {
+          if (state.records[index].verification === "pending") applyOutlookEvidence(state, index, undefined);
+        }
       }
     }
   } catch (error) {
@@ -334,7 +360,14 @@ async function advanceMicrosoftEnrichment(input: { userId: string; providerConne
   const metrics = provider?.getScanMetrics();
   progress.graphRequests = (progress.graphRequests ?? 0) + (metrics?.requests ?? 0);
   progress.graphHeaderEnrichmentRequests = (progress.graphHeaderEnrichmentRequests ?? 0) + (metrics?.requests ?? 0);
-  progress.enrichmentBatchRequests = (progress.enrichmentBatchRequests ?? 0) + (metrics?.requests ?? 0);
+  progress.enrichmentRequests = (progress.enrichmentRequests ?? 0) + (metrics?.requests ?? 0);
+  progress.enrichmentResponseBodyJsonMs = (progress.enrichmentResponseBodyJsonMs ?? 0) + (metrics?.responseBodyJsonMs ?? 0);
+  progress.enrichmentRequestMs = (progress.enrichmentRequestMs ?? 0) + requestMs;
+  progress.enrichmentCoordinationMs = (progress.enrichmentCoordinationMs ?? 0) + coordinationMs;
+  progress.enrichmentRetries = (progress.enrichmentRetries ?? 0) + (metrics?.retries ?? 0);
+  progress.enrichmentThrottles = (progress.enrichmentThrottles ?? 0) + (metrics?.throttles429 ?? 0);
+  progress.enrichmentThrottleWaitMs = (progress.enrichmentThrottleWaitMs ?? 0) + (metrics?.throttleWaitMs ?? 0);
+  progress.graphPages = (progress.graphPages ?? 0) + (metrics?.graphPages ?? 0);
   progress.graphRetries = (progress.graphRetries ?? 0) + (metrics?.retries ?? 0);
   progress.graphTokenRefreshes = (progress.graphTokenRefreshes ?? 0) + (metrics?.tokenRefreshes ?? 0);
   progress.graph429Throttles = (progress.graph429Throttles ?? 0) + (metrics?.throttles429 ?? 0);
@@ -357,13 +390,18 @@ async function advanceMicrosoftEnrichment(input: { userId: string; providerConne
   input.session.report = snapshotOutlookProgressive(state, participated, process.env.NODE_ENV !== "production");
   await setLiveScan(input.userId, { ...input.session, expiresAt: nextExpiry() }, "microsoft", input.lockOwner);
   console.info("Outlook suggestion verification metrics", {
+    stage: "enrichment", enrichmentMode: "collection_full_headers",
     reportUsableMs: progress.reportUsableMs, baseMessages: progress.processed,
     baseGraphPages: progress.baseGraphPages, baseGraphRequests: progress.baseGraphRequests,
-    candidates: progress.outlookVerification.candidates, checked: progress.outlookVerification.checked,
+    enrichmentCandidates: progress.outlookVerification.candidates, messagesEnriched: progress.graphMessagesEnriched,
+    checked: progress.outlookVerification.checked,
     failed: progress.outlookVerification.failed, status: progress.outlookVerification.status,
     leftInReview: progress.outlookVerification.candidates - progress.outlookVerification.checked + progress.outlookVerification.failed,
-    batches: progress.enrichmentBatchRequests, enrichmentDurationMs: progress.enrichmentDurationMs,
-    retries: progress.graphRetries, throttles: progress.graph429Throttles, durationMs: progress.durationMs
+    enrichmentCollectionPages: progress.enrichmentCollectionPages, enrichmentRequests: progress.enrichmentRequests,
+    responseBodyJsonMs: progress.enrichmentResponseBodyJsonMs, requestMs: progress.enrichmentRequestMs,
+    coordinationMs: progress.enrichmentCoordinationMs, enrichmentPageFallbacks: progress.enrichmentPageFallbacks,
+    enrichmentDurationMs: progress.enrichmentDurationMs, retries: progress.enrichmentRetries,
+    throttles: progress.enrichmentThrottles, throttleWaitMs: progress.enrichmentThrottleWaitMs, totalDurationMs: progress.durationMs
   });
 }
 

@@ -5,6 +5,7 @@ import { Prisma, type EmailProviderName, type PrismaClient, type ScanState } fro
 import type { InboxReport } from "@/lib/domain/types";
 import type { GmailScalableCleanupTarget } from "@/lib/providers/gmail/scalable-targets";
 import type { OutlookProgressiveState, OutlookVerification } from "@/lib/domain/outlook-progressive";
+import type { MicrosoftCleanupSafetyContext } from "@/lib/providers/microsoft/provider";
 import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { decryptCleanupState, encryptCleanupState } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
@@ -21,6 +22,15 @@ export type BenchmarkProgress = {
   baseGraphPages?: number;
   baseGraphRequests?: number;
   enrichmentBatchRequests?: number;
+  enrichmentCollectionPages?: number;
+  enrichmentRequests?: number;
+  enrichmentResponseBodyJsonMs?: number;
+  enrichmentRequestMs?: number;
+  enrichmentCoordinationMs?: number;
+  enrichmentRetries?: number;
+  enrichmentThrottles?: number;
+  enrichmentThrottleWaitMs?: number;
+  enrichmentPageFallbacks?: number;
   phase?: "preparing" | "sent_conversations" | "messages";
   scanId: string;
   provider: LiveScanProvider;
@@ -95,6 +105,11 @@ export type BenchmarkProgress = {
 
 export type LiveScanSession = {
   outlookProgressive?: OutlookProgressiveState;
+  outlookEnrichment?: {
+    nextLink?: string;
+    pageSize: 500 | 100;
+    folders: MicrosoftCleanupSafetyContext;
+  };
   progress: BenchmarkProgress;
   report?: InboxReport;
   participatedConversationIds?: Set<string>;

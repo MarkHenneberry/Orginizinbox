@@ -46,6 +46,22 @@ export function applyOutlookEvidence(state: OutlookProgressiveState, index: numb
   });
 }
 
+export function applyOutlookCollectionRecord(state: OutlookProgressiveState, index: number, record: NormalizedMailboxRecord | undefined) {
+  const target = state.records[index];
+  if (!target || target.verification !== "pending") return;
+  if (!record || record.provider !== "microsoft" || record.providerMessageId !== target.record.providerMessageId) {
+    applyOutlookEvidence(state, index, undefined);
+    return;
+  }
+  const original = target.record;
+  // Keep the frozen sender group; an unexpected identity change is not cleanup evidence.
+  target.record = { ...record, senderAddress: original.senderAddress,
+    senderDisplayName: original.senderDisplayName, senderDomain: original.senderDomain,
+    hasUncertainMetadata: record.hasUncertainMetadata || record.senderAddress !== original.senderAddress,
+    listId: undefined, hasListUnsubscribe: false, precedence: undefined, autoSubmitted: undefined };
+  applyOutlookEvidence(state, index, record);
+}
+
 export function snapshotOutlookProgressive(state: OutlookProgressiveState, participated: ReadonlySet<string>, includeDiagnostics = false): InboxReport {
   const aggregator = new StreamingReportAggregator({ now: new Date(state.assessedAt), participatedConversationIds: participated, includeDiagnostics });
   const pending = new Map<string, number>();
