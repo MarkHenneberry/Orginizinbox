@@ -15,10 +15,9 @@ import {
   outlookCleanupChunkSize
 } from "@/lib/domain/outlook-cleanup";
 import { assessMessage } from "@/lib/domain/recommendations";
-import { verifiedOutlookMessageIds } from "@/lib/domain/outlook-progressive";
+import { buildOutlookCleanupSenderGroups, outlookCandidatePool } from "@/lib/domain/outlook-report";
 import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { MicrosoftProvider } from "@/lib/providers/microsoft/provider";
-import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
 import { sha256Base64Url } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
 import { retrySerializableTransaction } from "@/lib/server/retry-serializable-transaction";
@@ -49,14 +48,13 @@ export class OutlookCleanupError extends Error {
 
 export type OutlookCleanupProviderPort = Pick<
   MicrosoftProvider,
-  | "scanMetadata"
   | "scanParticipatedConversationIds"
   | "getCleanupSafetyContext"
   | "getDeletedItemsFolderId"
   | "getCleanupMessages"
   | "moveCleanupMessages"
   | "verifyCleanupMessageLocations"
-> & { getScanMetrics?: () => { requests: number } };
+> & { getScanMetrics?: () => { requests: number; subrequests?: number; retries?: number; throttles429?: number; responseBodyJsonMs?: number } };
 
 export { getOutlookCleanupBatchSize } from "@/lib/domain/outlook-cleanup";
 
@@ -68,18 +66,18 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
     !isLiveReportUsable(liveScan) ||
     liveScan.progress.provider !== "microsoft" ||
     liveScan.reportStale ||
-    !liveScan.participatedConversationIds
+    !liveScan.participatedConversationIds || !liveScan.outlookBase
   ) throw new OutlookCleanupError("Run a fresh Outlook scan before cleanup.", 409);
 
-  const groups = buildCleanupSenderGroups(liveScan.report.senders);
+  const groups = buildOutlookCleanupSenderGroups(liveScan.report.senders);
   const groupIndices = parseGroupIndices(input.groupIndices, groups.length);
   const selectedGroups = groupIndices.map((index) => groups[index]);
   if (selectedGroups.some((group) => !group?.eligible)) {
-    throw new OutlookCleanupError("Every selected sender group must still be Suggested.", 409);
+    throw new OutlookCleanupError("Every selected sender group must still have potential cleanup messages.", 409);
   }
   const selectedReadyCount = selectedGroups.reduce((total, group) => total + group.cleanupCandidateCount, 0);
   if (requested > selectedReadyCount) {
-    throw new OutlookCleanupError("The selected groups do not contain that many Suggested messages.", 409);
+    throw new OutlookCleanupError("The selected groups do not contain that many potential cleanup messages.", 409);
   }
 
   const connection = await getActiveMicrosoftConnection(session.userId, session.providerConnectionId);
@@ -132,11 +130,9 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
       expiresAt: cleanupStateExpiryFor({ now, undoAvailable: false, terminal: false })
     },
     payload: {
-      ...(liveScan.outlookProgressive ? {
-        reportVerifiedMessageIds: verifiedOutlookMessageIds(liveScan.outlookProgressive,
-          { ...liveScan.report, senders: selectedGroups.map(group => liveScan.report.senders[group.index]) },
-          liveScan.participatedConversationIds).slice(0, requested)
-      } : {}),
+      verificationCandidates: outlookCandidatePool(liveScan.outlookBase, liveScan.participatedConversationIds,
+        selectedGroups.map(group => ({ groupIndex: group.index, senderKey: liveScan.report.senders[group.index].senderKey }))),
+      verificationCursor: 0,
       scanId: liveScan.progress.scanId,
       providerConnectionId: connection.connection.id,
       selectedSenders: selectedGroups.map((group) => ({
@@ -329,7 +325,7 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
     };
 
     const result = operation === "prepare"
-      ? (await prepareOutlookJob(job, provider, save), { outcome: "stop" as const })
+      ? (await prepareOutlookJob(job, provider, save, 1), { outcome: job.view.status === "resolving" ? "continue" as const : "stop" as const })
       : operation === "cleanup"
         ? await executeOutlookMoves(job, provider, save, async () => {
             await markLiveReportStale(job!.userId, "microsoft");
@@ -360,41 +356,80 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
 export async function prepareOutlookJob(
   job: OutlookCleanupStoredJob,
   provider: OutlookCleanupProviderPort,
-  save: () => Promise<void>
+  save: () => Promise<void>,
+  maxBatches = Number.POSITIVE_INFINITY
 ) {
-  if (!job.payload.targets.length && (job.view.status === "created" || job.view.status === "resolving")) {
-    job.view.status = "resolving";
-    await save();
+  if (job.payload.verificationCandidates) {
+    if (!["created", "resolving"].includes(job.view.status)) return;
     normalizeOutlookCleanupMetrics(job);
-    const targets = await measureOutlookCleanupPhase(job, provider, "preflight", async () => {
-      const selected = new Map(job.payload.selectedSenders.map((sender) => [sender.senderKey.toLowerCase(), sender.groupIndex]));
-      const participated = await provider.scanParticipatedConversationIds({ batchSize: 100 });
-      job.payload.participatedConversationIds = [...participated];
-      const frozenTargets: OutlookCleanupTarget[] = [];
-      const seenMessageIds = new Set<string>();
-      const allowedIds = job.payload.reportVerifiedMessageIds ? new Set(job.payload.reportVerifiedMessageIds) : undefined;
-      for await (const batch of provider.scanMetadata({ batchSize: 100, limit: "full" })) {
-        for (const record of batch.records) {
-          if (allowedIds && !allowedIds.has(record.providerMessageId)) continue;
-          const groupIndex = selected.get(record.senderAddress.toLowerCase());
-          if (groupIndex === undefined) continue;
-          if (!assessMessage(record, { participatedConversationIds: participated }).eligibleForCleanup) continue;
-          if (seenMessageIds.has(record.providerMessageId)) continue;
-          seenMessageIds.add(record.providerMessageId);
-          frozenTargets.push({ originalMessageId: record.providerMessageId, groupIndex, state: "frozen" });
-          if (frozenTargets.length === job.view.requested) break;
-        }
-        if (frozenTargets.length === job.view.requested) break;
+    job.view.status = "resolving";
+    const stats = job.view.verification ??= { candidatesChecked: 0, approved: 0, excluded: 0,
+      exactHeaderRequests: 0, batchRequests: 0, retries: 0, throttles: 0, responseBodyJsonMs: 0, verificationDurationMs: 0 };
+    const started = performance.now();
+    const before = provider.getScanMetrics?.();
+    try {
+      if (!job.payload.verificationContext) {
+        job.payload.verificationContext = await provider.getCleanupSafetyContext();
+        const participated = await provider.scanParticipatedConversationIds({ batchSize: 100 });
+        job.payload.participatedConversationIds = [...new Set([...job.payload.participatedConversationIds, ...participated])];
+        await save();
       }
-      return frozenTargets;
-    });
-    if (targets.length !== job.view.requested) {
-      job.view.status = "failed";
-      job.view.failed = job.view.requested;
-    } else {
-      job.payload.targets = targets;
-      job.view.status = "ready";
+      const selected = new Map(job.payload.selectedSenders.map(sender => [sender.groupIndex, sender.senderKey]));
+      const participated = new Set(job.payload.participatedConversationIds);
+      const seen = new Set(job.payload.targets.map(target => target.originalMessageId));
+      let batches = 0;
+      while (job.payload.targets.length < job.view.requested && (job.payload.verificationCursor ?? 0) < job.payload.verificationCandidates.length && batches < maxBatches) {
+        const candidates = job.payload.verificationCandidates.slice(job.payload.verificationCursor ?? 0,
+          (job.payload.verificationCursor ?? 0) + Math.min(20, job.view.requested - job.payload.targets.length));
+        const batchBefore = provider.getScanMetrics?.();
+        let messages;
+        try {
+          messages = await provider.getCleanupMessages(candidates.map(candidate => candidate.messageId), job.payload.verificationContext, true);
+        } finally {
+          const batchAfter = provider.getScanMetrics?.();
+          stats.batchRequests += batchBefore && batchAfter ? batchAfter.requests - batchBefore.requests : 1;
+          stats.exactHeaderRequests += batchBefore?.subrequests !== undefined && batchAfter?.subrequests !== undefined
+            ? batchAfter.subrequests - batchBefore.subrequests : candidates.length;
+        }
+        for (const [index, candidate] of candidates.entries()) {
+          const current = messages[index];
+          stats.candidatesChecked++;
+          if (!current || current.record.providerMessageId !== candidate.messageId || current.record.provider !== "microsoft" ||
+              current.record.senderAddress !== selected.get(candidate.groupIndex) || current.record.isDeleted || current.record.userLabels?.length || seen.has(candidate.messageId) ||
+              !assessMessage(current.record, { participatedConversationIds: participated }).eligibleForCleanup) {
+            stats.excluded++;
+            continue;
+          }
+          seen.add(candidate.messageId);
+          job.payload.targets.push({ originalMessageId: candidate.messageId, groupIndex: candidate.groupIndex, state: "frozen" });
+        }
+        job.payload.verificationCursor = (job.payload.verificationCursor ?? 0) + candidates.length;
+        stats.approved = job.payload.targets.length;
+        job.view.approved = stats.approved;
+        batches++;
+        await save();
+      }
+      if (job.payload.targets.length === job.view.requested || (job.payload.verificationCursor ?? 0) >= job.payload.verificationCandidates.length) {
+        job.view.status = job.payload.targets.length ? "ready" : "failed";
+        job.view.totalBatches = getOutlookCleanupTotalBatches(job.view.requested, job.payload.targets.length);
+        job.view.totalChunks = Math.ceil(job.payload.targets.length / outlookCleanupChunkSize);
+      }
+    } finally {
+      const after = provider.getScanMetrics?.();
+      stats.retries += (after?.retries ?? 0) - (before?.retries ?? 0);
+      stats.throttles += (after?.throttles429 ?? 0) - (before?.throttles429 ?? 0);
+      stats.responseBodyJsonMs += (after?.responseBodyJsonMs ?? 0) - (before?.responseBodyJsonMs ?? 0);
+      stats.verificationDurationMs += Math.round(performance.now() - started);
+      job.view.timingMs.preflight += Math.round(performance.now() - started);
+      job.view.httpRoundTripsByPhase.preflight += (after?.requests ?? 0) - (before?.requests ?? 0);
     }
+    await save();
+    console.info("Outlook targeted verification metrics", { requestedCount: job.view.requested, ...stats });
+    return;
+  }
+  // An older unprepared job has no frozen base pool: require a fresh review, never rescan headers.
+  if (["created", "resolving"].includes(job.view.status)) {
+    job.view.status = "failed";
     await save();
   }
 }
@@ -480,7 +515,7 @@ export async function executeOutlookMoves(
       }
       target.originalFolderId = current.parentFolderId;
       target.state = "move_dispatching";
-      job.view.approved += 1;
+      if (!job.view.verification) job.view.approved += 1;
       approvedTargets.push(target);
     }
     job.payload.activeMoveBatchIndexes = targetChunk.map((target) => job.payload.targets.indexOf(target));

@@ -1,5 +1,5 @@
 export const outlookCleanupMaximum = 500;
-export const outlookCleanupCountOptions = [5, 10, 25, 500] as const;
+export const outlookCleanupCountOptions = [5, 25, 100, 500] as const;
 export const outlookCleanupChunkSize = 100;
 
 export function getOutlookCleanupBatchSize(requested: number) {
@@ -45,6 +45,11 @@ export type OutlookCleanupTimingMs = {
 export type OutlookCleanupHttpRoundTrips = OutlookCleanupTimingMs;
 
 export type OutlookCleanupJobView = {
+  verification?: {
+    candidatesChecked: number; approved: number; excluded: number;
+    exactHeaderRequests: number; batchRequests: number; retries: number; throttles: number;
+    responseBodyJsonMs: number; verificationDurationMs: number;
+  };
   provider: "microsoft";
   id: string;
   status: OutlookCleanupStatus;
@@ -158,6 +163,12 @@ export function formatOutlookCleanupDiagnostic(job: OutlookCleanupJobView) {
     `Undo verification HTTP round trips: ${job.httpRoundTripsByPhase?.undoVerification ?? 0}`,
     `Graph subrequests: ${job.graphSubrequests ?? job.graphRequests}`,
     `Retries: ${job.retries}`,
+    ...(job.verification ? ["", "Selected-message verification",
+      `Candidates checked: ${job.verification.candidatesChecked}`, `Approved: ${job.verification.approved}`,
+      `Left alone: ${job.verification.excluded}`, `Exact header GETs: ${job.verification.exactHeaderRequests}`,
+      `Batch requests: ${job.verification.batchRequests}`, `Retries: ${job.verification.retries}`,
+      `Throttles: ${job.verification.throttles}`, `Response body/json: ${job.verification.responseBodyJsonMs} ms`,
+      `Duration: ${job.verification.verificationDurationMs} ms`] : []),
     "",
     "Timing",
     `Preflight: ${job.timingMs?.preflight ?? 0} ms`,

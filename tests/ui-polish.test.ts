@@ -99,7 +99,7 @@ describe("polished shared UI preserves product actions", () => {
       initialOutlookJob: status === "selection" ? undefined : job
     }));
     if (status === "selection") expect(html).toContain("Check 500 messages");
-    if (status === "ready") expect(html).toContain("Move up to 500 to Deleted Items");
+    if (status === "ready") expect(html).toContain("Move 500 to Deleted Items");
     if (status === "complete" || status === "uncertain") {
       expect(html).toContain('dateTime="2026-09-16T12:10:00.000Z"');
       expect(html).toContain(status === "uncertain" ? "Recovery Undo" : "Undo until");

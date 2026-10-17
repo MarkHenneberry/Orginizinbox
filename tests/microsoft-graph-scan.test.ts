@@ -270,16 +270,19 @@ describe("Microsoft Graph metadata scan", () => {
   it("fetches exact headers in bounded JSON batches, correlates response order and rejects mismatched or missing evidence", async () => {
     const fetchImpl = vi.fn(async (_input: unknown, init?: RequestInit) => {
       const requests = JSON.parse(String(init?.body)).requests as Array<{ id: string; method: string; url: string }>;
-      expect(requests.every(request => request.method === "GET" && new URL(request.url, "https://graph.microsoft.com").searchParams.get("$select") === "id,internetMessageHeaders")).toBe(true);
+      expect(requests.length).toBeLessThanOrEqual(20);
+      expect(requests.every(request => request.method === "GET" && new URL(request.url, "https://graph.microsoft.com").searchParams.get("$select")?.includes("internetMessageHeaders"))).toBe(true);
       return jsonResponse({ responses: [...requests].reverse().map(request => ({ id: request.id, status: 200,
-        body: { id: request.id === "1" ? "wrong-message" : `message-${request.id}`,
-          ...(request.id === "2" ? {} : { internetMessageHeaders: [{ name: "List-Id", value: "fixture-list" }, { name: "X-Secret", value: "discard" }] }) } })) });
+        body: message(request.id === "1" ? "wrong-message" : `message-${request.id}`, "inbox-id", "conversation", {
+          internetMessageHeaders: request.id === "2" ? undefined : [{ name: "List-Id", value: "fixture-list" }, { name: "X-Secret", value: "discard" }]
+        }) })) });
     });
     const provider = new MicrosoftProvider("fixture", { fetchImpl: fetchImpl as typeof fetch });
-    const result = await provider.getHeaderEvidence(["message-0", "message-1", "message-2"]);
-    expect(result[0]?.listId).toBe("fixture-list"); expect(result[1]).toBeUndefined(); expect(result[2]).toBeUndefined();
+    const context = { knownFolderIds: ["inbox-id"], kindByFolderId: [], sentFolderIds: [], deletedItemsFolderId: "deleted-id" };
+    const result = await provider.getCleanupMessages(["message-0", "message-1", "message-2"], context, true);
+    expect(result[0]?.record.listId).toBe("fixture-list"); expect(result[1]).toBeUndefined(); expect(result[2]).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain("discard");
-    await expect(provider.getHeaderEvidence(Array.from({ length: 21 }, (_, i) => String(i)))).rejects.toThrow();
+    await expect(provider.getCleanupMessages(Array.from({ length: 21 }, (_, i) => String(i)), context, true)).rejects.toThrow();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
   it("scans one sequential mailbox-wide full-evidence chain and preserves folder safety", async () => {

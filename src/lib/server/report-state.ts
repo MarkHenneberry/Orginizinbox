@@ -14,13 +14,11 @@ import type { ReportRecentCleanupAction } from "@/lib/domain/report-recent-actio
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getLiveScan } from "@/lib/server/live-scan-store";
 import { isLiveReportUsable } from "@/lib/domain/report-readiness";
-import type { OutlookVerification } from "@/lib/domain/outlook-progressive";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 import { getSession } from "@/lib/server/session";
 import { getLatestGmailScalableUndoReportContext } from "@/lib/server/gmail-scalable-terminal-report";
 
 export type ActiveReportState = {
-  outlookVerification?: OutlookVerification;
   report: InboxReport;
   source: ReportSource;
   scanId: string;
@@ -61,7 +59,6 @@ export async function getActiveReportStateOrRedirect(): Promise<ActiveReportStat
   }
 
   return {
-    outlookVerification: liveScan.progress.outlookVerification,
     report: sanitizeReportForClient(liveScan.report),
     source: liveScan.progress.provider === "microsoft" ? "microsoft-live" : "gmail-live",
     scanId: liveScan.progress.scanId,

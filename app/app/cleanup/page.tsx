@@ -5,6 +5,7 @@ import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { getProductionCleanupUiState } from "@/lib/server/production-cleanup-ui";
 import { getLiveScan } from "@/lib/server/live-scan-store";
 import { isLiveReportUsable } from "@/lib/domain/report-readiness";
+import { buildOutlookCleanupSenderGroups } from "@/lib/domain/outlook-report";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
 import {
@@ -44,7 +45,7 @@ export default async function CleanupPage() {
             bulkUndoProofEnabled={false} cleanupEnabled={true} legacyCleanupMaximum={0}
             scalableCleanupEnabled={state.provider === "gmail"} countOptions={state.provider === "gmail" ? [250, 500] : [5, 25, 100, 500]}
             developmentMode={false} fixtureMode={false} productionAccess={state.access}
-            groups={report ? publicCleanupGroupsFromReport(report.senders) : []}
+            groups={report ? state.provider === "microsoft" ? buildOutlookCleanupSenderGroups(report.senders) : publicCleanupGroupsFromReport(report.senders) : []}
             initialScalableJob={state.gmailJob} initialOutlookJob={state.outlookJob}
             provider={state.provider!} reportStale={!report || live?.reportStale === true}
           />
@@ -58,7 +59,7 @@ export default async function CleanupPage() {
   }
   const activeReport = await getActiveReportStateOrRedirect();
   const outlook = activeReport.source === "microsoft-live";
-  const groups = publicCleanupGroupsFromReport(activeReport.report.senders);
+  const groups = outlook ? buildOutlookCleanupSenderGroups(activeReport.report.senders) : publicCleanupGroupsFromReport(activeReport.report.senders);
   const outlookCleanupEnabled = outlook && isOutlookCleanupDevelopmentEnabled({
     microsoftOAuthEnabled: runtimeConfig.microsoftOAuthDevEnabled,
     outlookCleanupEnabled: runtimeConfig.outlookCleanupDevEnabled,
@@ -81,7 +82,7 @@ export default async function CleanupPage() {
         <h1 className="m-0 mt-2 text-4xl font-extrabold text-[var(--navy)]">Review cleanup</h1>
         <p className="muted max-w-3xl">
           {outlook
-            ? "Select one or more eligible sender groups, check the combined Suggested messages, and move only the email you approve to Deleted Items."
+            ? "Choose sender groups and an amount to check. We verify each message before you confirm a move to Deleted Items."
             : "Select one or more eligible sender groups, check the combined Suggested messages, and move only the email you approve to Trash."}
         </p>
         <GmailCleanupClient

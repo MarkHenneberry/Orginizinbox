@@ -4,8 +4,7 @@ import { scanStateTtlMs } from "@/lib/domain/transient-retention";
 import { Prisma, type EmailProviderName, type PrismaClient, type ScanState } from "@prisma/client";
 import type { InboxReport } from "@/lib/domain/types";
 import type { GmailScalableCleanupTarget } from "@/lib/providers/gmail/scalable-targets";
-import type { OutlookProgressiveState, OutlookVerification } from "@/lib/domain/outlook-progressive";
-import type { MicrosoftCleanupSafetyContext } from "@/lib/providers/microsoft/provider";
+import type { OutlookBaseState } from "@/lib/domain/outlook-report";
 import { isLiveReportUsable } from "@/lib/domain/report-readiness";
 import { decryptCleanupState, encryptCleanupState } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
@@ -17,20 +16,8 @@ export type LiveScanProvider = "gmail" | "microsoft";
 
 export type BenchmarkProgress = {
   reportUsableMs?: number;
-  outlookVerification?: OutlookVerification;
-  enrichmentDurationMs?: number;
   baseGraphPages?: number;
   baseGraphRequests?: number;
-  enrichmentBatchRequests?: number;
-  enrichmentCollectionPages?: number;
-  enrichmentRequests?: number;
-  enrichmentResponseBodyJsonMs?: number;
-  enrichmentRequestMs?: number;
-  enrichmentCoordinationMs?: number;
-  enrichmentRetries?: number;
-  enrichmentThrottles?: number;
-  enrichmentThrottleWaitMs?: number;
-  enrichmentPageFallbacks?: number;
   phase?: "preparing" | "sent_conversations" | "messages";
   scanId: string;
   provider: LiveScanProvider;
@@ -104,12 +91,7 @@ export type BenchmarkProgress = {
 };
 
 export type LiveScanSession = {
-  outlookProgressive?: OutlookProgressiveState;
-  outlookEnrichment?: {
-    nextLink?: string;
-    pageSize: 500 | 100;
-    folders: MicrosoftCleanupSafetyContext;
-  };
+  outlookBase?: OutlookBaseState;
   progress: BenchmarkProgress;
   report?: InboxReport;
   participatedConversationIds?: Set<string>;
@@ -224,7 +206,7 @@ export class DurableLiveScanStore {
       if (lockOwner && (row.status !== "running" || row.lockOwner !== lockOwner ||
           row.expiresAt <= new Date() || !row.lockExpiresAt || row.lockExpiresAt <= new Date())) return undefined;
       const stored = normalizeSession(session);
-      if (lockOwner && stored.outlookProgressive) {
+      if (lockOwner && stored.outlookBase) {
         stored.reportStale ||= decodeAndValidate(row).reportStale;
       }
       const replaced = await this.repository.replace({
@@ -642,7 +624,7 @@ function isRetryableAcceptanceError(error: unknown) {
 
 export function serializeBenchmark(progress: BenchmarkProgress) {
   return {
-    ...(progress.reportUsableMs !== undefined ? { reportUsableMs: progress.reportUsableMs, outlookVerification: progress.outlookVerification } : {}),
+    ...(progress.reportUsableMs !== undefined ? { reportUsableMs: progress.reportUsableMs } : {}),
     elapsedMs: Math.max(0, (progress.completedAt ?? Date.now()) - progress.startedAt),
     phase: progress.phase,
     scanId: progress.scanId,
@@ -708,7 +690,7 @@ export function serializeBenchmark(progress: BenchmarkProgress) {
 export function serializeScanProgress(progress: BenchmarkProgress) {
   if (process.env.NODE_ENV !== "production") return serializeBenchmark(progress);
   return {
-    ...(progress.reportUsableMs !== undefined ? { reportUsableMs: progress.reportUsableMs, outlookVerification: progress.outlookVerification } : {}),
+    ...(progress.reportUsableMs !== undefined ? { reportUsableMs: progress.reportUsableMs } : {}),
     elapsedMs: Math.max(0, (progress.completedAt ?? Date.now()) - progress.startedAt),
     phase: progress.phase,
     scanId: progress.scanId,

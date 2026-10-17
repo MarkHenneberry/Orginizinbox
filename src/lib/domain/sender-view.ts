@@ -1,4 +1,5 @@
 import type { SenderAggregate } from "./types";
+import { senderCleanupCount, senderRecommendation } from "./outlook-report";
 
 export type SenderSortKey = "emails" | "ready" | "unread" | "oldest" | "storage" | "recommendation";
 
@@ -72,12 +73,12 @@ export function reduceSenderWorkspaceState(
 }
 
 function compareSenders(a: SenderAggregate, b: SenderAggregate, sortKey: SenderSortKey) {
-  if (sortKey === "ready") return b.cleanupCandidateCount - a.cleanupCandidateCount;
+  if (sortKey === "ready") return senderCleanupCount(b) - senderCleanupCount(a);
   if (sortKey === "unread") return b.unreadMessages - a.unreadMessages;
   if (sortKey === "oldest") return a.oldestMessageAt.getTime() - b.oldestMessageAt.getTime();
   if (sortKey === "storage") return b.estimatedEligibleBytes - a.estimatedEligibleBytes;
   if (sortKey === "recommendation") {
-    return recommendationRank[b.cleanupConfidence] - recommendationRank[a.cleanupConfidence];
+    return recommendationRank[senderRecommendation(b)] - recommendationRank[senderRecommendation(a)];
   }
   return b.totalMessages - a.totalMessages;
 }

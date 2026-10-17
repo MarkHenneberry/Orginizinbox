@@ -21,9 +21,8 @@ import {
 } from "@/lib/server/live-scan-store";
 import { startProviderScanWorkflow } from "@/lib/server/provider-scan-workflow-start";
 import { createProviderRequestCoordinator } from "@/lib/server/provider-request-coordinator";
-import { applyOutlookCollectionRecord, applyOutlookEvidence, createOutlookProgressiveState, outlookVerification, snapshotOutlookProgressive } from "@/lib/domain/outlook-progressive";
+import { createOutlookBaseState, snapshotOutlookBase } from "@/lib/domain/outlook-report";
 import type { NormalizedMailboxRecord } from "@/lib/domain/types";
-import type { LiveScanSession } from "@/lib/server/live-scan-store";
 
 export const microsoftScanDefaults = {
   limit: "full" as const,
@@ -54,7 +53,6 @@ export async function createMicrosoftScanSession(input: {
 export async function runMicrosoftScan(input: { scanId: string; lockOwner: string }) {
   const context = await getLiveScanExecutionContext(input.scanId);
   if (!context || context.lockOwner !== input.lockOwner || context.session.progress.provider !== "microsoft") return;
-  if (context.session.outlookProgressive) return advanceMicrosoftEnrichment({ ...context, lockOwner: input.lockOwner });
   const progress = createProgress({ scanId: input.scanId, provider: "microsoft", ...microsoftScanDefaults });
   progress.outlookTransport = context.session.progress.outlookTransport ?? "graph";
   if (progress.outlookTransport === "graph") progress.phase = "preparing";
@@ -211,24 +209,23 @@ async function executeMicrosoftScan(input: {
     const metadataOtherMs = metadataWallMs - metadataFetchMs - metadataCoordinationMs -
       metadataProgressWriteMs - mainMessageResponseBodyJsonMs - normalizationMs - aggregatorWallMs;
 
-    const progressive = createOutlookProgressiveState(baseRecords, participatedConversationIds, input.progress.startedAt);
-    input.progress.outlookVerification = outlookVerification(progressive);
+    const baseState = createOutlookBaseState(baseRecords, input.progress.startedAt);
     input.progress.reportUsableMs = Math.round(performance.now() - started);
     input.progress.baseGraphPages = scanMetrics.graphPages;
     input.progress.baseGraphRequests = scanMetrics.requests;
-    input.progress.status = input.progress.outlookVerification.status === "running" ? "running" : "completed";
-    input.progress.completedAt = input.progress.status === "completed" ? Date.now() : undefined;
+    input.progress.status = "completed";
+    input.progress.completedAt = Date.now();
     input.progress.durationMs = Math.round(performance.now() - started);
     input.progress.messagesPerSecond = throughput(input.progress.processed, input.progress.durationMs);
     input.progress.messagesPerMinute = Math.round((input.progress.messagesPerSecond ?? 0) * 60);
     updateGraphProgress(input.progress, provider);
 
-    const report = snapshotOutlookProgressive(progressive, participatedConversationIds, process.env.NODE_ENV !== "production");
+    const report = snapshotOutlookBase(baseState, participatedConversationIds, process.env.NODE_ENV !== "production");
     await setLiveScan(input.userId, {
       progress: input.progress,
       report,
       participatedConversationIds,
-      outlookProgressive: progressive,
+      outlookBase: baseState,
       expiresAt: nextExpiry()
     }, "microsoft", input.lockOwner);
 
@@ -236,7 +233,7 @@ async function executeMicrosoftScan(input: {
       console.info("Outlook scan metrics", {
         stage: "base",
         reportUsableMs: Math.round(performance.now() - started),
-        enrichmentCandidates: input.progress.outlookVerification.candidates,
+        potentialCleanup: report.totals.potentialCleanup,
         responseBodyJsonMs: Math.round(scanMetrics.responseBodyJsonMs ?? 0),
         mainMessageResponseBodyJsonMs: Math.round(mainMessageResponseBodyJsonMs),
         normalizationMs: Math.round(normalizationMs),
@@ -299,111 +296,6 @@ async function executeMicrosoftScan(input: {
   }
 }
 
-async function advanceMicrosoftEnrichment(input: { userId: string; providerConnectionId: string; session: LiveScanSession; lockOwner: string }) {
-  const state = input.session.outlookProgressive!;
-  const progress = input.session.progress;
-  const participated = input.session.participatedConversationIds ?? new Set<string>();
-  let unavailable = input.session.reportStale === true;
-  let provider: MicrosoftProvider | undefined;
-  let requestMs = 0;
-  let coordinationMs = 0;
-  try {
-    if (!unavailable) {
-      const active = await getActiveMicrosoftConnection(input.userId, input.providerConnectionId);
-      if (!active) throw new Error("Connection unavailable.");
-      const coordinate = createProviderRequestCoordinator(active.connection.id, {
-        fenceAfterClaimOnly: process.env.NODE_ENV === "production",
-        beforeRequest: createScanRequestFence(progress.scanId, input.lockOwner, "microsoft")
-      });
-      provider = new MicrosoftProvider(active.accessToken, {
-        refreshAccessToken: () => forceRefreshMicrosoftConnection(input.userId, input.providerConnectionId),
-        requestCoordinator: async request => {
-          const started = performance.now();
-          let transportMs = 0;
-          try {
-            return await coordinate(async () => {
-              const transportStarted = performance.now();
-              try { return await request(); }
-              finally { transportMs += performance.now() - transportStarted; }
-            });
-          } finally {
-            requestMs += transportMs;
-            coordinationMs += performance.now() - started - transportMs;
-          }
-        }
-      });
-      // Cursor, normalized results and aggregates commit together under the scan lease.
-      // A lost checkpoint replays only read-only work; committed exact IDs are skipped.
-      const pending = new Map(state.queue.filter(index => state.records[index].verification === "pending")
-        .map(index => [state.records[index].record.providerMessageId, index]));
-      const sweep = input.session.outlookEnrichment ?? {
-        pageSize: 500 as const, folders: await provider.getCleanupSafetyContext()
-      };
-      const page = await provider.getEnrichmentCollectionPage({ ...sweep, pendingIds: new Set(pending.keys()) });
-      for (const [id, record] of page.records) {
-        const index = pending.get(id);
-        if (index !== undefined) applyOutlookCollectionRecord(state, index, record);
-      }
-      input.session.outlookEnrichment = { folders: sweep.folders, nextLink: page.nextLink, pageSize: page.pageSize };
-      progress.enrichmentCollectionPages = (progress.enrichmentCollectionPages ?? 0) + 1;
-      progress.enrichmentPageFallbacks = (progress.enrichmentPageFallbacks ?? 0) + Number(page.fallback);
-      if (!page.nextLink) {
-        for (const index of state.queue) {
-          if (state.records[index].verification === "pending") applyOutlookEvidence(state, index, undefined);
-        }
-      }
-    }
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
-    unavailable = true;
-  }
-  const metrics = provider?.getScanMetrics();
-  progress.graphRequests = (progress.graphRequests ?? 0) + (metrics?.requests ?? 0);
-  progress.graphHeaderEnrichmentRequests = (progress.graphHeaderEnrichmentRequests ?? 0) + (metrics?.requests ?? 0);
-  progress.enrichmentRequests = (progress.enrichmentRequests ?? 0) + (metrics?.requests ?? 0);
-  progress.enrichmentResponseBodyJsonMs = (progress.enrichmentResponseBodyJsonMs ?? 0) + (metrics?.responseBodyJsonMs ?? 0);
-  progress.enrichmentRequestMs = (progress.enrichmentRequestMs ?? 0) + requestMs;
-  progress.enrichmentCoordinationMs = (progress.enrichmentCoordinationMs ?? 0) + coordinationMs;
-  progress.enrichmentRetries = (progress.enrichmentRetries ?? 0) + (metrics?.retries ?? 0);
-  progress.enrichmentThrottles = (progress.enrichmentThrottles ?? 0) + (metrics?.throttles429 ?? 0);
-  progress.enrichmentThrottleWaitMs = (progress.enrichmentThrottleWaitMs ?? 0) + (metrics?.throttleWaitMs ?? 0);
-  progress.graphPages = (progress.graphPages ?? 0) + (metrics?.graphPages ?? 0);
-  progress.graphRetries = (progress.graphRetries ?? 0) + (metrics?.retries ?? 0);
-  progress.graphTokenRefreshes = (progress.graphTokenRefreshes ?? 0) + (metrics?.tokenRefreshes ?? 0);
-  progress.graph429Throttles = (progress.graph429Throttles ?? 0) + (metrics?.throttles429 ?? 0);
-  progress.graph429WaitMs = (progress.graph429WaitMs ?? 0) + (metrics?.throttleWaitMs ?? 0);
-  progress.graph401Failures = (progress.graph401Failures ?? 0) + (metrics?.failures401 ?? 0);
-  progress.graph403Failures = (progress.graph403Failures ?? 0) + (metrics?.failures403 ?? 0);
-  progress.graph5xxFailures = (progress.graph5xxFailures ?? 0) + (metrics?.failures5xx ?? 0);
-  progress.enrichmentDurationMs = Math.max(0, Date.now() - progress.startedAt - (progress.reportUsableMs ?? 0));
-  progress.outlookVerification = outlookVerification(state, unavailable);
-  progress.graphMessagesEnriched = progress.outlookVerification.checked - progress.outlookVerification.failed;
-  progress.status = progress.outlookVerification.status === "running" ? "running" : "completed";
-  if (progress.status === "completed") progress.completedAt = Date.now();
-  progress.durationMs = Date.now() - progress.startedAt;
-  const latest = await getLiveScanExecutionContext(progress.scanId);
-  if (latest?.session.reportStale) {
-    input.session.reportStale = true;
-    progress.outlookVerification = outlookVerification(state, true);
-    progress.status = "completed"; progress.completedAt = Date.now();
-  }
-  input.session.report = snapshotOutlookProgressive(state, participated, process.env.NODE_ENV !== "production");
-  await setLiveScan(input.userId, { ...input.session, expiresAt: nextExpiry() }, "microsoft", input.lockOwner);
-  console.info("Outlook suggestion verification metrics", {
-    stage: "enrichment", enrichmentMode: "collection_full_headers",
-    reportUsableMs: progress.reportUsableMs, baseMessages: progress.processed,
-    baseGraphPages: progress.baseGraphPages, baseGraphRequests: progress.baseGraphRequests,
-    enrichmentCandidates: progress.outlookVerification.candidates, messagesEnriched: progress.graphMessagesEnriched,
-    checked: progress.outlookVerification.checked,
-    failed: progress.outlookVerification.failed, status: progress.outlookVerification.status,
-    leftInReview: progress.outlookVerification.candidates - progress.outlookVerification.checked + progress.outlookVerification.failed,
-    enrichmentCollectionPages: progress.enrichmentCollectionPages, enrichmentRequests: progress.enrichmentRequests,
-    responseBodyJsonMs: progress.enrichmentResponseBodyJsonMs, requestMs: progress.enrichmentRequestMs,
-    coordinationMs: progress.enrichmentCoordinationMs, enrichmentPageFallbacks: progress.enrichmentPageFallbacks,
-    enrichmentDurationMs: progress.enrichmentDurationMs, retries: progress.enrichmentRetries,
-    throttles: progress.enrichmentThrottles, throttleWaitMs: progress.enrichmentThrottleWaitMs, totalDurationMs: progress.durationMs
-  });
-}
 
 async function executeMicrosoftImapScan(input: {
   userId: string;

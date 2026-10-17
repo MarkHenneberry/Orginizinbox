@@ -18,6 +18,7 @@ import type { GmailScalableCleanupTarget } from "@/lib/providers/gmail/scalable-
 import { GmailScalableCleanupProvider, type GmailScalableVerificationResult } from "@/lib/providers/gmail/scalable-cleanup-provider";
 import { StreamingReportAggregator } from "@/lib/domain/streaming-aggregator";
 import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
+import { createOutlookBaseState, snapshotOutlookBase } from "@/lib/domain/outlook-report";
 import { postgresAuth } from "./fixtures/postgres-auth";
 import { purgeExpiredUserTransientState } from "@/lib/server/transient-state-purge";
 import { creditSnapshot } from "@/lib/billing/credits";
@@ -79,11 +80,13 @@ async function connection(userId: string, provider: "gmail" | "microsoft") {
     scope: provider === "gmail" ? "https://mail.google.com/" : "Mail.ReadWrite", tokenExpiresAt: new Date(Date.now() + 3600_000) } });
 }
 function session(provider: "gmail" | "microsoft", completed = false, count = 250): LiveScanSession {
+  const base = provider === "microsoft" ? createOutlookBaseState(Array.from({ length: count }, (_, i) => record(`synthetic-outlook-${i}`)), Date.now()) : undefined;
   const aggregator = new StreamingReportAggregator({ participatedConversationIds: new Set() });
   aggregator.processBatch(Array.from({ length: count }, (_, i) => record(`synthetic-message-${i}`, provider)));
   return { progress: { scanId: randomUUID(), provider, status: completed ? "completed" : "running", limit: "full", batchSize: 100,
     processed: completed ? count : 0, startedAt: Date.now(), duplicateStartCount: 0, errors: [], notes: [] },
-    report: completed ? aggregator.snapshot(provider, false) : undefined,
+    report: completed ? base ? snapshotOutlookBase(base, new Set()) : aggregator.snapshot(provider, false) : undefined,
+    outlookBase: base,
     participatedConversationIds: new Set(), expiresAt: Date.now() + 3600_000 };
 }
 async function newScan(c: ProviderConnection, completed = false, count = 250) {

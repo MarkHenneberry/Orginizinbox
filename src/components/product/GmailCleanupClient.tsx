@@ -488,7 +488,7 @@ export function GmailCleanupClient({
     return (
       <>
       {!developmentMode ? <CleanupAccessNotice access={availability.access} /> : null}
-      {!developmentMode && outlookJob.status === "ready" ? <CleanupCreditContext available={availableCredits} requested={outlookJob.requested} reserved /> : null}
+      {!developmentMode && outlookJob.status === "ready" ? <CleanupCreditContext available={availableCredits} requested={outlookJob.verification ? outlookJob.approved : outlookJob.requested} /> : null}
       <OutlookCleanupWorkspace
         activeOperation={activeOperation}
         operationClock={outlookClock}
@@ -550,7 +550,7 @@ export function GmailCleanupClient({
             <strong className="block text-lg text-[var(--navy)]">
               {selectedGroupIndices.size.toLocaleString()} eligible senders selected
             </strong>
-            <span className="muted block text-sm">{selectedReadyCount.toLocaleString()} Suggested emails</span>
+            <span className="muted block text-sm">{selectedReadyCount.toLocaleString()} {provider === "microsoft" ? "potential cleanup emails" : "Suggested emails"}</span>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_190px]">
             <label className="grid gap-1 text-xs font-bold text-[var(--navy)]" htmlFor="cleanup-search">Search
@@ -572,7 +572,7 @@ export function GmailCleanupClient({
                 onChange={(event) => setSortKey(event.target.value as CleanupSortKey)}
                 value={sortKey}
               >
-                <option value="ready">Most suggested</option>
+                <option value="ready">{provider === "microsoft" ? "Most potential cleanup" : "Most suggested"}</option>
                 <option value="emails">Most emails</option>
                 <option value="unread">Most unread</option>
                 <option value="oldest">Oldest</option>
@@ -626,17 +626,17 @@ export function GmailCleanupClient({
                   <span className="min-w-0">
                     <strong className="block truncate text-[var(--navy)]">{group.displayName}</strong>
                     <span className="muted block truncate text-xs">{group.secondaryLabel}</span>
-                    {!group.eligible ? <span className="block text-xs font-bold">{ineligibleLabel(group)}</span> : null}
+                    {!group.eligible ? <span className="block text-xs font-bold">{provider === "microsoft" ? "Review or keep" : ineligibleLabel(group)}</span> : null}
                   </span>
                 </span>
                 <span>
                   <span className={`inline-flex border px-2 py-1 text-xs font-extrabold ${recommendationBadgeClass(group)}`}>
                     {recommendationLabel(group)}
                   </span>
-                  {!group.eligible ? <span className="mt-1 block text-xs">{ineligibleExplanation(group)}</span> : null}
+                  {!group.eligible ? <span className="mt-1 block text-xs">{provider === "microsoft" ? "These messages need a closer look and are not included in potential cleanup." : ineligibleExplanation(group)}</span> : null}
                 </span>
                 <Metric label="Total" value={group.totalMessages} />
-                <Metric label="Suggested" value={group.cleanupCandidateCount} strong={group.eligible} />
+                <Metric label={provider === "microsoft" ? "Potential cleanup" : "Suggested"} value={group.cleanupCandidateCount} strong={group.eligible} />
                 <Metric label="Review" value={group.reviewMessages} />
                 <Metric label="Protected" value={group.protectedMessages} />
               </label>
@@ -653,7 +653,7 @@ export function GmailCleanupClient({
             <h2 className="m-0 text-2xl font-extrabold text-[var(--navy)]">Check messages</h2>
             <dl className="mt-4 grid gap-2 text-sm">
               <Row label="Selected senders" value={selectedGroupIndices.size.toLocaleString()} />
-              <Row label="Suggested for cleanup" value={selectedReadyCount.toLocaleString()} />
+              <Row label={provider === "microsoft" ? "Potential cleanup" : "Suggested for cleanup"} value={selectedReadyCount.toLocaleString()} />
               <Row label="Review excluded" value={selectedReviewCount.toLocaleString()} />
               <Row label="Protected excluded" value={selectedProtectedCount.toLocaleString()} />
             </dl>
@@ -672,7 +672,7 @@ export function GmailCleanupClient({
               {countOptions.map((count) => <option key={count} value={count}>{count} messages</option>)}
             </select>
 
-            {requestedCount > selectedReadyCount ? <Notice text="Select enough eligible senders to reach this suggested total." /> : null}
+            {requestedCount > selectedReadyCount ? <Notice text={provider === "microsoft" ? "Select enough sender groups to reach this potential total." : "Select enough eligible senders to reach this suggested total."} /> : null}
             {!developmentMode ? <CleanupCreditContext available={availableCredits} requested={requestedCount} /> : null}
             {!cleanupEnabled && !scalableCleanupEnabled ? <Notice text="Cleanup is not available right now." /> : null}
             {fixtureMode ? <Notice text="Connect Gmail and run a scan before cleanup." /> : null}
@@ -861,8 +861,9 @@ function OutlookCleanupWorkspace({
     contributingSenderGroupCount: groups.length,
     requestedCount: job.requested
   };
+  const approvedCount = job.verification ? job.approved : job.requested;
   const heading = job.status === "ready"
-    ? "Suggested cleanup"
+    ? "Review cleanup"
     : job.status === "complete"
       ? "Cleanup complete"
       : job.status === "undo_complete"
@@ -892,18 +893,18 @@ function OutlookCleanupWorkspace({
                   ? "We're restoring messages to their original folders and checking each result."
                   : phase === "trash"
                     ? "We're checking your selected messages before moving them to Deleted Items."
-                    : "We're checking your selected Suggested messages for this review."}
+                    : "We're verifying the messages from your selected sender groups. Nothing moves yet."}
               title={phase === "undo"
                 ? "Restoring messages..."
                 : phase === "trash"
-                  ? `Moving up to ${job.requested.toLocaleString()} messages to Deleted Items...`
-                  : "Checking your selected messages"}
+                  ? `Moving up to ${approvedCount.toLocaleString()} messages to Deleted Items...`
+                  : "Checking selected messages..."}
             />
             {job.status === "running" ? (
               <div className="mt-4 border-t border-[var(--line)] pt-4">
                 <progress aria-label="Outlook cleanup progress" className="h-2 w-full" max={job.totalBatches} value={job.batchesCompleted} />
                 <dl className="mt-3 grid gap-2 text-sm">
-                  <Row label="Messages checked" value={`${job.checked.toLocaleString()} / ${job.requested.toLocaleString()}`} />
+                  <Row label="Messages checked" value={`${job.checked.toLocaleString()} / ${approvedCount.toLocaleString()}`} />
                   <Row label="Moved and verified" value={job.movedVerified.toLocaleString()} />
                   {developmentMode && isDevelopmentOutlookJob(job) ? <Row label="Batch size" value={job.effectiveBatchSize.toLocaleString()} /> : null}
                   {developmentMode && isDevelopmentOutlookJob(job) ? <Row label="Current chunk" value={`${job.currentChunk.toLocaleString()} / ${job.totalChunks.toLocaleString()}`} /> : null}
@@ -925,26 +926,32 @@ function OutlookCleanupWorkspace({
           </>
         ) : null}
         {error ? <Notice text={error} /> : null}
+        {job.verification ? <dl className="mt-4 grid gap-2 text-sm" aria-live="polite">
+          <Row label="Requested" value={job.requested.toLocaleString()} />
+          <Row label="Candidates checked" value={job.verification.candidatesChecked.toLocaleString()} />
+          <Row label="Approved" value={job.verification.approved.toLocaleString()} />
+          <Row label="Left alone" value={job.verification.excluded.toLocaleString()} />
+        </dl> : null}
 
         {job.status === "ready" && canStart ? (
           <>
             <dl className="mt-4 grid gap-2 text-sm">
-              <Row label="Selected messages" value={job.requested.toLocaleString()} />
+              <Row label="Verified approved messages" value={approvedCount.toLocaleString()} />
               <Row label="Selected sender groups" value={job.groupIndices.length.toLocaleString()} />
             </dl>
             <p className="muted m-0 mt-4 text-sm">We will recheck these messages and leave protected email out.</p>
             <p className="muted m-0 mt-2 text-sm">Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation. Your email provider&apos;s retention rules still apply.</p>
             {!finalStep ? (
               <button className="btn btn-primary focus-ring mt-5 w-full" onClick={() => onToggleFinalStep(true)} type="button">
-                Move up to {job.requested.toLocaleString()} to Deleted Items
+                Move {approvedCount.toLocaleString()} to Deleted Items
               </button>
             ) : (
               <div className="mt-5 grid gap-2 border-t border-[var(--line)] pt-4">
-                <p className="m-0 font-extrabold text-[var(--navy)]">Move up to {job.requested.toLocaleString()} messages to Deleted Items?</p>
+                <p className="m-0 font-extrabold text-[var(--navy)]">Move {approvedCount.toLocaleString()} messages to Deleted Items?</p>
                 <p className="muted m-0 text-sm">We will recheck these messages and leave protected email out.</p>
                 <p className="muted m-0 text-sm">Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation.</p>
                 <button className="btn btn-secondary focus-ring w-full" onClick={() => onToggleFinalStep(false)} type="button">Cancel</button>
-                <button className="btn btn-primary focus-ring w-full" onClick={onConfirm} type="button">Move up to {job.requested.toLocaleString()} to Deleted Items</button>
+                <button className="btn btn-primary focus-ring w-full" onClick={onConfirm} type="button">Move {approvedCount.toLocaleString()} to Deleted Items</button>
               </div>
             )}
           </>
@@ -986,7 +993,7 @@ function OutlookCleanupWorkspace({
         {job.status === "expired" ? <UndoAction available={false} expiresAt={job.expiresAt} onUndo={onUndo} /> : null}
         {developmentMode && isDevelopmentOutlookJob(job) ? <CopyOutlookCleanupSummaryButton job={job} /> : null}
       </aside>
-      <FrozenSenderContext groups={groups} job={frozenJob} reportGroups={reportGroups} sessionAdjusted={false} />
+      <FrozenSenderContext potential groups={groups} job={frozenJob} reportGroups={reportGroups} sessionAdjusted={false} />
     </section>
   );
 }
@@ -1315,12 +1322,14 @@ function FrozenSenderContext({
   groups,
   job,
   reportGroups,
-  sessionAdjusted
+  sessionAdjusted,
+  potential = false
 }: {
   groups: CleanupSenderGroup[];
   job: FrozenSenderJob;
   reportGroups: CleanupSenderGroup[];
   sessionAdjusted: boolean;
+  potential?: boolean;
 }) {
   if (groups.length === 0) return <p className="muted mt-6">Sender details are no longer available. Your cleanup status and eligible Undo remain available until the deadline shown.</p>;
   const suggestedDeltas = job.suggestedDeltas ?? [];
@@ -1329,15 +1338,15 @@ function FrozenSenderContext({
   return (
     <section aria-label={sessionAdjusted ? "Updated sender context" : "Frozen sender context"} className="order-2 lg:order-1">
       <div className="panel hidden overflow-hidden lg:block">
-        <FrozenSenderSummary adjustedReportSuggested={adjustedReportSuggested} job={job} sessionAdjusted={sessionAdjusted} />
+        <FrozenSenderSummary potential={potential} adjustedReportSuggested={adjustedReportSuggested} job={job} sessionAdjusted={sessionAdjusted} />
         <div className="frozen-heading-row grid gap-3 border-b border-[var(--line)] bg-[var(--surface-subtle)] px-5 py-2 text-xs font-bold text-[var(--navy)]">
           <span>Sender</span>
           <span>Recommendation</span>
-          <span className="text-right">Suggested</span>
+          <span className="text-right">{potential ? "Potential cleanup" : "Suggested"}</span>
           <span className="text-right">Review</span>
           <span className="text-right">Protected</span>
         </div>
-        <FrozenSenderRows deltasByGroup={deltasByGroup} groups={groups} bounded sessionAdjusted={sessionAdjusted} />
+        <FrozenSenderRows potential={potential} deltasByGroup={deltasByGroup} groups={groups} bounded sessionAdjusted={sessionAdjusted} />
       </div>
 
       <details className="panel overflow-hidden lg:hidden">
@@ -1345,8 +1354,8 @@ function FrozenSenderContext({
           {sessionAdjusted ? "Updated sender groups" : "Checked sender groups"}
           <span className="muted ml-2 text-sm font-normal">{groups.length.toLocaleString()}</span>
         </summary>
-        <FrozenSenderSummary adjustedReportSuggested={adjustedReportSuggested} job={job} compact sessionAdjusted={sessionAdjusted} />
-        <FrozenSenderRows deltasByGroup={deltasByGroup} groups={groups} sessionAdjusted={sessionAdjusted} />
+        <FrozenSenderSummary potential={potential} adjustedReportSuggested={adjustedReportSuggested} job={job} compact sessionAdjusted={sessionAdjusted} />
+        <FrozenSenderRows potential={potential} deltasByGroup={deltasByGroup} groups={groups} sessionAdjusted={sessionAdjusted} />
       </details>
     </section>
   );
@@ -1356,12 +1365,14 @@ function FrozenSenderSummary({
   adjustedReportSuggested,
   job,
   compact = false,
-  sessionAdjusted
+  sessionAdjusted,
+  potential = false
 }: {
   adjustedReportSuggested: number;
   job: FrozenSenderJob;
   compact?: boolean;
   sessionAdjusted: boolean;
+  potential?: boolean;
 }) {
   return (
     <div className={`${compact ? "border-t" : ""} border-b border-[var(--line)] p-5`}>
@@ -1378,7 +1389,7 @@ function FrozenSenderSummary({
         ) : (
           <>
             <strong className="block text-[var(--navy)]">{job.selectedSenderGroupCount.toLocaleString()} sender groups selected</strong>
-            <span className="muted block">{job.selectedReadyCount.toLocaleString()} Suggested emails were available</span>
+            <span className="muted block">{job.selectedReadyCount.toLocaleString()} {potential ? "potential cleanup emails in the report" : "Suggested emails were available"}</span>
             <span className="muted block">{job.contributingSenderGroupCount.toLocaleString()} sender groups contributed to this {job.requestedCount.toLocaleString()}-message check</span>
           </>
         )}
@@ -1391,12 +1402,14 @@ function FrozenSenderRows({
   deltasByGroup,
   groups,
   bounded = false,
-  sessionAdjusted
+  sessionAdjusted,
+  potential = false
 }: {
   deltasByGroup: ReadonlyMap<number, FrozenSenderJob["suggestedDeltas"][number]>;
   groups: CleanupSenderGroup[];
   bounded?: boolean;
   sessionAdjusted: boolean;
+  potential?: boolean;
 }) {
   return (
     <ul
@@ -1419,7 +1432,7 @@ function FrozenSenderRows({
             </span>
           </span>
           <FrozenMetric
-            label="Suggested"
+            label={potential ? "Potential cleanup" : "Suggested"}
             value={sessionAdjusted
               ? getSessionAdjustedSuggestedCount(group.cleanupCandidateCount, deltasByGroup.get(group.index))
               : group.cleanupCandidateCount}

@@ -414,7 +414,7 @@ export function verifiedCreditProgress(envelope: DurableCleanupJobEnvelope): Ver
   if ("provider" in job && job.provider === "microsoft") {
     const moved = job.payload.targets.filter((target) => target.state === "moved_verified" || target.state.startsWith("restore")).length;
     const restored = job.payload.targets.filter((target) => target.state === "restored_verified").length;
-    return { requested: job.view.requested, moved, restored, closed };
+    return { requested: job.view.verification ? job.payload.targets.length : job.view.requested, moved, restored, closed };
   }
   const gmail = job as GmailScalableStoredJob;
   return { requested: gmail.view.requestedCount,

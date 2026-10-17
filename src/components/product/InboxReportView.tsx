@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { OutlookVerification } from "@/lib/domain/outlook-progressive";
-import { OutlookVerificationNotice } from "./OutlookVerificationNotice";
+import { reportCleanupCount, senderCleanupCount, senderRecommendation, senderReviewCount } from "@/lib/domain/outlook-report";
 import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { useCleanupAvailability } from "@/components/product/useCleanupAvailability";
 import type { CleanupUiAccess } from "@/lib/domain/cleanup-ui";
@@ -56,7 +55,6 @@ const senderSortOptions: Array<{ value: SenderSortKey; label: string }> = [
 const developmentDiagnosticsEnabled = process.env.NODE_ENV !== "production";
 
 export function InboxReportView({
-  outlookVerification,
   report,
   reportStale,
   recentCleanupAction,
@@ -69,7 +67,6 @@ export function InboxReportView({
   productionCleanupAccess = "unavailable",
   existingCleanup = false
 }: {
-  outlookVerification?: OutlookVerification;
   report: InboxReport;
   reportStale: boolean;
   recentCleanupAction?: ReportRecentCleanupAction;
@@ -103,7 +100,7 @@ export function InboxReportView({
           </div>
           {!cleanupAvailable ? (
             production ? <CleanupAccessNotice access={availability.access} /> : <span className="muted text-sm font-bold">Cleanup is not available yet</span>
-          ) : report.totals.cleanupCandidates > 0 ? (
+          ) : reportCleanupCount(report) > 0 ? (
             <Link href="/app/cleanup" className="btn btn-primary focus-ring">
               Review cleanup
             </Link>
@@ -113,7 +110,7 @@ export function InboxReportView({
         </div>
 
         {production && availability.hasJob ? <Link className="btn btn-secondary focus-ring mb-6" href="/app/cleanup">View cleanup and Undo</Link> : null}
-        {outlookVerification ? <OutlookVerificationNotice verification={outlookVerification} /> : null}
+        {report.totals.potentialCleanup !== undefined ? <p className="muted mb-6">Outlook cleanup recommendations are based on sender patterns and age. Organizinbox verifies each selected message before anything moves.</p> : null}
 
         {recentCleanupAction ? (
           <PostUndoReportNotice action={recentCleanupAction} />
@@ -157,7 +154,7 @@ export function InboxReportView({
         ) : null}
         {view === "old-mail" ? <OldMailView senders={report.senders} /> : null}
 
-        {cleanupAvailable && report.totals.cleanupCandidates > 0 ? (
+        {cleanupAvailable && reportCleanupCount(report) > 0 ? (
           <div className="mt-8 flex justify-end">
             <Link href="/app/cleanup" className="btn btn-primary focus-ring">
               Review cleanup
@@ -200,8 +197,8 @@ function OverviewView({ report, sizeAvailable }: { report: InboxReport; sizeAvai
     <>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Inbox report summary">
         <Summary label="Emails" value={report.totals.messages.toLocaleString()} />
-        <Summary label="Suggested" bucket="suggested" detail="Emails you may want to clean" value={report.totals.cleanupCandidates.toLocaleString()} />
-        <Summary label="Review" bucket="review" detail="Not included in suggested cleanup" value={report.totals.reviewMessages.toLocaleString()} />
+        <Summary label={report.totals.potentialCleanup !== undefined ? "Potential cleanup" : "Suggested"} bucket="suggested" detail={report.totals.potentialCleanup !== undefined ? "Verified when you review cleanup" : "Emails you may want to clean"} value={reportCleanupCount(report).toLocaleString()} />
+        <Summary label="Review" bucket="review" detail={report.totals.potentialCleanup !== undefined ? "Needs a closer look" : "Not included in suggested cleanup"} value={Math.max(0, report.totals.reviewMessages - (report.totals.potentialCleanup ?? 0)).toLocaleString()} />
         <Summary label="Protected" bucket="protected" detail="Kept out of cleanup" value={report.totals.protectedMessages.toLocaleString()} />
       </section>
       <section className="secondary-metrics mt-4 grid gap-4 sm:grid-cols-3" aria-label="Additional inbox details">
@@ -285,7 +282,7 @@ function SendersView({
                   onClick={() => dispatch({ type: "sort", sortKey: option.value })}
                   type="button"
                 >
-                  {option.label}
+                  {!sizeAvailable && option.value === "ready" ? "Most potential cleanup" : option.label}
                 </button>
               ))}
             </div>
@@ -319,11 +316,11 @@ function SendersView({
               <tr>
                 <th className="p-4">Sender</th>
                 <th className="p-4 text-right">Emails</th>
-                <th className="p-4 text-right">Suggested</th>
+                <th className="p-4 text-right">{sizeAvailable ? "Suggested" : "Potential cleanup"}</th>
                 <th className="p-4 text-right">Review</th>
                 <th className="p-4 text-right">Protected</th>
                 <th className="p-4">Oldest</th>
-                <th className="p-4 text-right">Suggested storage</th>
+                <th className="p-4 text-right">{sizeAvailable ? "Suggested storage" : "Potential recovery"}</th>
                 <th className="p-4">Recommendation</th>
               </tr>
             </thead>
@@ -349,18 +346,17 @@ function SendersView({
                         </span>
                       </button>
                       <p className="muted m-0 text-xs">{senderIdentityLabel(sender)}</p>
-                      {sender.pendingVerificationCount ? <p className="muted m-0 text-xs">{sender.pendingVerificationCount.toLocaleString()} awaiting verification (Review)</p> : null}
                     </td>
                     <td className="p-4 text-right font-bold">{sender.totalMessages.toLocaleString()}</td>
-                    <td className="p-4 text-right">{sender.cleanupCandidateCount.toLocaleString()}</td>
-                    <td className="p-4 text-right">{sender.reviewMessages.toLocaleString()}</td>
+                    <td className="p-4 text-right">{senderCleanupCount(sender).toLocaleString()}</td>
+                    <td className="p-4 text-right">{senderReviewCount(sender).toLocaleString()}</td>
                     <td className="p-4 text-right">{sender.protectedMessages.toLocaleString()}</td>
                     <td className="p-4">{formatDate(sender.oldestMessageAt)}</td>
                     <td className="p-4 text-right">
                       {sizeAvailable ? formatBytes(sender.estimatedEligibleBytes) : "Unavailable"}
                     </td>
                     <td className="p-4">
-                      <span className="badge">{recommendationLabel(sender.cleanupConfidence)}</span>
+                      <span className="badge">{recommendationLabel(senderRecommendation(sender))}</span>
                     </td>
                   </tr>
                 );
@@ -420,14 +416,13 @@ function SenderMobileRow({
       </span>
       <span className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
         <CompactMetric label="Total" value={sender.totalMessages} />
-        <CompactMetric label="Suggested" value={sender.cleanupCandidateCount} />
-        <CompactMetric label="Review" value={sender.reviewMessages} />
+        <CompactMetric label={sender.potentialCleanupCount !== undefined ? "Potential cleanup" : "Suggested"} value={senderCleanupCount(sender)} />
+        <CompactMetric label="Review" value={senderReviewCount(sender)} />
         <CompactMetric label="Protected" value={sender.protectedMessages} />
       </span>
-      {sender.pendingVerificationCount ? <span className="muted text-xs">{sender.pendingVerificationCount.toLocaleString()} awaiting verification (Review)</span> : null}
       <span className="flex items-center justify-between gap-3">
         <span className="muted text-xs">Oldest {formatDate(sender.oldestMessageAt)}</span>
-        <span className="badge">{recommendationLabel(sender.cleanupConfidence)}</span>
+        <span className="badge">{recommendationLabel(senderRecommendation(sender))}</span>
       </span>
     </button>
   );
@@ -481,10 +476,10 @@ function CategoryCard({ category, sizeAvailable }: { category: CategoryAggregate
     <section className="panel p-5">
       <div className="flex items-start justify-between gap-3">
         <h2 className="m-0 text-lg font-extrabold text-[var(--navy)]">{categoryLabel(category.category)}</h2>
-        <span className="badge">{recommendationLabel(category.topRecommendation)}</span>
+        <span className="badge">{category.potentialCleanupCount !== undefined ? "Review sender groups" : recommendationLabel(category.topRecommendation)}</span>
       </div>
       <p className="mt-4 text-3xl font-extrabold text-[var(--navy)]">{category.totalMessages.toLocaleString()}</p>
-      <p className="muted mt-2 text-sm">{recommendationDescription(category.topRecommendation)}</p>
+      <p className="muted mt-2 text-sm">{category.potentialCleanupCount !== undefined ? "Review sender groups before choosing messages to check." : recommendationDescription(category.topRecommendation)}</p>
       <dl className="grid gap-2 text-sm">
         <div className="flex justify-between gap-4">
           <dt className="muted">Unread</dt>
@@ -495,12 +490,12 @@ function CategoryCard({ category, sizeAvailable }: { category: CategoryAggregate
           <dd className="m-0 font-bold">{category.oldMessages.toLocaleString()}</dd>
         </div>
         <div className="flex justify-between gap-4">
-          <dt className="muted">Suggested</dt>
-          <dd className="m-0 font-bold">{category.cleanupCandidateCount.toLocaleString()}</dd>
+          <dt className="muted">{category.potentialCleanupCount !== undefined ? "Potential cleanup" : "Suggested"}</dt>
+          <dd className="m-0 font-bold">{(category.potentialCleanupCount ?? category.cleanupCandidateCount).toLocaleString()}</dd>
         </div>
         <div className="flex justify-between gap-4">
           <dt className="muted">Review</dt>
-          <dd className="m-0 font-bold">{category.reviewMessages.toLocaleString()}</dd>
+          <dd className="m-0 font-bold">{Math.max(0, category.reviewMessages - (category.potentialCleanupCount ?? 0)).toLocaleString()}</dd>
         </div>
         <div className="flex justify-between gap-4">
           <dt className="muted">Protected</dt>
@@ -545,21 +540,21 @@ function SenderDetail({
     >
       <p className="eyebrow">Sender detail</p>
       <h2 className="m-0 mt-2 text-2xl font-extrabold text-[var(--navy)]">{sender.displayName}</h2>
-      {sender.pendingVerificationCount ? <p className="muted text-sm">{sender.pendingVerificationCount.toLocaleString()} awaiting verification in Review. Only the Suggested count is available for cleanup.</p> : null}
+      {sender.potentialCleanupCount !== undefined ? <p className="muted text-sm">Potential messages are checked individually during Review cleanup. The approved count may be lower.</p> : null}
       <p className="muted">
         {sender.senderSecondaryLabel ?? sender.domain ?? "Sender"} - {sender.totalMessages.toLocaleString()} emails
       </p>
       <dl className="mt-4 grid grid-cols-2 gap-3 text-center text-sm">
         <SenderMetric label="Total" value={sender.totalMessages} />
-        <SenderMetric label="Suggested" value={sender.cleanupCandidateCount} />
-        <SenderMetric label="Review" value={sender.reviewMessages} />
+        <SenderMetric label={sender.potentialCleanupCount !== undefined ? "Potential cleanup" : "Suggested"} value={senderCleanupCount(sender)} />
+        <SenderMetric label="Review" value={senderReviewCount(sender)} />
         <SenderMetric label="Protected" value={sender.protectedMessages} />
       </dl>
-      <p className="mt-4 font-bold text-[var(--navy)]">{recommendationLabel(sender.cleanupConfidence)}</p>
-      <p className="muted mt-1">{recommendationDescription(sender.cleanupConfidence)}</p>
+      <p className="mt-4 font-bold text-[var(--navy)]">{recommendationLabel(senderRecommendation(sender))}</p>
+      <p className="muted mt-1">{sender.potentialCleanupCount !== undefined ? "A recommendation to review, not permission to move these messages." : recommendationDescription(sender.cleanupConfidence)}</p>
       <h3 className="mt-6 text-lg font-extrabold text-[var(--navy)]">Why we recommend this</h3>
       <ul className="grid gap-2 pl-5">
-        {sender.reasonCodes.slice(0, 3).map((reason) => (
+        {(sender.potentialCleanupCount !== undefined ? sender.reasonCodes.filter(reason => !["INSUFFICIENT_BULK_EVIDENCE", "UNKNOWN_MAIL_TYPE"].includes(reason)) : sender.reasonCodes).slice(0, 3).map((reason) => (
           <li key={reason}>{recommendationReasonText(reason)}</li>
         ))}
       </ul>
@@ -589,7 +584,7 @@ function SenderDetail({
         </div>
       ) : canCleanSender(sender) ? (
         <Link href="/app/cleanup" className="btn btn-primary focus-ring mt-6 w-full">
-          Review {sender.cleanupCandidateCount.toLocaleString()} emails
+          Review {senderCleanupCount(sender).toLocaleString()} emails
         </Link>
       ) : (
         <div className="mt-6 rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-center">
@@ -701,8 +696,8 @@ function CompactMetric({ label, value }: { label: string; value: number }) {
 
 function canCleanSender(sender: SenderAggregate) {
   return (
-    sender.cleanupCandidateCount > 0 &&
-    (sender.cleanupConfidence === "high" || sender.cleanupConfidence === "very_high")
+    senderCleanupCount(sender) > 0 &&
+    (senderRecommendation(sender) === "high" || senderRecommendation(sender) === "very_high")
   );
 }
 

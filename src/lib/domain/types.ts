@@ -240,7 +240,8 @@ export type OutlookScanDiagnostic = {
 };
 
 export type SenderAggregate = {
-  pendingVerificationCount?: number;
+  potentialCleanupCount?: number;
+  reviewRecommendation?: CleanupRecommendation;
   senderKey: string;
   senderSecondaryLabel?: string;
   diagnosticSenderIdentity?: string;
@@ -271,6 +272,7 @@ export type SenderAggregate = {
 export type ReportSource = "fixture" | "gmail-live" | "microsoft-live";
 
 export type CategoryAggregate = {
+  potentialCleanupCount?: number;
   category: MailCategory;
   totalMessages: number;
   unreadMessages: number;
@@ -288,6 +290,7 @@ export type InboxReport = {
   provider: EmailProviderName;
   fixtureMode: boolean;
   totals: {
+    potentialCleanup?: number;
     messages: number;
     cleanupCandidates: number;
     unreadOlderThanOneYear: number;

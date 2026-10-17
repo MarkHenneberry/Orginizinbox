@@ -14,6 +14,7 @@ import {
   encryptCleanupStateWithKey
 } from "@/lib/server/crypto";
 import { createCleanupJobStateCodec } from "@/lib/server/cleanup-job-store";
+import { verifiedCreditProgress } from "@/lib/server/gmail-scalable-cleanup-durable-store";
 import {
   executeOutlookMoves,
   executeOutlookUndo,
@@ -27,35 +28,110 @@ import {
 } from "@/lib/server/outlook-cleanup-store";
 
 describe("Outlook durable cleanup", () => {
-  it("restricts progressive cleanup to the frozen verified report identities even if pending siblings now have headers", async () => {
+  it.each([
+    { isStarred: true }, { isImportant: true }, { isSent: true }, { isDraft: true }, { isDeleted: true },
+    { isExcludedMailboxLocation: true }, { hasUncertainMetadata: true }, { receivedAt: new Date() },
+    { subjectProtection: "transactional" }, { subjectProtection: "security_account" }, { conversationId: "participated" },
+    { userLabels: ["Keep"] }, { listId: undefined, hasListUnsubscribe: false, autoSubmitted: "auto-generated" }
+  ])("does not approve protected messages or weak automation-only evidence during targeted verification: %j", async protection => {
+    const job = storedJob(3, "created"); job.payload.participatedConversationIds = ["participated"];
+    const provider = fakeProvider({ getCleanupMessages: async ids => ids.map(id => ({ record: record(id, protection), parentFolderId: "folder" })) });
+    await prepareOutlookJob(job, provider, async () => undefined);
+    expect(job.view.status).toBe("failed"); expect(job.payload.targets).toEqual([]);
+    expect(job.view.verification).toMatchObject({ candidatesChecked: 3, approved: 0, excluded: 3 });
+  });
+  it("continues exact selected verification past exclusions until requested approvals, without sibling inference or unselected replacements", async () => {
+    const job = storedJob(5, "created");
+    job.payload.verificationCandidates = Array.from({ length: 12 }, (_, index) => ({ messageId: `id-${index + 1}`, groupIndex: 0 }));
+    const reads: string[][] = [];
+    const provider = fakeProvider({ getCleanupMessages: async (ids, _context, targeted) => {
+      expect(targeted).toBe(true); reads.push([...ids]);
+      return ids.map(id => ({ parentFolderId: "inbox", record: record(id,
+        id === "id-1" ? { listId: undefined, hasListUnsubscribe: false } :
+        id === "id-2" ? { isStarred: true } : id === "id-3" ? { senderAddress: "unselected@example.test" } : {}) }));
+    } });
+    await prepareOutlookJob(job, provider, async () => undefined);
+    expect(reads).toEqual([["id-1", "id-2", "id-3", "id-4", "id-5"], ["id-6", "id-7", "id-8"]]);
+    expect(job.view).toMatchObject({ status: "ready", approved: 5, movedVerified: 0,
+      verification: { candidatesChecked: 8, approved: 5, excluded: 3, batchRequests: 2 } });
+    expect(job.payload.targets.map(target => target.originalMessageId)).toEqual(["id-4", "id-5", "id-6", "id-7", "id-8"]);
+    expect(JSON.stringify(job.payload)).not.toMatch(/list.example|internetMessageHeaders|Subject/);
+  });
+  it("allows a smaller verified selection on exhaustion and reserves only its approved count after confirmation", async () => {
+    const job = storedJob(5, "created");
+    job.payload.verificationCandidates = ["id-1", "id-2", "id-3"].map(messageId => ({ messageId, groupIndex: 0 }));
+    const provider = fakeProvider({ getCleanupMessages: async ids => ids.map(id => id === "id-2" ? undefined : { record: record(id), parentFolderId: "folder" }) });
+    await prepareOutlookJob(job, provider, async () => undefined);
+    expect(job.view).toMatchObject({ status: "ready", requested: 5, approved: 2 });
+    expect(verifiedCreditProgress({ ...job, creditBilling: true })).toBeUndefined();
+    job.payload.confirmedAt = Date.now(); job.view.status = "running";
+    expect(verifiedCreditProgress({ ...job, creditBilling: true })).toEqual({ requested: 2, moved: 0, restored: 0, closed: false });
+    await executeOutlookMoves(job, fakeProvider(), async () => undefined);
+    expect(job.view.movedVerified).toBe(2); expect(job.view.approved).toBe(2);
+    expect(verifiedCreditProgress({ ...job, creditBilling: true })).toEqual({ requested: 2, moved: 2, restored: 0, closed: true });
+  });
+  it("checkpoints targeted preparation across process replacement and never fetches more than 20 exact IDs", async () => {
+    let job = storedJob(25, "created");
+    job.payload.verificationCandidates = Array.from({ length: 40 }, (_, index) => ({ messageId: `id-${index + 1}`, groupIndex: 0 }));
+    const ids: string[][] = [];
+    const provider = fakeProvider({ getCleanupMessages: async messageIds => {
+      ids.push([...messageIds]);
+      return messageIds.map(id => ({ record: record(id), parentFolderId: "folder" }));
+    } });
+    await prepareOutlookJob(job, provider, async () => undefined, 1);
+    expect(job.view.status).toBe("resolving"); expect(job.payload.verificationCursor).toBe(20);
+    const key = Buffer.alloc(32, 8);
+    const codec = createCleanupJobStateCodec<OutlookCleanupStoredJob>({
+      encrypt: value => encryptCleanupStateWithKey(value, key), decrypt: value => decryptCleanupStateWithKey(value, key)
+    });
+    job = codec.decode(codec.encode(job)) as OutlookCleanupStoredJob;
+    await prepareOutlookJob(job, provider, async () => undefined, 1);
+    expect(job.view).toMatchObject({ status: "ready", approved: 25 }); expect(ids.map(batch => batch.length)).toEqual([20, 5]);
+    await prepareOutlookJob(job, provider, async () => undefined, 1);
+    expect(ids).toHaveLength(2); expect(new Set(job.payload.targets.map(target => target.originalMessageId)).size).toBe(25);
+  });
+  it("safely replays an interrupted read checkpoint and still enforces the independent final mutation recheck", async () => {
+    let job = storedJob(5, "created");
+    let committed = structuredClone(job); let writes = 0;
+    await expect(prepareOutlookJob(job, fakeProvider(), async () => {
+      if (++writes === 2) throw new Error("storage interruption");
+      committed = structuredClone(job);
+    })).rejects.toThrow("storage interruption");
+    job = structuredClone(committed);
+    await prepareOutlookJob(job, fakeProvider(), async () => undefined);
+    expect(job.payload.targets).toHaveLength(5);
+    const move = vi.fn(async (inputs: ReadonlyArray<{ messageId: string }>) => inputs.map(input => ({ outcome: "success" as const, messageId: `moved-${input.messageId}` })));
+    job.view.status = "running";
+    await executeOutlookMoves(job, fakeProvider({ getCleanupMessages: async ids => ids.map(id => ({ parentFolderId: "folder", record: record(id, { isImportant: true }) })), moveCleanupMessages: move }), async () => undefined);
+    expect(move).not.toHaveBeenCalled(); expect(job.view.movedVerified).toBe(0);
+  });
+  it("restricts targeted verification to frozen base identities even if other siblings have headers", async () => {
     const job = storedJob(2, "created");
-    job.payload.reportVerifiedMessageIds = ["verified-1", "verified-2"];
-    const provider = fakeProvider({ async *scanMetadata() {
-      yield { records: [record("pending-sibling"), record("verified-1"), record("verified-2")] };
+    job.payload.verificationCandidates = ["verified-1", "verified-2"].map(messageId => ({ messageId, groupIndex: 0 }));
+    const provider = fakeProvider({ getCleanupMessages: async ids => {
+      expect(ids).toEqual(["verified-1", "verified-2"]);
+      return ids.map(id => ({ record: record(id), parentFolderId: "folder" }));
     } });
     await prepareOutlookJob(job, provider, async () => undefined);
     expect(job.view.status).toBe("ready");
     expect(job.payload.targets.map(target => target.originalMessageId)).toEqual(["verified-1", "verified-2"]);
   });
-  it("retains all 155 encrypted recovery checkpoints for 500 moves and Undo", async () => {
+  it("retains encrypted verification and mutation recovery checkpoints for 500 moves and Undo", async () => {
     const job = storedJob(500, "created");
     const checkpoints: OutlookCleanupStoredJob[] = [];
     const save = async () => { checkpoints.push(structuredClone(job)); };
-    const provider = fakeProvider({
-      async *scanMetadata() {
-        yield { records: Array.from({ length: 500 }, (_, index) => record(`id-${index + 1}`)) };
-      }
-    });
+    const provider = fakeProvider();
     await prepareOutlookJob(job, provider, save);
-    expect(checkpoints).toHaveLength(2);
+    const preparedCheckpoints = checkpoints.length;
+    expect(preparedCheckpoints).toBe(27);
     job.view.status = "running";
     await executeOutlookMoves(job, provider, save);
-    expect(checkpoints).toHaveLength(79);
+    expect(checkpoints).toHaveLength(preparedCheckpoints + 77);
     expect(job.view.movedVerified).toBe(500);
     job.view.status = "undoing";
     job.view.undoStatus = "running";
     await executeOutlookUndo(job, provider, save);
-    expect(checkpoints).toHaveLength(155);
+    expect(checkpoints).toHaveLength(preparedCheckpoints + 153);
     expect(job.view.restoredVerified).toBe(500);
     // Each dispatched batch and its returned IDs still have their own recovery boundary.
     expect(checkpoints.filter((snapshot) => snapshot.payload.targets.some((target) => target.state === "move_dispatched"))).toHaveLength(25);
@@ -63,7 +139,7 @@ describe("Outlook durable cleanup", () => {
 
   it("is development-only and caps requests at 500", () => {
     expect(outlookCleanupMaximum).toBe(500);
-    expect(outlookCleanupCountOptions).toEqual([5, 10, 25, 500]);
+    expect(outlookCleanupCountOptions).toEqual([5, 25, 100, 500]);
     expect([1, 25, 26, 100, 101, 500].map(getOutlookCleanupBatchSize)).toEqual([5, 5, 10, 10, 20, 20]);
     expect(assertOutlookCleanupDevelopmentRequest({
       enabled: true,
@@ -101,11 +177,7 @@ describe("Outlook durable cleanup", () => {
 
   it("freezes only the requested exact Suggested messages", async () => {
     const job = storedJob(3, "created");
-    const provider = fakeProvider({
-      async *scanMetadata() {
-        yield { records: [record("id-1"), record("id-2"), record("id-3"), record("id-4")] };
-      }
-    });
+    const provider = fakeProvider();
 
     await prepareOutlookJob(job, provider, async () => undefined);
 
@@ -843,8 +915,8 @@ describe("Outlook durable cleanup", () => {
       client.indexOf("function CopyOutlookCleanupSummaryButton")
     );
 
-    expect(outlookWorkspace).toContain("Move up to {job.requested.toLocaleString()} to Deleted Items");
-    expect(outlookWorkspace).toContain("Move up to {job.requested.toLocaleString()} messages to Deleted Items?");
+    expect(outlookWorkspace).toContain("Move {approvedCount.toLocaleString()} to Deleted Items");
+    expect(outlookWorkspace).toContain("Move {approvedCount.toLocaleString()} messages to Deleted Items?");
     expect(outlookWorkspace).toContain("We will recheck these messages and leave protected email out.");
     expect(outlookWorkspace).toContain("Initial cleanup moves email to Trash or Deleted Items; permanent deletion requires separate confirmation.");
     expect(outlookWorkspace).not.toContain("They&apos;re still recoverable in Outlook Deleted Items.");
@@ -929,7 +1001,8 @@ function storedJob(requested: number, status: OutlookCleanupStoredJob["view"]["s
       providerConnectionId: "connection-1",
       selectedSenders: [{ groupIndex: 0, senderKey: "sender@example.test" }],
       participatedConversationIds: [],
-      targets: []
+      targets: [],
+      ...(status === "created" ? { verificationCandidates: Array.from({ length: requested }, (_, index) => ({ messageId: `id-${index + 1}`, groupIndex: 0 })) } : {})
     }
   };
 }
@@ -959,9 +1032,6 @@ function record(messageId: string, overrides: Record<string, unknown> = {}) {
 
 function fakeProvider(overrides: Partial<OutlookCleanupProviderPort> = {}): OutlookCleanupProviderPort {
   return {
-    async *scanMetadata() {
-      yield { records: [] };
-    },
     scanParticipatedConversationIds: async () => new Set<string>(),
     getCleanupSafetyContext: async () => ({
       knownFolderIds: ["inbox-folder", "deleted-items-folder"],
