@@ -97,7 +97,7 @@ export function GmailCleanupClient({
   const [selectedGroupIndices, setSelectedGroupIndices] = useState<Set<number>>(
     () => initialScalableJob || initialOutlookJob
       ? new Set((initialScalableJob ?? initialOutlookJob)!.groupIndices)
-      : createDefaultCleanupSelection(groups)
+      : createDefaultCleanupSelection(groups, provider)
   );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<CleanupSortKey>("ready");
@@ -116,6 +116,7 @@ export function GmailCleanupClient({
   const [pollError, setPollError] = useState<string | null>(null);
   const displayError = error ?? pollError;
   const activeOperationRef = useRef<ActiveCleanupOperation | null>(null);
+  const discardedOutlookJobs = useRef(new Set<string>());
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const scalablePollingActive = scalableJob ? shouldPollGmailScalableJob(scalableJob) : false;
@@ -135,7 +136,7 @@ export function GmailCleanupClient({
   const selectedReadyCount = selectedGroups.reduce((total, group) => total + group.cleanupCandidateCount, 0);
   const selectedReviewCount = selectedGroups.reduce((total, group) => total + group.reviewMessages, 0);
   const selectedProtectedCount = selectedGroups.reduce((total, group) => total + group.protectedMessages, 0);
-  const groupsByIndex = useMemo(() => new Map(groups.map((group) => [group.index, group])), [groups]);
+  const groupsByIndex = useMemo(() => new Map((outlookJob?.senderGroups ?? groups).map((group) => [group.index, group])), [groups, outlookJob?.senderGroups]);
   const checkedGroups = checkedGroupIndices.flatMap((index) => {
     const group = groupsByIndex.get(index);
     return group ? [group] : [];
@@ -291,7 +292,7 @@ export function GmailCleanupClient({
       }
       if (!response.ok) throw new Error("Status unavailable");
       const body = await cleanupResponse(response, developmentMode) as { job?: OutlookCleanupJobView };
-      if (signal.aborted) return false;
+      if (signal.aborted || discardedOutlookJobs.current.has(outlookJobId)) return false;
       setPollError(null);
       if (body.job) setOutlookJob(body.job);
       return body.job ? shouldPollOutlookCleanup(body.job) : true;
@@ -320,6 +321,7 @@ export function GmailCleanupClient({
 
   async function resolvePreview(benchmarkOnly = false) {
     if (!canStart || (!developmentMode && benchmarkOnly)) return;
+    if (provider === "microsoft" && (selectedGroups.length === 0 || requestedCount > selectedReadyCount || reportStale)) return;
     if (cleanupRequestMode === "invalid") {
       setError("Choose a supported cleanup count.");
       return;
@@ -403,19 +405,25 @@ export function GmailCleanupClient({
 
   async function startOver() {
     const activeJob = outlookJob ?? scalableJob ?? job;
-    if (!developmentMode || !activeJob || !beginOperation("start_over")) return;
+    if ((!developmentMode && !outlookJob) || (outlookJob && !outlookJob.canChangeSelection) || !activeJob || !beginOperation("start_over")) return;
     setError(null);
     try {
-      const response = await fetch(scalableJob ? "/api/dev/gmail-scalable-cleanup/discard" : "/api/dev/gmail-cleanup/start-over", {
+      const response = await fetch(outlookJob ? cleanupEndpoint("microsoft", "discard", developmentMode) : scalableJob ? "/api/dev/gmail-scalable-cleanup/discard" : "/api/dev/gmail-cleanup/start-over", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId: activeJob.id })
+        body: JSON.stringify({ jobId: activeJob.id, ...(outlookJob ? { confirmed: true } : {}) })
       });
       const body = (await response.json()) as { discarded?: boolean; error?: string };
       if (!response.ok || !body.discarded) {
         throw new Error(body.error ?? "We couldn't start over. Try again.");
       }
       resetPreview();
+      if (outlookJob) {
+        discardedOutlookJobs.current.add(outlookJob.id);
+        setSelectedGroupIndices(new Set());
+        router.replace("/app/cleanup?selection=fresh");
+        router.refresh();
+      }
     } catch (startOverError) {
       setError(startOverError instanceof Error ? startOverError.message : "We couldn't start over. Try again.");
     } finally {
@@ -500,6 +508,7 @@ export function GmailCleanupClient({
         groups={checkedGroups}
         job={outlookJob}
         onConfirm={confirmCleanup}
+        onChangeSelection={startOver}
         onRescan={rescanInbox}
         onToggleFinalStep={setFinalStep}
         onUndo={undoCleanup}
@@ -551,6 +560,7 @@ export function GmailCleanupClient({
               {selectedGroupIndices.size.toLocaleString()} eligible senders selected
             </strong>
             <span className="muted block text-sm">{selectedReadyCount.toLocaleString()} {provider === "microsoft" ? "potential cleanup emails" : "Suggested emails"}</span>
+            {provider === "microsoft" && selectedGroupIndices.size === 0 ? <p className="muted m-0 mt-2 text-sm">Select one or more sender groups to check.</p> : null}
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_190px]">
             <label className="grid gap-1 text-xs font-bold text-[var(--navy)]" htmlFor="cleanup-search">Search
@@ -829,6 +839,7 @@ function OutlookCleanupWorkspace({
   groups,
   job,
   onConfirm,
+  onChangeSelection,
   onRescan,
   onToggleFinalStep,
   onUndo,
@@ -844,6 +855,7 @@ function OutlookCleanupWorkspace({
   groups: CleanupSenderGroup[];
   job: OutlookCleanupJobView;
   onConfirm: () => void;
+  onChangeSelection: () => void;
   onRescan: () => void;
   onToggleFinalStep: (value: boolean) => void;
   onUndo: () => void;
@@ -933,7 +945,11 @@ function OutlookCleanupWorkspace({
           <Row label="Left alone" value={job.verification.excluded.toLocaleString()} />
         </dl> : null}
 
-        {job.status === "ready" && canStart ? (
+        {job.canChangeSelection ? <button className="btn btn-secondary focus-ring mt-4 w-full" disabled={activeOperation !== null} onClick={onChangeSelection} type="button">
+          {activeOperation === "start_over" ? "Changing selection..." : "Change selection"}
+        </button> : null}
+        {job.status === "ready" && groups.length !== job.groupIndices.length ? <Notice text="The selected sender details are unavailable. Change selection or scan again before confirming cleanup." /> : null}
+        {job.status === "ready" && canStart && groups.length === job.groupIndices.length && groups.length > 0 && activeOperation === null ? (
           <>
             <dl className="mt-4 grid gap-2 text-sm">
               <Row label="Verified approved messages" value={approvedCount.toLocaleString()} />

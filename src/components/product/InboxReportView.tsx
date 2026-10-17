@@ -101,7 +101,7 @@ export function InboxReportView({
           {!cleanupAvailable ? (
             production ? <CleanupAccessNotice access={availability.access} /> : <span className="muted text-sm font-bold">Cleanup is not available yet</span>
           ) : reportCleanupCount(report) > 0 ? (
-            <Link href="/app/cleanup" className="btn btn-primary focus-ring">
+            <Link href={source === "microsoft-live" ? "/app/cleanup?selection=fresh" : "/app/cleanup"} className="btn btn-primary focus-ring">
               Review cleanup
             </Link>
           ) : (
@@ -156,7 +156,7 @@ export function InboxReportView({
 
         {cleanupAvailable && reportCleanupCount(report) > 0 ? (
           <div className="mt-8 flex justify-end">
-            <Link href="/app/cleanup" className="btn btn-primary focus-ring">
+            <Link href={source === "microsoft-live" ? "/app/cleanup?selection=fresh" : "/app/cleanup"} className="btn btn-primary focus-ring">
               Review cleanup
             </Link>
           </div>
@@ -583,7 +583,7 @@ function SenderDetail({
           <p className="muted m-0 mt-1 text-sm">This Inbox Report is read-only.</p>
         </div>
       ) : canCleanSender(sender) ? (
-        <Link href="/app/cleanup" className="btn btn-primary focus-ring mt-6 w-full">
+        <Link href={sender.potentialCleanupCount !== undefined ? "/app/cleanup?selection=fresh" : "/app/cleanup"} className="btn btn-primary focus-ring mt-6 w-full">
           Review {senderCleanupCount(sender).toLocaleString()} emails
         </Link>
       ) : (

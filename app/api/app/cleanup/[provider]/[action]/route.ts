@@ -8,7 +8,8 @@ const headers = { "Cache-Control": "no-store" };
 export async function POST(request: Request, context: { params: Promise<{ provider: string; action: string }> }) {
   if (process.env.NODE_ENV !== "production") return new Response(null, { status: 404, headers });
   const { provider, action } = await context.params;
-  if ((provider !== "gmail" && provider !== "microsoft") || !["start", "confirm", "status", "undo"].includes(action)) {
+  if ((provider !== "gmail" && provider !== "microsoft") ||
+      !["start", "confirm", "status", "undo", ...(provider === "microsoft" ? ["discard"] : [])].includes(action)) {
     return new Response(null, { status: 404, headers });
   }
   try {
@@ -16,11 +17,11 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     if (!body || typeof body !== "object") return new Response(null, { status: 400, headers });
     const jobId = typeof body.jobId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(body.jobId) ? body.jobId : undefined;
     if (action !== "start" && !jobId) return Response.json({ error: "An existing cleanup job is required." }, { status: 400, headers });
-    if ((action === "confirm" || action === "undo") && body.confirmed !== true) {
+    if ((action === "confirm" || action === "undo" || action === "discard") && body.confirmed !== true) {
       return Response.json({ error: "Explicit confirmation is required." }, { status: 400, headers });
     }
     const denied = await productionCleanupBoundary(request, { provider,
-      access: action === "undo" || action === "status" ? "recovery" : "forward", jobId: action === "start" ? undefined : jobId });
+      access: action === "undo" || action === "status" || action === "discard" ? "recovery" : "forward", jobId: action === "start" ? undefined : jobId });
     if (denied) return denied;
     if (action === "start" && (typeof body.requestedCount !== "number" || !Number.isInteger(body.requestedCount) ||
         (provider === "gmail" ? ![250, 500].includes(body.requestedCount) : body.requestedCount < 1 || body.requestedCount > 500))) {
@@ -36,6 +37,13 @@ export async function POST(request: Request, context: { params: Promise<{ provid
         : await service.getGmailScalableCleanupStatus(jobId!);
     } else {
       const service = await import("@/lib/server/outlook-cleanup");
+      if (action === "discard") {
+        try { return Response.json(await service.discardOutlookCleanup(jobId!), { headers }); }
+        catch (error) {
+          if (error instanceof service.OutlookCleanupError) return Response.json({ error: error.message }, { status: error.statusCode, headers });
+          throw error;
+        }
+      }
       job = action === "start" ? await service.startOutlookCleanup(input)
         : action === "confirm" ? await service.confirmOutlookCleanup(jobId!)
         : action === "undo" ? await service.undoOutlookCleanup(jobId!)

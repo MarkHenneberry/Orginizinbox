@@ -17,6 +17,8 @@ import {
 import { assessMessage } from "@/lib/domain/recommendations";
 import { buildOutlookCleanupSenderGroups, outlookCandidatePool } from "@/lib/domain/outlook-report";
 import { isLiveReportUsable } from "@/lib/domain/report-readiness";
+import { sanitizeReportForClient } from "@/lib/domain/report-sanitizer";
+import { discardUnconfirmedOutlookCleanup } from "@/lib/server/outlook-cleanup-discard";
 import { MicrosoftProvider } from "@/lib/providers/microsoft/provider";
 import { sha256Base64Url } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
@@ -30,6 +32,7 @@ import {
 import {
   createPrismaOutlookCleanupStore,
   getOutlookCleanupLedgers,
+  getOutlookCleanupForPresentation,
   refreshOutlookRecovery,
   serializeOutlookCleanupJob,
   type OutlookCleanupStoredJob,
@@ -130,6 +133,8 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
       expiresAt: cleanupStateExpiryFor({ now, undoAvailable: false, terminal: false })
     },
     payload: {
+      senderGroups: buildOutlookCleanupSenderGroups(sanitizeReportForClient(liveScan.report, false).senders)
+        .filter(group => groupIndices.includes(group.index)),
       verificationCandidates: outlookCandidatePool(liveScan.outlookBase, liveScan.participatedConversationIds,
         selectedGroups.map(group => ({ groupIndex: group.index, senderKey: liveScan.report.senders[group.index].senderKey }))),
       verificationCursor: 0,
@@ -192,25 +197,21 @@ export async function getOutlookCleanupStatus(jobId: string) {
   return serializeOutlookCleanupJob(job);
 }
 
-export async function getCurrentOutlookCleanup() {
+export async function getCurrentOutlookCleanup(freshSelection = false) {
   if (!isOutlookCleanupEnabled()) return undefined;
   const session = await getSession();
-  if (!session?.userId) return undefined;
-  const row = await prisma.cleanupJobState.findFirst({
-    where: {
-      userId: session.userId,
-      expiresAt: { gt: new Date() },
-      job: { scan: { provider: "microsoft" } }
-    },
-    orderBy: { updatedAt: "desc" },
-    select: { jobId: true }
-  });
-  const store = createPrismaOutlookCleanupStore();
-  if (row) {
-    const job = await store.get(session.userId, row.jobId);
-    if (job?.provider === "microsoft") return serializeOutlookCleanupJob(job);
+  if (!session?.userId || !session.providerConnectionId) return undefined;
+  const job = await getOutlookCleanupForPresentation(session.userId, session.providerConnectionId, freshSelection);
+  return job ? serializeOutlookCleanupJob(job) : undefined;
+}
+
+export async function discardOutlookCleanup(jobId: string) {
+  assertGate(1);
+  const session = await requireSession("recovery", jobId);
+  if (!session.providerConnectionId || !await discardUnconfirmedOutlookCleanup(session.userId, session.providerConnectionId, jobId)) {
+    throw new OutlookCleanupError("This cleanup can no longer be changed. Refresh its status before continuing.", 409);
   }
-  return undefined;
+  return { discarded: true };
 }
 
 export async function confirmOutlookCleanup(jobId: string) {
@@ -880,7 +881,7 @@ async function updateAggregateCleanupRow(job: OutlookCleanupStoredJob) {
       failureCode: job.view.uncertain > 0 ? "OUTLOOK_MUTATION_UNCERTAIN" : job.view.failed > 0 ? "OUTLOOK_PARTIAL_FAILURE" : null,
       failureMessage: null,
       terminalState: terminal ? job.view.status : null,
-      terminalSnapshot: terminal ? serializeOutlookCleanupJob(job) : undefined,
+      terminalSnapshot: terminal ? serializeOutlookCleanupJob(job, false) : undefined,
       terminalSnapshotVersion: terminal ? 1 : 0
     }
   });

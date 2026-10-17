@@ -13,6 +13,8 @@ import {
   type DurableCleanupStore
 } from "@/lib/server/cleanup-job-store";
 import type { MicrosoftCleanupSafetyContext } from "@/lib/providers/microsoft/provider";
+import type { CleanupSenderGroup } from "@/lib/providers/gmail/cleanup-candidates";
+import { prisma } from "@/lib/server/db";
 
 export type OutlookCleanupTargetState =
   | "frozen"
@@ -46,6 +48,7 @@ export type OutlookCleanupStoredJob = {
   version: number;
   view: OutlookCleanupJobView;
   payload: {
+    senderGroups?: CleanupSenderGroup[];
     verificationCandidates?: Array<{ messageId: string; groupIndex: number }>;
     verificationCursor?: number;
     verificationContext?: MicrosoftCleanupSafetyContext;
@@ -66,6 +69,33 @@ export type OutlookCleanupStore = DurableCleanupStore<OutlookCleanupStoredJob>;
 
 export function createPrismaOutlookCleanupStore(): OutlookCleanupStore {
   return new PrismaCleanupJobStore<OutlookCleanupStoredJob>();
+}
+
+export function isOutlookPreMutationJob(job: OutlookCleanupStoredJob) {
+  return ["created", "resolving", "ready"].includes(job.view.status) && !job.payload.confirmedAt &&
+    !job.permanentDeletion && !job.payload.activeMoveBatchIndexes?.length && !job.payload.activeUndoBatchIndexes?.length &&
+    job.view.movedVerified === 0 && job.view.restoredVerified === 0 && job.view.uncertain === 0 &&
+    !job.view.undoAvailable && !job.view.recoverableCount &&
+    job.payload.targets.every(target => target.state === "frozen" || target.state === "excluded");
+}
+
+export async function getOutlookCleanupForPresentation(userId: string, providerConnectionId: string, freshSelection = false) {
+  const rows = await prisma.cleanupJobState.findMany({ where: {
+    userId, expiresAt: { gt: new Date() },
+    job: { status: { not: "cancelled" }, scan: { provider: "microsoft", providerConnectionId } }
+  }, orderBy: { updatedAt: "desc" }, select: { jobId: true, job: { select: { scanId: true } } } });
+  const store = createPrismaOutlookCleanupStore();
+  let prepared: OutlookCleanupStoredJob | undefined;
+  for (const row of rows) {
+    const job = await store.get(userId, row.jobId);
+    if (!job) continue;
+    if (job.provider !== "microsoft" || job.payload.providerConnectionId !== providerConnectionId || job.payload.scanId !== row.job.scanId) {
+      throw new Error("Cleanup ownership could not be verified.");
+    }
+    if (!isOutlookPreMutationJob(job)) return job;
+    if (!freshSelection) prepared ??= job;
+  }
+  return prepared;
 }
 
 export function getOutlookCleanupLedgers(job: OutlookCleanupStoredJob) {
@@ -92,7 +122,7 @@ export function refreshOutlookRecovery(job: OutlookCleanupStoredJob) {
     ["complete", "partial", "uncertain", "failed"].includes(job.view.status) && job.view.expiresAt > Date.now();
 }
 
-export function serializeOutlookCleanupJob(job: OutlookCleanupStoredJob | OutlookCleanupJobView) {
+export function serializeOutlookCleanupJob(job: OutlookCleanupStoredJob | OutlookCleanupJobView, includeSenderContext = true) {
   const view = "view" in job ? job.view : job;
   const adaptiveBatchSize = getOutlookCleanupBatchSize(view.requested);
   const legacyTotalBatches = Math.ceil(view.requested / 5);
@@ -104,6 +134,8 @@ export function serializeOutlookCleanupJob(job: OutlookCleanupStoredJob | Outloo
   return structuredClone({
     ...view,
     ...("payload" in job ? {
+      canChangeSelection: isOutlookPreMutationJob(job),
+      senderGroups: includeSenderContext ? job.payload.senderGroups : undefined,
       recoverableCount: getOutlookCleanupLedgers(job).verifiedMoved.length,
       undoAvailable: ["complete", "partial", "uncertain", "failed"].includes(view.status) &&
         view.expiresAt > Date.now() && getOutlookCleanupLedgers(job).verifiedMoved.length > 0,

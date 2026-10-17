@@ -6,8 +6,8 @@ export function eligibleCleanupGroupIndices(groups: CleanupSenderGroup[]) {
   return groups.filter((group) => group.eligible).map((group) => group.index);
 }
 
-export function createDefaultCleanupSelection(groups: CleanupSenderGroup[]) {
-  return new Set(eligibleCleanupGroupIndices(groups));
+export function createDefaultCleanupSelection(groups: CleanupSenderGroup[], provider: "gmail" | "microsoft" = "gmail") {
+  return new Set(provider === "microsoft" ? [] : eligibleCleanupGroupIndices(groups));
 }
 
 export function updateCleanupSelection(

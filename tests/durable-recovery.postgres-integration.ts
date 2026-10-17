@@ -8,7 +8,7 @@ import { PrismaCleanupJobStore, PrismaCleanupJobStateRepository } from "@/lib/se
 import { createPrismaGmailScalableCleanupStore } from "@/lib/server/gmail-scalable-cleanup-durable-store";
 import { createPrismaOutlookCleanupStore } from "@/lib/server/outlook-cleanup-store";
 import { acceptDurableGmailScalableCleanup, confirmDurableGmailScalableCleanup, undoDurableGmailScalableCleanup } from "@/lib/server/gmail-scalable-live-workflow";
-import { startOutlookCleanup, confirmOutlookCleanup, advanceOutlookCleanupJob, undoOutlookCleanup } from "@/lib/server/outlook-cleanup";
+import { startOutlookCleanup, confirmOutlookCleanup, advanceOutlookCleanupJob, undoOutlookCleanup, discardOutlookCleanup } from "@/lib/server/outlook-cleanup";
 import { createGmailScalableWorkflowCoordinator } from "@/lib/server/gmail-scalable-workflow-coordinator";
 import { refreshProviderConnectionSingleFlight } from "@/lib/server/provider-token-refresh";
 import { createScanRequestFence, createCleanupRequestFence } from "@/lib/server/provider-work-fence";
@@ -106,6 +106,64 @@ async function outlookJob(c: ProviderConnection, count = 10) {
 }
 
 describe.sequential("actual Postgres durability and isolation", () => {
+  it("cancels only pre-mutation Outlook state, releases unused reservation FK and fences an active read-only worker", async () => {
+    const c = await connection(await newUser(), "microsoft");
+    const accepted = await outlookJob(c, 5);
+    const store = createPrismaOutlookCleanupStore();
+    const current = (await store.get(c.userId, accepted.id))!;
+    const ready = await store.compareAndSet(c.userId, accepted.id, current.version, job => {
+      job.view.status = "ready"; job.view.approved = 5;
+      job.payload.targets = job.payload.verificationCandidates!.slice(0, 5).map(target => ({ originalMessageId: target.messageId, groupIndex: target.groupIndex, state: "frozen" }));
+      return job;
+    });
+    await prisma.billingAccount.create({ data: { userId: c.userId, creditBalance: 1000 } });
+    await prisma.creditJobAccounting.create({ data: { jobId: accepted.id, userId: c.userId, activeStateJobId: accepted.id, requested: 5 } });
+    expect(await creditSnapshot(prisma, c.userId)).toMatchObject({ available: 995, reserved: 5 });
+    const worker = (await store.claim(accepted.id, "read-only-preparation", new Date(), 60_000))!;
+    const fence = createCleanupRequestFence(c, accepted.id, "read-only-preparation");
+    await fence();
+    expect(await asUser(c, () => discardOutlookCleanup(accepted.id))).toEqual({ discarded: true });
+    expect(await store.get(c.userId, accepted.id)).toBeUndefined();
+    expect(await store.compareAndSet(c.userId, accepted.id, worker.version, job => job, new Date(), "read-only-preparation")).toBeUndefined();
+    await expect(fence()).rejects.toMatchObject({ name: "AbortError" });
+    expect(await creditSnapshot(prisma, c.userId)).toEqual({ balance: 1000, available: 1000, reserved: 0 });
+    expect(await prisma.creditJobAccounting.findUnique({ where: { jobId: accepted.id } })).toMatchObject({ activeStateJobId: null, moved: 0, restored: 0 });
+    expect(await prisma.creditEntry.count({ where: { userId: c.userId } })).toBe(0);
+    expect(await prisma.cleanupJob.findUnique({ where: { id: accepted.id } })).toMatchObject({ status: "cancelled", acceptanceKey: null });
+    const replacement = await asUser(c, () => startOutlookCleanup({ groupIndices: ready!.view.groupIndices, requestedCount: 5 }));
+    expect(replacement.id).not.toBe(accepted.id);
+  });
+  it("confirmation versus Change selection has one atomic winner and never deletes a confirmed job", async () => {
+    const c = await connection(await newUser(), "microsoft"); const accepted = await outlookJob(c, 5);
+    await prisma.billingAccount.create({ data: { userId: c.userId, creditBalance: 1000 } });
+    const store = createPrismaOutlookCleanupStore(); const current = (await store.get(c.userId, accepted.id))!;
+    await store.compareAndSet(c.userId, accepted.id, current.version, job => ({ ...job, creditBilling: true as const,
+      view: { ...job.view, status: "ready", approved: 5 }, payload: { ...job.payload, targets: job.payload.verificationCandidates!.slice(0, 5)
+        .map(target => ({ originalMessageId: target.messageId, groupIndex: target.groupIndex, state: "frozen" as const })) } }));
+    const results = await Promise.allSettled([asUser(c, () => discardOutlookCleanup(accepted.id)), asUser(c, () => confirmOutlookCleanup(accepted.id))]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    const durable = await store.get(c.userId, accepted.id);
+    if (durable) {
+      expect(durable.view.status).toBe("running"); expect(durable.payload.confirmedAt).toEqual(expect.any(Number));
+      await expect(asUser(c, () => discardOutlookCleanup(accepted.id))).rejects.toThrow("can no longer be changed");
+      expect(await creditSnapshot(prisma, c.userId)).toMatchObject({ balance: 1000, reserved: 5 });
+    } else {
+      expect(await prisma.cleanupJob.findUnique({ where: { id: accepted.id } })).toMatchObject({ status: "cancelled" });
+      expect(await creditSnapshot(prisma, c.userId)).toMatchObject({ balance: 1000, reserved: 0 });
+    }
+    expect(await prisma.creditEntry.count({ where: { userId: c.userId } })).toBe(0);
+  });
+  it("cannot discard mutated, uncertain, completed or Undo state, or another user's preparation", async () => {
+    const c = await connection(await newUser(), "microsoft"), other = await connection(await newUser(), "microsoft");
+    const accepted = await outlookJob(c, 5); const store = createPrismaOutlookCleanupStore();
+    await expect(asUser(other, () => discardOutlookCleanup(accepted.id))).rejects.toThrow("can no longer be changed");
+    for (const status of ["running", "complete", "partial", "uncertain", "undoing", "undo_complete"] as const) {
+      const job = (await store.get(c.userId, accepted.id))!;
+      await store.compareAndSet(c.userId, accepted.id, job.version, value => ({ ...value, view: { ...value.view, status } }));
+      await expect(asUser(c, () => discardOutlookCleanup(accepted.id))).rejects.toThrow("can no longer be changed");
+      expect((await store.get(c.userId, accepted.id))!.view.status).toBe(status);
+    }
+  });
   it("user retention releases the expired reservation FK before credit presentation without touching active or other-user state", async () => {
     const c = await connection(await newUser(), "gmail");
     const other = await connection(await newUser(), "microsoft");

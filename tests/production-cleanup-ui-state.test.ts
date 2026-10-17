@@ -3,15 +3,23 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ connection: vi.fn(), find: vi.fn(), entitlement: vi.fn(), infrastructure: vi.fn(),
-  access: vi.fn(), gmail: vi.fn(), outlook: vi.fn(), report: vi.fn(), redirectReport: vi.fn() }));
+  access: vi.fn(), gmail: vi.fn(), outlook: vi.fn(), report: vi.fn(), redirectReport: vi.fn(), presentation: vi.fn() }));
 vi.mock("@/lib/server/db", () => ({ prisma: { cleanupJobState: { findFirst: mocks.find } } }));
 vi.mock("@/lib/server/provider-connection-state", () => ({ getCurrentProviderConnection: mocks.connection }));
 vi.mock("@/lib/billing/entitlements", () => ({ getUserEntitlement: mocks.entitlement }));
 vi.mock("@/lib/server/production-cleanup", () => ({ assertProductionCleanupInfrastructure: mocks.infrastructure,
   requireProductionCleanupAccess: mocks.access }));
 vi.mock("@/lib/server/gmail-scalable-live-workflow", () => ({ getDurableGmailScalableCleanupStatus: mocks.gmail }));
-vi.mock("@/lib/server/outlook-cleanup-store", () => ({ createPrismaOutlookCleanupStore: () => ({ get: mocks.outlook }),
-  serializeOutlookCleanupJob: (job: unknown) => job }));
+vi.mock("@/lib/server/outlook-cleanup-store", () => ({
+  getOutlookCleanupForPresentation: async (userId: string, providerConnectionId: string, freshSelection: boolean) => {
+    mocks.presentation(userId, providerConnectionId, freshSelection);
+    const row = await mocks.find({ where: { userId, expiresAt: { gt: new Date() },
+      job: { status: { not: "cancelled" }, scan: { provider: "microsoft", providerConnectionId } } } });
+    if (!row) return undefined;
+    const view = await mocks.outlook(userId, row.jobId);
+    if (freshSelection && ["created", "resolving", "ready"].includes(view.status)) return undefined;
+    return { view, payload: { scanId: row.job.scanId } };
+  }, serializeOutlookCleanupJob: (job: { view: unknown }) => job.view }));
 vi.mock("@/lib/server/live-scan-store", () => ({ getLiveScan: mocks.report }));
 vi.mock("@/lib/server/report-state", () => ({ getActiveReportStateOrRedirect: mocks.redirectReport }));
 vi.mock("@/lib/server/gmail-cleanup", () => ({ publicCleanupGroupsFromReport: () => [], availableCleanupCounts: () => [5, 10, 25, 100] }));
@@ -23,6 +31,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), redire
 import { getProductionCleanupUiState } from "@/lib/server/production-cleanup-ui";
 import { GET } from "../app/api/app/cleanup/availability/route";
 import CleanupPage from "../app/app/cleanup/page";
+import { createOutlookBaseState, snapshotOutlookBase } from "@/lib/domain/outlook-report";
 
 const job = { id: "job", provider: "microsoft", status: "uncertain", requested: 500, approved: 500,
   excludedBySafety: 0, movedVerified: 20, restoredVerified: 0, failed: 0, uncertain: 5, checked: 25,
@@ -41,6 +50,24 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe("server-resolved cleanup presentation", () => {
+  it("fresh report entry opens selection instead of an old ready job, and matching ready reports keep sender rows", async () => {
+    const report = snapshotOutlookBase(createOutlookBaseState(Array.from({ length: 30 }, (_, i) => ({
+      provider: "microsoft", providerMessageId: `private-message-${i}`, senderAddress: "current@example.test", senderDisplayName: "Current Sender",
+      receivedAt: new Date("2020-01-01"), isRead: false })), Date.now()), new Set());
+    mocks.find.mockResolvedValue({ jobId: "job", job: { scanId: "scan" } });
+    mocks.outlook.mockResolvedValue({ ...job, status: "ready", movedVerified: 0, uncertain: 0, approved: 5, requested: 5, undoAvailable: false });
+    mocks.report.mockResolvedValue({ progress: { scanId: "scan", provider: "microsoft", status: "completed" }, report, reportStale: false });
+    const fresh = renderToStaticMarkup(await CleanupPage({ searchParams: Promise.resolve({ selection: "fresh" }) }));
+    expect(mocks.presentation).toHaveBeenLastCalledWith("owner", "connection", true);
+    expect(fresh).toContain("Select one or more sender groups to check"); expect(fresh).not.toContain("Move 5 to Deleted Items");
+    const resume = renderToStaticMarkup(await CleanupPage());
+    expect(resume).toContain("Current Sender"); expect(resume).toContain("Move 5 to Deleted Items");
+    expect(resume).not.toContain("Sender details are no longer available");
+    mocks.report.mockResolvedValue({ progress: { scanId: "other-scan", provider: "microsoft", status: "completed" }, report, reportStale: false });
+    const mismatch = renderToStaticMarkup(await CleanupPage());
+    expect(mismatch).not.toContain("Current Sender"); expect(mismatch).not.toContain("Move 5 to Deleted Items");
+    expect(mismatch).toContain("Sender details are no longer available");
+  });
   it.each(["gmail", "microsoft"])("uses scoped ownership and backend forward authorization for %s", async (provider) => {
     mocks.connection.mockResolvedValue({ mode: "connected", userId: "owner", provider, providerConnectionId: "connection" });
     expect(await getProductionCleanupUiState()).toMatchObject({ access: "available", provider, hasJob: false });
@@ -83,7 +110,7 @@ describe("server-resolved cleanup presentation", () => {
     mocks.find.mockResolvedValue({ jobId: "job", job: { scanId: "scan" } });
     mocks.access.mockRejectedValue(new Error("expired or not owned"));
     expect(await getProductionCleanupUiState(true)).toEqual({ access: "unavailable", hasJob: false });
-    expect(mocks.outlook).not.toHaveBeenCalled();
+    expect(mocks.access).toHaveBeenCalledWith(expect.objectContaining({ access: "recovery", jobId: "job" }));
   });
   it("fails closed for disconnected, misconfigured and database-error states", async () => {
     mocks.connection.mockResolvedValueOnce({ mode: "none" });

@@ -78,7 +78,8 @@ describe("shared production cleanup presentation", () => {
       expect(render("microsoft", access, { ...outlook, status: "ready", undoAvailable: false })).not.toContain("Move up to");
     }
     expect(render("gmail", "available", { ...gmail, status: "ready" })).toContain("to Trash");
-    expect(render("microsoft", "available", { ...outlook, status: "ready" })).toContain("to Deleted Items");
+    expect(render("microsoft", "available", { ...outlook, status: "ready" })).not.toContain("Move 500 to Deleted Items");
+    expect(render("microsoft", "available", { ...outlook, status: "ready" })).toContain("selected sender details are unavailable");
   });
   it("keeps Recovery Undo and unresolved counts visible without claiming full restoration", () => {
     const html = render("microsoft", "unavailable", { ...outlook, status: "uncertain", movedVerified: 20,

@@ -45,6 +45,8 @@ export type OutlookCleanupTimingMs = {
 export type OutlookCleanupHttpRoundTrips = OutlookCleanupTimingMs;
 
 export type OutlookCleanupJobView = {
+  canChangeSelection?: boolean;
+  senderGroups?: import("@/lib/providers/gmail/cleanup-candidates").CleanupSenderGroup[];
   verification?: {
     candidatesChecked: number; approved: number; excluded: number;
     exactHeaderRequests: number; batchRequests: number; retries: number; throttles: number;

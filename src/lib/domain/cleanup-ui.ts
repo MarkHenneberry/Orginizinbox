@@ -21,6 +21,7 @@ export type OutlookCleanupUiJob = Pick<OutlookCleanupJobView,
   "provider" | "id" | "status" | "requested" | "approved" | "excludedBySafety" | "movedVerified" | "restoredVerified" |
   "failed" | "uncertain" | "checked" | "groupIndices" | "undoAvailable" | "undoMode" | "undoStatus" |
   "recoverableCount" | "createdAt" | "updatedAt" | "expiresAt" |
+  "canChangeSelection" | "senderGroups" |
   "totalBatches" | "batchesCompleted" | "undoTotalBatches" | "undoBatchesCompleted"
 > & { verification?: Pick<NonNullable<OutlookCleanupJobView["verification"]>, "candidatesChecked" | "approved" | "excluded"> };
 

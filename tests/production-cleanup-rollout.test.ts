@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), paid: vi.fn(), connection: vi.fn(), owned: vi.fn(),
-  start: vi.fn(), confirm: vi.fn(), undo: vi.fn(), status: vi.fn(), dispatch: vi.fn(), purge: vi.fn(),
+  start: vi.fn(), confirm: vi.fn(), undo: vi.fn(), status: vi.fn(), discard: vi.fn(), dispatch: vi.fn(), purge: vi.fn(),
   runtime: { gmailAvailable: true, microsoftAvailable: true, gmailScalableStoreAdapter: "prisma" } }));
 vi.mock("@/lib/config", () => ({ runtimeConfig: mocks.runtime }));
 vi.mock("@/lib/server/session", () => ({ getSession: mocks.session }));
@@ -14,7 +14,8 @@ vi.mock("@/lib/billing/entitlements", async (original) => ({
 vi.mock("@/lib/server/gmail-scalable-cleanup-runner", () => ({ startGmailScalableCleanup: mocks.start,
   confirmGmailScalableCleanup: mocks.confirm, undoGmailScalableCleanup: mocks.undo, getGmailScalableCleanupStatus: mocks.status }));
 vi.mock("@/lib/server/outlook-cleanup", () => ({ startOutlookCleanup: mocks.start, confirmOutlookCleanup: mocks.confirm,
-  undoOutlookCleanup: mocks.undo, getOutlookCleanupStatus: mocks.status }));
+  undoOutlookCleanup: mocks.undo, getOutlookCleanupStatus: mocks.status, discardOutlookCleanup: mocks.discard,
+  OutlookCleanupError: class extends Error {} }));
 vi.mock("workflow/api", () => ({ start: mocks.dispatch }));
 
 import { POST } from "../app/api/app/cleanup/[provider]/[action]/route";
@@ -56,10 +57,27 @@ beforeEach(() => {
   mocks.connection.mockResolvedValue(connection);
   mocks.owned.mockResolvedValue(1);
   for (const fn of [mocks.start, mocks.confirm, mocks.undo, mocks.status]) fn.mockResolvedValue(view);
+  mocks.discard.mockResolvedValue({ discarded: true });
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("production cleanup rollout authorization", () => {
+  it("allows only an explicitly confirmed, same-origin, owned Outlook discard even after forward rollback", async () => {
+    vi.stubEnv("MICROSOFT_PRODUCTION_CLEANUP_ENABLED", "false"); vi.stubEnv("STRIPE_SECRET_KEY", "");
+    expect((await call("gmail", "discard")).status).toBe(404);
+    expect((await call("microsoft", "discard", { confirmed: false })).status).toBe(400);
+    expect((await call("microsoft", "discard", {}, "https://untrusted.test")).status).toBe(403);
+    mocks.session.mockResolvedValueOnce(null);
+    expect((await call("microsoft", "discard")).status).toBe(401);
+    mocks.owned.mockResolvedValueOnce(0);
+    expect((await call("microsoft", "discard")).status).toBe(410);
+    expect(mocks.discard).not.toHaveBeenCalled();
+    const response = await call("microsoft", "discard");
+    expect(response.status).toBe(200); expect(await response.json()).toEqual({ discarded: true });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.discard).toHaveBeenCalledExactlyOnceWith("job"); expect(mocks.paid).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled(); expect(mocks.confirm).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
   it("purges the authenticated user before forward credit checks, never on status/recovery or untrusted requests", async () => {
     for (const action of ["start", "confirm"]) expect((await call("gmail", action, { userId: "attacker" })).status).toBe(200);
     expect(mocks.purge).toHaveBeenCalledTimes(2);

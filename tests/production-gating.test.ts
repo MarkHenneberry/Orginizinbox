@@ -179,7 +179,7 @@ describe("production UI and route boundaries", () => {
   it("keeps production secrets/config server-only and gates cleanup UI independently", () => {
     expect(readFileSync("src/lib/config.ts", "utf8")).toContain('import "server-only"');
     expect(readFileSync("src/lib/server/production-config.ts", "utf8")).not.toMatch(/NEXT_PUBLIC_(?:GMAIL|MICROSOFT|TOKEN|CLEANUP)/);
-    expect(readFileSync("app/app/cleanup/page.tsx", "utf8")).toContain('getProductionCleanupUiState(true)');
+    expect(readFileSync("app/app/cleanup/page.tsx", "utf8")).toContain('getProductionCleanupUiState(true, freshSelection)');
     expect(readFileSync("src/components/product/InboxReportView.tsx", "utf8")).toContain('availability.access === "available" && !reportStale');
     expect(readFileSync("app/app/dev/gmail-benchmark/page.tsx", "utf8")).toContain('process.env.NODE_ENV === "production"');
     expect(readFileSync("app/api/oauth/microsoft/imap/start/route.ts", "utf8")).toContain('process.env.NODE_ENV === "production"');

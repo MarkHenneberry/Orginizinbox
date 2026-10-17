@@ -22,8 +22,8 @@ vi.mock("react", async original => ({
     scope.effects.push(() => { previous?.cleanup?.(); scope.slots[index] = { deps, cleanup: effect() }; });
   }
 }));
-const mocks = vi.hoisted(() => ({ refresh: vi.fn(), poll: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh, push: vi.fn() }), usePathname: () => "/app/cleanup" }));
+const mocks = vi.hoisted(() => ({ refresh: vi.fn(), replace: vi.fn(), poll: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: mocks.refresh, replace: mocks.replace, push: vi.fn() }), usePathname: () => "/app/cleanup" }));
 vi.mock("@/components/product/useCleanupAvailability", () => ({ useCleanupAvailability: () => ({ access: "available" }) }));
 vi.mock("@/lib/adaptive-polling", () => ({ startAdaptivePolling: mocks.poll }));
 import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
@@ -68,7 +68,7 @@ beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(1_000_000); mono = 1000;
   vi.spyOn(performance, "now").mockImplementation(() => mono);
   vi.stubGlobal("window", { setInterval, clearInterval });
-  vi.stubGlobal("fetch", vi.fn()); mocks.refresh.mockReset(); mocks.poll.mockReset();
+  vi.stubGlobal("fetch", vi.fn()); mocks.refresh.mockReset(); mocks.replace.mockReset(); mocks.poll.mockReset();
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -107,6 +107,8 @@ it.each([300_000, -300_000])("uses separate monotonic Check/Move/Undo origins wi
   const client = scope(); let current: React.ReactNode;
   const renderClient = () => current = render(client, () => GmailCleanupClient(props()));
   renderClient();
+  const sender = elements(current).find(e => e.type === "input" && e.props.type === "checkbox" && !e.props.disabled)!;
+  (sender.props.onChange as () => void)(); renderClient();
   const check = elements(current).find(e => e.type === "button" && text(e.props.children) === "Check 5 messages")!;
   expect(check.props.disabled).toBe(false);
   let accept!: (response: Response) => void;
@@ -160,6 +162,27 @@ it.each(["resolving", "running", "undoing"] as const)("reattached %s uses a loca
   expect(text(render(timer, () => tree(operation)))).toContain("Elapsed: 0s");
   mono += 3000; vi.advanceTimersByTime(3000);
   expect(text(render(timer, () => tree(operation)))).toContain("Elapsed: 3s");
+});
+
+it("Change selection waits for authoritative discard before clearing Outlook selection and ignores stale polling", async () => {
+  const initial = { ...job("resolving"), canChangeSelection: true };
+  const client = scope(); let current: React.ReactNode;
+  const renderClient = () => current = render(client, () => GmailCleanupClient(props(initial)));
+  renderClient();
+  const poll = mocks.poll.mock.calls[0][0] as (signal: AbortSignal) => Promise<boolean>;
+  const change = elements(tree(workspace(current))).find(e => e.type === "button" && text(e.props.children) === "Change selection")!;
+  let accept!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { accept = resolve; }));
+  const pending = (change.props.onClick as () => Promise<void>)(); renderClient();
+  expect(workspace(current)).toBeDefined();
+  expect(fetch).toHaveBeenCalledWith("/api/app/cleanup/microsoft/discard", expect.objectContaining({ method: "POST", body: JSON.stringify({ jobId: "job", confirmed: true }) }));
+  accept(Response.json({ discarded: true })); await pending; renderClient();
+  expect(mocks.replace).toHaveBeenCalledWith("/app/cleanup?selection=fresh");
+  expect(text(current)).toContain("Select one or more sender groups to check");
+  expect(elements(current).filter(e => e.type === "input" && e.props.type === "checkbox" && e.props.checked)).toHaveLength(0);
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: job("ready") } }));
+  expect(await poll(new AbortController().signal)).toBe(false); renderClient();
+  expect(workspace(current)).toBeUndefined();
 });
 
 it("successful purchase reconciliation retains its explicit server refresh", async () => {

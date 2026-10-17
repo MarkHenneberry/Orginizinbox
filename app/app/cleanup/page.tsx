@@ -24,10 +24,11 @@ import { getActiveReportStateOrRedirect } from "@/lib/server/report-state";
 import { getCurrentGmailScalableCleanup } from "@/lib/server/gmail-scalable-cleanup-runner";
 import { getCurrentOutlookCleanup } from "@/lib/server/outlook-cleanup";
 
-export default async function CleanupPage() {
+export default async function CleanupPage({ searchParams }: { searchParams?: Promise<{ selection?: string }> } = {}) {
+  const freshSelection = (await searchParams)?.selection === "fresh";
   const credits = await getCreditPresentation();
   if (process.env.NODE_ENV === "production") {
-    const state = await getProductionCleanupUiState(true);
+    const state = await getProductionCleanupUiState(true, freshSelection);
     // Recovery does not depend on an unexpired report or permission to start another cleanup.
     const live = state.userId && state.provider ? await getLiveScan(state.userId, state.provider).catch(() => undefined) : undefined;
     const hasJob = Boolean(state.gmailJob || state.outlookJob);
@@ -72,7 +73,7 @@ export default async function CleanupPage() {
     ? [...outlookCleanupCountOptions]
     : [...availableCleanupCounts(), ...(scalableCleanupEnabled ? gmailScalableCleanupDevCounts : [])];
   const initialScalableJob = !outlook && scalableCleanupEnabled ? await getCurrentGmailScalableCleanup() : undefined;
-  const initialOutlookJob = outlookCleanupEnabled ? await getCurrentOutlookCleanup() : undefined;
+  const initialOutlookJob = outlookCleanupEnabled ? await getCurrentOutlookCleanup(freshSelection) : undefined;
 
   return (
     <main className="py-8">

@@ -3,6 +3,7 @@ import { createOutlookBaseState, snapshotOutlookBase } from "@/lib/domain/outloo
 import { decryptCleanupState } from "@/lib/server/crypto";
 import { startOutlookCleanup } from "@/lib/server/outlook-cleanup";
 import type { OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store";
+import { serializeOutlookCleanupJob } from "@/lib/server/outlook-cleanup-store";
 
 const h = vi.hoisted(() => ({ live: vi.fn(), state: vi.fn(), job: vi.fn(), schedule: vi.fn() }));
 vi.mock("@/lib/config", () => ({ env: { TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 3).toString("base64"), CLEANUP_STATE_ENCRYPTION_KEY: Buffer.alloc(32, 4).toString("base64") },
@@ -16,8 +17,8 @@ vi.mock("@/lib/server/db", () => ({ prisma: { $transaction: async (fn: (tx: unkn
 }) } }));
 beforeEach(() => {
   vi.clearAllMocks();
-  const base = createOutlookBaseState(Array.from({ length: 60 }, (_, i) => ({ provider: "microsoft", providerMessageId: `private-id-${i}`,
-    senderAddress: i < 30 ? "selected@example.test" : "unselected@example.test", receivedAt: new Date("2020-01-01"), isRead: false })), Date.now());
+  const base = createOutlookBaseState(Array.from({ length: 90 }, (_, i) => ({ provider: "microsoft", providerMessageId: `private-id-${i}`,
+    senderAddress: i < 30 ? "selected@example.test" : i < 60 ? "unselected@example.test" : "third@example.test", receivedAt: new Date("2020-01-01"), isRead: false })), Date.now());
   h.live.mockResolvedValue({ progress: { scanId: "opaque-scan", status: "completed", provider: "microsoft" },
     report: snapshotOutlookBase(base, new Set()), outlookBase: base, participatedConversationIds: new Set() });
 });
@@ -30,7 +31,10 @@ it("accepts only server-resolved selected-group IDs, ignores injected identities
   expect(job.payload.verificationCandidates).toHaveLength(30);
   expect(job.payload.verificationCandidates?.every(candidate => Number(candidate.messageId.replace("private-id-", "")) < 30)).toBe(true);
   expect(job.payload.targets).toEqual([]); expect(job.payload.confirmedAt).toBeUndefined(); expect(response.approved).toBe(0);
-  expect(JSON.stringify(response)).not.toMatch(/private-id|example.test|attacker-id|verificationCandidates/);
+  expect(response.senderGroups).toHaveLength(1);
+  expect(response.senderGroups?.[0].displayName).toBe("selected@example.test");
+  expect(JSON.stringify(response)).not.toMatch(/private-id|attacker-id|verificationCandidates/);
+  expect(serializeOutlookCleanupJob(job, false)).not.toHaveProperty("senderGroups", expect.any(Array));
   expect(JSON.stringify(persisted)).not.toMatch(/private-id|example.test|attacker-id/);
   expect(h.schedule).toHaveBeenCalledWith(response.id, "prepare");
 });
@@ -39,4 +43,15 @@ it("rejects invalid selection indices and obsolete reports without a frozen base
   const live = await h.live(); h.live.mockResolvedValue({ ...live, outlookBase: undefined });
   await expect(startOutlookCleanup({ groupIndices: [0], requestedCount: 5 })).rejects.toThrow("fresh Outlook scan");
   expect(h.state).not.toHaveBeenCalled(); expect(h.schedule).not.toHaveBeenCalled();
+});
+it("rejects empty and oversized explicit selections; two selected senders never include a third", async () => {
+  const live = await h.live();
+  const indices = live.report.senders.flatMap((sender: { senderKey: string }, index: number) => sender.senderKey === "third@example.test" ? [] : [index]);
+  await expect(startOutlookCleanup({ groupIndices: [], requestedCount: 5 })).rejects.toThrow("Select at least one");
+  await expect(startOutlookCleanup({ groupIndices: [indices[0]], requestedCount: 31 })).rejects.toThrow("do not contain that many");
+  expect(h.state).not.toHaveBeenCalled();
+  await startOutlookCleanup({ groupIndices: indices, requestedCount: 50 });
+  const stored = JSON.parse(decryptCleanupState(h.state.mock.calls[0][0].data.encryptedPayload)) as OutlookCleanupStoredJob;
+  expect(stored.payload.verificationCandidates).toHaveLength(60);
+  expect(stored.payload.verificationCandidates?.every(candidate => Number(candidate.messageId.replace("private-id-", "")) < 60)).toBe(true);
 });
