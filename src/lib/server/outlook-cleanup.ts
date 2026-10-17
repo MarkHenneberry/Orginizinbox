@@ -424,7 +424,11 @@ export async function prepareOutlookJob(
       job.view.httpRoundTripsByPhase.preflight += (after?.requests ?? 0) - (before?.requests ?? 0);
     }
     await save();
-    console.info("Outlook targeted verification metrics", { requestedCount: job.view.requested, ...stats });
+    const verificationComplete = job.view.status === "ready" || job.view.status === "failed";
+    console.info(verificationComplete ? "Outlook targeted verification complete" : "Outlook targeted verification progress", {
+      requestedCount: job.view.requested, ...stats,
+      ...(verificationComplete ? { totalVerificationDurationMs: stats.verificationDurationMs } : {})
+    });
     return;
   }
   // An older unprepared job has no frozen base pool: require a fresh review, never rescan headers.

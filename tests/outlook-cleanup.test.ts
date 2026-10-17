@@ -28,6 +28,35 @@ import {
 } from "@/lib/server/outlook-cleanup-store";
 
 describe("Outlook durable cleanup", () => {
+  it.each(["ready", "failed"] as const)("labels intermediate verification as progress and %s verification as cumulative complete", async terminal => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    let clock = 0;
+    const timer = vi.spyOn(performance, "now").mockImplementation(() => clock += 10);
+    try {
+      const job = storedJob(25, "created");
+      const provider = fakeProvider({ getCleanupMessages: async ids => ids.map(id => terminal === "failed"
+        ? undefined : { record: record(id), parentFolderId: "folder" }) });
+      await prepareOutlookJob(job, provider, async () => undefined, 1);
+      expect(job.view.status).toBe("resolving");
+      expect(log).toHaveBeenNthCalledWith(1, "Outlook targeted verification progress", expect.objectContaining({
+        requestedCount: 25, candidatesChecked: 20, verificationDurationMs: expect.any(Number)
+      }));
+      const progress = log.mock.calls[0][1];
+      expect(progress).not.toHaveProperty("totalVerificationDurationMs");
+      await prepareOutlookJob(job, provider, async () => undefined, 1);
+      expect(job.view.status).toBe(terminal);
+      expect(log).toHaveBeenNthCalledWith(2, "Outlook targeted verification complete", expect.objectContaining({
+        requestedCount: 25, candidatesChecked: 25,
+        verificationDurationMs: job.view.verification!.verificationDurationMs,
+        totalVerificationDurationMs: job.view.verification!.verificationDurationMs
+      }));
+      expect(job.view.verification!.verificationDurationMs).toBeGreaterThan(progress.verificationDurationMs);
+      await prepareOutlookJob(job, provider, async () => undefined, 1);
+      expect(log).toHaveBeenCalledTimes(2);
+    } finally {
+      timer.mockRestore(); log.mockRestore();
+    }
+  });
   it.each([
     { isStarred: true }, { isImportant: true }, { isSent: true }, { isDraft: true }, { isDeleted: true },
     { isExcludedMailboxLocation: true }, { hasUncertainMetadata: true }, { receivedAt: new Date() },
