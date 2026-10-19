@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cookieHarness = vi.hoisted(() => {
@@ -68,6 +69,7 @@ describe("Microsoft OAuth callback", () => {
     cookieHarness.jar.clear();
     vi.stubEnv("NODE_ENV", "development");
     vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     oauth.exchangeMicrosoftCode.mockResolvedValue({ access_token: "access", refresh_token: "refresh", id_token: "id", scope: "Mail.ReadWrite" });
     oauth.verifyMicrosoftTokenResponse.mockResolvedValue({
       access_token: "access",
@@ -187,6 +189,63 @@ describe("Microsoft OAuth callback", () => {
     expect(output).toContain('"result":"success"');
     for (const forbidden of ["secret-code", "secret-verifier", "secret-nonce", state, "access", "refresh", "user-1", "connection-1"]) {
       expect(output).not.toContain(forbidden);
+    }
+  });
+
+  it.each([false, true])("logs sanitized connection-save failure in production (linkAttempt=%s) without changing the redirect", async linkAttempt => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { createOAuthState, SESSION_COOKIE } = await import("@/lib/server/session");
+    const { GET } = await import("../app/api/oauth/microsoft/callback/route");
+    const state = await createOAuthState("/app/account", {
+      provider: "microsoft", codeVerifier: "private-verifier", nonce: "private-nonce",
+      ...(linkAttempt ? { linkIntentId: "private-link-intent" } : {})
+    });
+    const sensitive = {
+      access_token: "private-access-token", refresh_token: "private-refresh-token", id_token: "private-id-token",
+      code: "private-code", state, email: "private@example.test", tenantId: "private-tenant", subject: "private-subject",
+      database: "postgresql://private:secret@private/db", key: "private-key", userId: "private-user", connectionId: "private-connection"
+    };
+    oauth.verifyMicrosoftTokenResponse.mockResolvedValueOnce({
+      ...sensitive, scope: "mail.readwrite", identity: { tenantId: sensitive.tenantId, subject: sensitive.subject, email: sensitive.email }
+    });
+    oauth.upsertMicrosoftConnection.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError(JSON.stringify(sensitive), {
+      code: "P2002", clientVersion: Prisma.prismaVersion.client, meta: sensitive
+    }));
+    const response = await GET(new NextRequest(`https://example.test/api/oauth/microsoft/callback?code=${sensitive.code}&state=${state}`));
+    expect(response.headers.get("location")).toBe(`https://example.test/connect/microsoft?reason=connection_save_failed${linkAttempt ? "&link=failed" : ""}`);
+    expect(cookieHarness.jar.has(SESSION_COOKIE)).toBe(false);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Microsoft connection save diagnostic", {
+      stage: "connection_save", errorName: "PrismaClientKnownRequestError", prismaCode: "P2002",
+      prismaClientVersion: Prisma.prismaVersion.client, errorClass: "prisma_known_request", linkAttempt
+    });
+    const output = JSON.stringify([...vi.mocked(console.error).mock.calls, ...vi.mocked(console.info).mock.calls]);
+    for (const value of [...Object.values(sensitive), "private-verifier", "private-nonce", "private-link-intent"]) expect(output).not.toContain(value);
+  });
+
+  it.each([false, true])("logs session activation separately and preserves session_failed (linkAttempt=%s)", async linkAttempt => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { createOAuthState, SESSION_COOKIE } = await import("@/lib/server/session");
+    const { prisma } = await import("@/lib/server/db");
+    const { GET } = await import("../app/api/oauth/microsoft/callback/route");
+    const state = await createOAuthState("/app/account", {
+      provider: "microsoft", codeVerifier: "private-verifier", nonce: "private-nonce",
+      ...(linkAttempt ? { linkIntentId: "private-link-intent" } : {})
+    });
+    vi.mocked(prisma.providerConnection.update).mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError(
+      `private-token private@example.test private-tenant private-subject ${state}`, {
+        code: "P2025", clientVersion: Prisma.prismaVersion.client, meta: { userId: "private-user" }
+      }
+    ));
+    const response = await GET(new NextRequest(`https://example.test/api/oauth/microsoft/callback?code=private-code&state=${state}`));
+    expect(response.headers.get("location")).toBe(`https://example.test/connect/microsoft?reason=session_failed${linkAttempt ? "&link=activation_failed" : ""}`);
+    expect(oauth.upsertMicrosoftConnection).toHaveBeenCalledOnce();
+    expect(cookieHarness.jar.has(SESSION_COOKIE)).toBe(false);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("Microsoft session activation diagnostic", {
+      stage: "session_activation", errorName: "PrismaClientKnownRequestError", errorClass: "prisma_known_request", prismaCode: "P2025"
+    });
+    const output = JSON.stringify([...vi.mocked(console.error).mock.calls, ...vi.mocked(console.info).mock.calls]);
+    for (const value of [state, "private-token", "private@example.test", "private-tenant", "private-subject", "private-user", "private-code", "private-verifier", "private-nonce", "private-link-intent"]) {
+      expect(output).not.toContain(value);
     }
   });
 });

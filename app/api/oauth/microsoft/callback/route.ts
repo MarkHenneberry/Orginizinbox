@@ -13,6 +13,7 @@ import {
   verifyMicrosoftTokenResponse
 } from "@/lib/server/microsoft-oauth";
 import { consumeOAuthState, getSession, setSessionCookie } from "@/lib/server/session";
+import { persistenceErrorDiagnostic } from "@/lib/server/persistence-error-diagnostic";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -99,7 +100,10 @@ export async function GET(request: NextRequest) {
       ? await upsertMicrosoftConnection(verified, stateResult.linkIntentId)
       : await upsertMicrosoftConnection(verified);
     linkCompleted = Boolean(stateResult.linkIntentId);
-  } catch {
+  } catch (error) {
+    console.error("Microsoft connection save diagnostic", {
+      stage: "connection_save", ...persistenceErrorDiagnostic(error), linkAttempt
+    });
     return errorRedirect(request, "connection_save_failed");
   }
   try {
@@ -108,7 +112,11 @@ export async function GET(request: NextRequest) {
       providerConnectionId: saved.connection.id,
       createdAt: Date.now()
     });
-  } catch {
+  } catch (error) {
+    const { errorName, errorClass, prismaCode } = persistenceErrorDiagnostic(error);
+    console.error("Microsoft session activation diagnostic", {
+      stage: "session_activation", errorName, errorClass, ...(prismaCode ? { prismaCode } : {})
+    });
     return errorRedirect(request, "session_failed");
   }
   logSafeMicrosoftCallback("success");
