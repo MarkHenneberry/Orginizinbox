@@ -2,6 +2,7 @@
 import { useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { creditPacks, isCreditPack, type CreditPack } from "@/lib/billing/packs";
+import { notifyCleanupAvailabilityChanged } from "@/lib/cleanup-availability-events";
 
 export function BillingActions({ canBuy, canRefresh, gmail = false, microsoft = false }: {
   canBuy: boolean; canRefresh: boolean; gmail?: boolean; microsoft?: boolean;
@@ -22,7 +23,7 @@ export function BillingActions({ canBuy, canRefresh, gmail = false, microsoft = 
       });
       const result = await response.json() as { url?: string; error?: string };
       if (!response.ok) throw new Error(result.error ?? "Your account could not be updated.");
-      if (action === "reconcile") { setNotice("Payment status checked. Verified purchases are added to your balance."); router.refresh(); }
+      if (action === "reconcile") { setNotice("Payment status checked. Verified purchases are added to your balance."); notifyCleanupAvailabilityChanged(); router.refresh(); }
       else {
         if (!result.url) throw new Error("Please try again from Account.");
         window.location.assign(result.url);

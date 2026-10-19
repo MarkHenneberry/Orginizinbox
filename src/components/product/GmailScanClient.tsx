@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { OperationStatus } from "@/components/product/OperationStatus";
 import { startAdaptivePolling } from "@/lib/adaptive-polling";
+import { notifyCleanupAvailabilityChanged } from "@/lib/cleanup-availability-events";
 import { scanClockStart } from "@/lib/scan-clock";
 
 type ScanProgress = {
@@ -87,6 +88,7 @@ function MailboxScanClient({
       if (signal.aborted) return false;
       setPollError(false);
       setProgress(payload.progress);
+      if (payload.progress?.status === "completed") notifyCleanupAvailabilityChanged();
       return payload.progress?.status === "running";
     }, () => setPollError(true));
   }, [endpoint, isRunning, progress?.scanId]);

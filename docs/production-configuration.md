@@ -1,5 +1,15 @@
 # Production Configuration
 
+Keep Production, Preview and local Development `DATABASE_URL` targets separate.
+Use a fourth disposable database via `TEST_DATABASE_URL` for Postgres/Workflow
+integration tests. Do not configure that test variable in Vercel Production.
+Separate databases/projects in the same Prisma workspace still share its operation
+allowance. Prefer local Postgres for Development/tests; omit DB-backed Previews
+unless needed, or use a non-production database outside the Production quota.
+See [database usage](database-usage.md) for safeguards, query budgets and the
+post-deployment quota verification procedure. No production migration is needed
+for these optimizations.
+
 Provider flags enable connection and read-only scanning, not production cleanup.
 Keep both flags false until deployment checks are complete. This pass does not
 enable billing or promote development cleanup to production.

@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { prisma } from "@/lib/server/db";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
 import { getUserEntitlement } from "@/lib/billing/entitlements";
@@ -11,7 +12,8 @@ type CleanupUiState = {
   userId?: string; jobScanId?: string; gmailJob?: GmailCleanupUiJob; outlookJob?: OutlookCleanupUiJob;
 };
 
-export async function getProductionCleanupUiState(loadJob = false, freshSelection = false): Promise<CleanupUiState> {
+const presentationEntitlement = cache(getUserEntitlement);
+export const getProductionCleanupUiState = cache(async (loadJob = false, freshSelection = false): Promise<CleanupUiState> => {
   const state: CleanupUiState = { access: "unavailable", hasJob: false };
   if (process.env.NODE_ENV !== "production") return state;
   try {
@@ -48,12 +50,11 @@ export async function getProductionCleanupUiState(loadJob = false, freshSelectio
     // Failure here must not discard an already loaded recovery view.
     try {
       assertProductionCleanupInfrastructure(connection.provider, "forward");
-      const entitlement = await getUserEntitlement(connection.userId);
+      const entitlement = await presentationEntitlement(connection.userId);
       state.access = entitlement.paidAccess ? "available" : entitlement.state === "free" ? "upgrade"
         : "inactive";
-      if (state.access === "available") await requireProductionCleanupAccess({ userId: connection.userId,
-        provider: connection.provider, providerConnectionId: connection.providerConnectionId, access: "forward" });
+      // Presentation is not mutation authorization. Actual starts/confirms recheck on the server.
     } catch { state.access = "unavailable"; }
     return state;
   } catch { return { access: "unavailable", hasJob: false }; }
-}
+});

@@ -1,5 +1,5 @@
 import "server-only";
-import { accountVerifiedProgress, type VerifiedCreditProgress } from "@/lib/billing/credits";
+import { accountVerifiedProgress, creditProgressChanged, type VerifiedCreditProgress } from "@/lib/billing/credits";
 import type { OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store";
 import { expiredUnlockedStateWhere } from "@/lib/domain/transient-retention";
 import type { CleanupJobState, PrismaClient } from "@prisma/client";
@@ -142,7 +142,7 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
       lockOwner,
       encryptedPayload: this.codec.encode(next),
       expiresAt: new Date(next.view.expiresAt),
-      creditProgress: verifiedCreditProgress(next)
+      creditProgress: creditProgressChanged(verifiedCreditProgress(current), verifiedCreditProgress(next)) ? verifiedCreditProgress(next) : undefined
     });
     return replaced ? cloneJob(next) : undefined;
   }
@@ -305,6 +305,10 @@ export class CleanupStateIntegrityError extends Error {
     super(message);
     this.name = "CleanupStateIntegrityError";
   }
+}
+
+export function decodeCleanupJobStateRow<TJob extends DurableCleanupJobEnvelope>(row: CleanupJobStateRow) {
+  return decodeAndValidate(row, createCleanupJobStateCodec<TJob>());
 }
 
 export function createCleanupJobStateCodec<TJob extends DurableCleanupJobEnvelope = GmailScalableStoredJob>(input?: {

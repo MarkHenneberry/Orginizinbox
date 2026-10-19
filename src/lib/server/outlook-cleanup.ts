@@ -192,7 +192,12 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
 export async function getOutlookCleanupStatus(jobId: string) {
   assertGate(1);
   const session = await requireSession("recovery", jobId);
-  const job = await createPrismaOutlookCleanupStore().get(session.userId, jobId);
+  return getAuthorizedOutlookCleanupStatus(session.userId, jobId);
+}
+
+// The production route has already validated its origin, session, connection and recovery access.
+export async function getAuthorizedOutlookCleanupStatus(userId: string, jobId: string) {
+  const job = await createPrismaOutlookCleanupStore().get(userId, jobId);
   if (!job || job.provider !== "microsoft") throw new OutlookCleanupError("Outlook cleanup job expired.", 410);
   return serializeOutlookCleanupJob(job);
 }

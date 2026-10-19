@@ -5,10 +5,12 @@ import { BillingError, requireBillingConfig } from "@/lib/billing/config";
 import { EntitlementDeniedError, requirePaidCleanupEntitlement } from "@/lib/billing/entitlements";
 import { ProductionCleanupError, requireProductionCleanupAccess, type CleanupProvider, type CleanupAccess } from "@/lib/server/production-cleanup";
 
-export async function productionCleanupBoundary(request: Request, operation?: {
+type CleanupOperation = {
   provider: CleanupProvider; access: CleanupAccess; jobId?: string;
-}): Promise<Response | null> {
-  if (process.env.NODE_ENV !== "production") return null;
+};
+
+export async function authorizeProductionCleanupRequest(request: Request, operation?: CleanupOperation): Promise<Response | { userId: string; providerConnectionId: string }> {
+  if (process.env.NODE_ENV !== "production") return new Response(null, { status: 404 });
   const headers = { "Cache-Control": "no-store" };
   try {
     // Recovery does not require working Stripe configuration or unspent credits.
@@ -27,7 +29,7 @@ export async function productionCleanupBoundary(request: Request, operation?: {
     }
     await requireProductionCleanupAccess({ ...operation, userId: session.userId,
       providerConnectionId: session.providerConnectionId });
-    return null;
+    return { userId: session.userId, providerConnectionId: session.providerConnectionId };
   } catch (error) {
     if (error instanceof ProductionCleanupError) return Response.json({ error: error.message, code: error.code,
       href: "/app/account" }, { status: error.status, headers });
@@ -37,4 +39,10 @@ export async function productionCleanupBoundary(request: Request, operation?: {
       href: "/app/account", action: error instanceof EntitlementDeniedError ? error.action : "refresh"
     }, { status: error instanceof BillingError ? error.status : 503, headers });
   }
+}
+
+export async function productionCleanupBoundary(request: Request, operation?: CleanupOperation): Promise<Response | null> {
+  if (process.env.NODE_ENV !== "production") return null;
+  const result = await authorizeProductionCleanupRequest(request, operation);
+  return result instanceof Response ? result : null;
 }

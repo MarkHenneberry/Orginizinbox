@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { runtimeConfig } from "@/lib/config";
 import { sanitizeReportForClient } from "@/lib/domain/report-sanitizer";
@@ -32,7 +33,7 @@ export type ActiveReportState = {
 
 export type OptionalReportState = Pick<ActiveReportState, "source" | "scanId" | "backHref"> | null;
 
-export async function getActiveReportStateOrRedirect(): Promise<ActiveReportState> {
+export const getActiveReportStateOrRedirect = cache(async (): Promise<ActiveReportState> => {
   const connection = await getCurrentProviderConnection();
   if (runtimeConfig.fixtureMode) {
     return {
@@ -97,9 +98,9 @@ export async function getActiveReportStateOrRedirect(): Promise<ActiveReportStat
       liveScan.progress.provider === "microsoft" &&
       liveScan.reportStale !== true
   };
-}
+});
 
-export async function getOptionalActiveReportState(): Promise<OptionalReportState> {
+export const getOptionalActiveReportState = cache(async (): Promise<OptionalReportState> => {
   const connection = await getCurrentProviderConnection();
   if (runtimeConfig.fixtureMode) {
     return {
@@ -124,4 +125,4 @@ export async function getOptionalActiveReportState(): Promise<OptionalReportStat
     scanId: liveScan.progress.scanId,
     backHref: "/app"
   };
-}
+});

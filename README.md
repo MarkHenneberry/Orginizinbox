@@ -26,6 +26,7 @@ Copy `.env.example` to `.env.local` for local work. Real secrets must never be c
 - `NEXT_PUBLIC_APP_URL`: canonical site URL.
 - `ORGANIZINBOX_FIXTURE_MODE`: keeps fixture report available locally.
 - `DATABASE_URL`: PostgreSQL-compatible Prisma database for SaaS/account state.
+- `TEST_DATABASE_URL`: separate disposable Postgres database required by the explicit Postgres/Workflow integration suites; never use the application or Production database. See [database usage and environment setup](docs/database-usage.md).
 - `TOKEN_ENCRYPTION_KEY`: required before persisting OAuth tokens.
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: Google OAuth for Gmail IMAP/XOAUTH2.
 - `GMAIL_IMAP_HOST`, `GMAIL_IMAP_PORT`: Gmail IMAP endpoint configuration.

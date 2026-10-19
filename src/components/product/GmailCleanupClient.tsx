@@ -1,6 +1,7 @@
 "use client";
 
 import { startAdaptivePolling } from "@/lib/adaptive-polling";
+import { notifyCleanupAvailabilityChanged } from "@/lib/cleanup-availability-events";
 import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { CleanupCreditContext } from "@/components/product/CleanupCreditContext";
 import { useCleanupAvailability } from "@/components/product/useCleanupAvailability";
@@ -125,6 +126,13 @@ export function GmailCleanupClient({
   const scalableJobId = scalableJob?.id;
   const outlookJobId = outlookJob?.id;
   const busy = activeOperation !== null || scalableRunning || outlookPollingActive;
+  const statusSnapshot = `${scalableJob?.status ?? ""}:${outlookJob?.status ?? ""}`;
+  const previousStatus = useRef(statusSnapshot);
+  useEffect(() => {
+    const changed = previousStatus.current !== statusSnapshot;
+    previousStatus.current = statusSnapshot;
+    if (changed && !scalablePollingActive && !outlookPollingActive) notifyCleanupAvailabilityChanged();
+  }, [statusSnapshot, scalablePollingActive, outlookPollingActive]);
   const activeJobId = job?.id;
   useCleanupCreditRefresh(outlookJob
     ? { id: outlookJob.id, status: outlookJob.status, moved: outlookJob.movedVerified }

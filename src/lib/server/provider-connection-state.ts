@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { runtimeConfig } from "@/lib/config";
 import { hasRequiredGmailImapScope } from "@/lib/providers/gmail/scopes";
 import { hasRequiredMicrosoftMailScope } from "@/lib/providers/microsoft/scopes";
@@ -34,7 +35,7 @@ export type CurrentProviderConnection =
       reason: string;
     };
 
-export async function getCurrentProviderConnection(): Promise<CurrentProviderConnection> {
+export const getCurrentProviderConnection = cache(async (): Promise<CurrentProviderConnection> => {
   if (process.env.NODE_ENV === "production" && !runtimeConfig.gmailAvailable && !runtimeConfig.microsoftAvailable) {
     return { mode: "unavailable" };
   }
@@ -118,4 +119,4 @@ export async function getCurrentProviderConnection(): Promise<CurrentProviderCon
     scope: connection.scope,
     status: "connected"
   };
-}
+});

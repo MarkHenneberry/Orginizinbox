@@ -8,11 +8,9 @@ import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
 
-const h = vi.hoisted(() => ({ rows: vi.fn(), jobs: new Map<string, unknown>() }));
-vi.mock("@/lib/server/db", () => ({ prisma: { cleanupJobState: { findMany: h.rows } } }));
-vi.mock("@/lib/server/cleanup-job-store", () => ({ PrismaCleanupJobStore: class {
-  async get(_user: string, id: string) { return h.jobs.get(id); }
-} }));
+const h = vi.hoisted(() => ({ rows: vi.fn(), find: vi.fn(), jobs: new Map<string, unknown>() }));
+vi.mock("@/lib/server/db", () => ({ prisma: { cleanupJobState: { findMany: h.rows, findUnique: h.find } } }));
+vi.mock("@/lib/server/crypto", () => ({ encryptCleanupState: (value: string) => value, decryptCleanupState: (value: string) => value }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }) }));
 const group = buildCleanupSenderGroups(getFixtureInboxReport().senders).find(group => group.eligible)!;
 function job(id: string, status: OutlookCleanupStoredJob["view"]["status"] = "ready"): OutlookCleanupStoredJob {
@@ -33,7 +31,11 @@ const render = (provider: "gmail" | "microsoft", stored?: OutlookCleanupStoredJo
   countOptions: [5, 25, 100, 500], developmentMode: false, productionAccess: "available", cleanupEnabled: true,
   scalableCleanupEnabled: false, legacyCleanupMaximum: 0, bulkUndoProofEnabled: false, fixtureMode: false, reportStale: false
 }));
-beforeEach(() => { vi.stubEnv("NODE_ENV", "production"); h.jobs.clear(); h.rows.mockReset().mockResolvedValue([]); });
+function storedRow(id: string, scanId = `scan-${id}`) {
+  return { jobId: id, userId: "owner", version: 1, expiresAt: new Date(Date.now() + 600_000),
+    encryptedPayload: JSON.stringify(h.jobs.get(id)), job: { scanId } };
+}
+beforeEach(() => { vi.stubEnv("NODE_ENV", "production"); h.jobs.clear(); h.rows.mockReset().mockResolvedValue([]); h.find.mockClear(); });
 afterEach(() => vi.unstubAllEnvs());
 it("starts Outlook with zero selected senders and a disabled check action while retaining Gmail defaults", () => {
   expect([...createDefaultCleanupSelection([group], "microsoft")]).toEqual([]);
@@ -45,9 +47,9 @@ it("starts Outlook with zero selected senders and a disabled check action while 
 });
 it.each(["created", "resolving", "ready"] as const)("fresh entry ignores an old %s preparation without deleting it", async status => {
   const prepared = job("prepared", status); h.jobs.set("prepared", prepared);
-  h.rows.mockResolvedValue([{ jobId: "prepared", job: { scanId: "scan-prepared" } }]);
+  h.rows.mockResolvedValue([storedRow("prepared")]);
   expect(await getOutlookCleanupForPresentation("owner", "connection", true)).toBeUndefined();
-  expect(await getOutlookCleanupForPresentation("owner", "connection")).toBe(prepared);
+  expect(await getOutlookCleanupForPresentation("owner", "connection")).toEqual(JSON.parse(JSON.stringify(prepared)));
   expect(h.jobs.has("prepared")).toBe(true);
   expect(h.rows.mock.calls[0][0].where).toMatchObject({ userId: "owner", job: { scan: { provider: "microsoft", providerConnectionId: "connection" } } });
 });
@@ -62,13 +64,32 @@ it("reload after discard excludes cancelled jobs and opens fresh with zero selec
 });
 it.each(["running", "complete", "partial", "uncertain", "undoing", "undo_complete"] as const)("an older %s job takes precedence over a new prepared job even on fresh entry", async status => {
   h.jobs.set("prepared", job("prepared")); const recovery = job("recovery", status); h.jobs.set("recovery", recovery);
-  h.rows.mockResolvedValue(["prepared", "recovery"].map(id => ({ jobId: id, job: { scanId: `scan-${id}` } })));
-  expect(await getOutlookCleanupForPresentation("owner", "connection", true)).toBe(recovery);
+  h.rows.mockResolvedValue(["prepared", "recovery"].map(id => storedRow(id)));
+  expect(await getOutlookCleanupForPresentation("owner", "connection", true)).toEqual(JSON.parse(JSON.stringify(recovery)));
+  expect(h.rows).toHaveBeenCalledOnce();
+  expect(h.find).not.toHaveBeenCalled();
   expect(isOutlookPreMutationJob(recovery)).toBe(false);
 });
 it("never accepts mismatched scan or connection ownership as presentation context", async () => {
-  h.jobs.set("wrong", job("wrong")); h.rows.mockResolvedValue([{ jobId: "wrong", job: { scanId: "another-scan" } }]);
+  h.jobs.set("wrong", job("wrong")); h.rows.mockResolvedValue([storedRow("wrong", "another-scan")]);
   await expect(getOutlookCleanupForPresentation("owner", "connection", true)).rejects.toThrow("ownership");
+});
+it.each(["user", "version", "job", "connection", "ciphertext"])("rejects a mismatched %s envelope in the batched read", async mismatch => {
+  h.jobs.set("prepared", job("prepared"));
+  const row = storedRow("prepared");
+  if (mismatch === "user") row.userId = "someone-else";
+  if (mismatch === "version") row.version = 99;
+  if (mismatch === "job") row.jobId = "another-job";
+  if (mismatch === "connection") row.encryptedPayload = row.encryptedPayload.replace('"providerConnectionId":"connection"', '"providerConnectionId":"other"');
+  if (mismatch === "ciphertext") row.encryptedPayload = "invalid encrypted data";
+  h.rows.mockResolvedValue([row]);
+  await expect(getOutlookCleanupForPresentation("owner", "connection")).rejects.toThrow();
+  expect(h.find).not.toHaveBeenCalled();
+});
+it("ignores rows that expire between the batched query and decoding", async () => {
+  h.jobs.set("expired", job("expired"));
+  h.rows.mockResolvedValue([{ ...storedRow("expired"), expiresAt: new Date(Date.now() - 1) }]);
+  expect(await getOutlookCleanupForPresentation("owner", "connection")).toBeUndefined();
 });
 it("retains selected sender context without a report, never persists it in a terminal snapshot, and hides naked confirmation without context", () => {
   const prepared = job("ready");

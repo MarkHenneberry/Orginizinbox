@@ -14,6 +14,41 @@ import { refreshProviderConnectionSingleFlight } from "@/lib/server/provider-tok
 import { createProviderRequestCoordinator } from "@/lib/server/provider-request-coordinator";
 
 describe("provider multi-user coordination", () => {
+  it("backs off occupied request slots within the existing wall-time budget", async () => {
+    let clock = 0;
+    const claim = vi.fn(async () => ({ count: 0 }));
+    const fence = vi.fn(async () => {});
+    const work = vi.fn(async () => {});
+    const coordinate = createProviderRequestCoordinator("occupied", { limit: 2, client: {
+      providerRequestLease: { upsert: vi.fn(async () => ({})), updateMany: claim }
+    } as never, now: () => new Date(clock), sleep: async ms => { clock += ms; }, random: () => 0, beforeRequest: fence });
+    await expect(coordinate(work)).rejects.toThrow("busy");
+    expect(clock).toBe(12_000);
+    expect(claim.mock.calls.length).toBeLessThan(40);
+    expect(fence).toHaveBeenCalledTimes(claim.mock.calls.length / 2);
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it("observes a live refresh lease without doomed claim writes and consumes the rotated version", async () => {
+    const state = providerConnection();
+    state.refreshLeaseOwner = "winner"; state.refreshLeaseExpiresAt = new Date(30_000);
+    const client = tokenClient(state);
+    const claim = vi.spyOn(client.providerConnection, "updateMany");
+    const read = vi.spyOn(client.providerConnection, "findFirst");
+    let clock = 0;
+    const refresh = vi.fn();
+    const result = await refreshProviderConnectionSingleFlight({ userId: state.userId, connection: structuredClone(state),
+      provider: "microsoft", force: true, refreshSkewMs: 60_000, refresh, client: client as never,
+      now: () => new Date(clock), random: () => 0, sleep: async ms => {
+        clock += ms;
+        if (clock >= 5_000) { state.tokenVersion++; state.encryptedRefreshToken = "encrypted:rotated"; }
+      }
+    });
+    expect(result.tokenVersion).toBe(1); expect(result.encryptedRefreshToken).toBe("encrypted:rotated");
+    expect(claim).not.toHaveBeenCalled(); expect(refresh).not.toHaveBeenCalled();
+    expect(read.mock.calls.length).toBeLessThan(12);
+  });
+
   it("single-flights simultaneous rotated-token refreshes by connection version", async () => {
     const state = providerConnection();
     const client = tokenClient(state);

@@ -789,6 +789,11 @@ export async function startGmailScalableCleanup(input: { groupIndices: unknown; 
 
 export async function getGmailScalableCleanupStatus(jobId: string) {
   const { userId } = await requireScalableSession("recovery", jobId);
+  return getAuthorizedGmailScalableCleanupStatus(userId, jobId);
+}
+
+// Called only after the production boundary (or the development session check) authorizes recovery.
+export async function getAuthorizedGmailScalableCleanupStatus(userId: string, jobId: string) {
   const { getDurableGmailScalableCleanupStatus } = await import("@/lib/server/gmail-scalable-live-workflow");
   return getDurableGmailScalableCleanupStatus(userId, jobId);
 }

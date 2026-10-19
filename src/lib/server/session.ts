@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { cookies } from "next/headers.js";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
@@ -89,7 +90,7 @@ export async function setSessionCookie(payload: Omit<SessionPayload, "sessionGen
   cookieStore.set(SESSION_COOKIE, signValue(Buffer.from(JSON.stringify(session), "utf8").toString("base64url")), appSessionCookieOptions());
 }
 
-export async function getSession(): Promise<SessionPayload | null> {
+export const getSession = cache(async (): Promise<SessionPayload | null> => {
   const cookieStore = await cookies();
   const signed = cookieStore.get(SESSION_COOKIE)?.value;
   const session = parseSessionCookie(signed);
@@ -107,7 +108,7 @@ export async function getSession(): Promise<SessionPayload | null> {
     select: { id: true }
   });
   return connection ? session : null;
-}
+});
 
 function parseSessionCookie(signed: string | undefined): SessionPayload | null {
   if (!signed) return null;

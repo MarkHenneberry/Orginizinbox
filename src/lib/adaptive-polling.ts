@@ -10,8 +10,13 @@ export function startAdaptivePolling(poll: (signal: AbortSignal) => Promise<bool
   let inFlight = false;
   let wakeRequested = false;
   let stopped = false;
+  const visible = () => typeof document === "undefined" || document.visibilityState !== "hidden";
+  const lifecycle = (event: "start" | "stop" | "hidden" | "focus") => {
+    if (process.env.NODE_ENV === "development") console.debug("Organizinbox polling lifecycle", { event });
+  };
 
   function stop() {
+    if (!stopped) lifecycle("stop");
     stopped = true;
     clearTimeout(timer);
     controller.abort();
@@ -19,7 +24,7 @@ export function startAdaptivePolling(poll: (signal: AbortSignal) => Promise<bool
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", wake);
   }
   async function run() {
-    if (stopped || inFlight) return;
+    if (stopped || inFlight || !visible()) return;
     inFlight = true;
     wakeRequested = false;
     try {
@@ -27,17 +32,20 @@ export function startAdaptivePolling(poll: (signal: AbortSignal) => Promise<bool
     } catch { if (!stopped) onError(); }
     finally {
       inFlight = false;
-      if (!stopped) timer = setTimeout(() => void run(), wakeRequested ? 0 : intervalMs ?? pollingInterval(Date.now() - started));
+      if (!stopped && visible()) timer = setTimeout(() => void run(), wakeRequested ? 0 : intervalMs ?? pollingInterval(Date.now() - started));
     }
   }
   function wake() {
-    if (stopped || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+    if (stopped) return;
+    if (!visible()) { clearTimeout(timer); lifecycle("hidden"); return; }
+    lifecycle("focus");
     if (inFlight) { wakeRequested = true; return; }
     clearTimeout(timer);
     void run();
   }
   if (typeof window !== "undefined") window.addEventListener("focus", wake);
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", wake);
+  lifecycle("start");
   void run();
   return Object.assign(stop, { refresh: wake });
 }

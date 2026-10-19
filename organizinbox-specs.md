@@ -1471,6 +1471,16 @@ The research concludes that inbox access itself creates a separate purchase deci
 
 ---
 
+## Database Operation Discipline
+
+Keep Prisma ORM and Prisma Postgres. Idle report and cleanup workspaces must generate zero recurring database requests. Use the server-rendered availability snapshot initially, then throttled visible-tab focus and explicit state-change events to refresh availability; never an idle interval. Poll status only during active work, pause scheduling in hidden tabs, and stop immediately on terminal/expired responses. No automatic scan or cleanup starts are introduced.
+
+Deduplicate presentation-only session, connection, report and entitlement reads within a server render/request, never in a cross-user global cache. Batch encrypted Outlook job reads while retaining ownership, authenticated-envelope checks, expiry and recovery precedence. Actual mutation routes and workers retain fresh server authorization, durable fencing and all safety/recovery checkpoints. Financial transitions remain atomic with job CAS; identical accounting checkpoints need not issue financial writes. User-scoped opportunistic deletion retains bounded expiry/lease-safe deletion and reservation FK behavior without global backlog queries. Daily Cron retains aggregate backlog diagnostics and its existing schedule; TTLs do not change.
+
+Use bounded jittered backoff for contended request/refresh leases without bypassing authorization or retrying ambiguous mutations. Dedicated database integration/Workflow fixture commands require an explicit isolated TEST_DATABASE_URL and must never silently use the application's DATABASE_URL. Development, Preview and Production database credentials must be scoped separately in deployment configuration. Operational route/lifecycle diagnostics contain only fixed route/event names, outcomes, timing and aggregate counts, never identities, mailbox data, credentials or raw exceptions, and must not create database writes themselves.
+
+---
+
 # 30. Data Retention Target
 
 The following retention policy applies to both Gmail and Outlook:

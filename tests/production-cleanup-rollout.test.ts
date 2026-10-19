@@ -12,9 +12,10 @@ vi.mock("@/lib/billing/entitlements", async (original) => ({
   ...await original<typeof import("@/lib/billing/entitlements")>(), requirePaidCleanupEntitlement: mocks.paid
 }));
 vi.mock("@/lib/server/gmail-scalable-cleanup-runner", () => ({ startGmailScalableCleanup: mocks.start,
-  confirmGmailScalableCleanup: mocks.confirm, undoGmailScalableCleanup: mocks.undo, getGmailScalableCleanupStatus: mocks.status }));
+  confirmGmailScalableCleanup: mocks.confirm, undoGmailScalableCleanup: mocks.undo, getGmailScalableCleanupStatus: mocks.status,
+  getAuthorizedGmailScalableCleanupStatus: mocks.status }));
 vi.mock("@/lib/server/outlook-cleanup", () => ({ startOutlookCleanup: mocks.start, confirmOutlookCleanup: mocks.confirm,
-  undoOutlookCleanup: mocks.undo, getOutlookCleanupStatus: mocks.status, discardOutlookCleanup: mocks.discard,
+  undoOutlookCleanup: mocks.undo, getOutlookCleanupStatus: mocks.status, getAuthorizedOutlookCleanupStatus: mocks.status, discardOutlookCleanup: mocks.discard,
   OutlookCleanupError: class extends Error {} }));
 vi.mock("workflow/api", () => ({ start: mocks.dispatch }));
 
@@ -49,6 +50,7 @@ function call(provider = "gmail", action = "start", body: object = {}, from = or
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(console, "info").mockImplementation(() => {});
   for (const [key, value] of Object.entries(configured)) vi.stubEnv(key, value);
   Object.assign(mocks.runtime, { gmailAvailable: true, microsoftAvailable: true, gmailScalableStoreAdapter: "prisma" });
   vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Provider requests prohibited"); }));
@@ -62,6 +64,14 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("production cleanup rollout authorization", () => {
+  it.each(["gmail", "microsoft"])("authorizes %s status once and passes only server-owned identity to the reader", async provider => {
+    expect((await call(provider, "status", { userId: "attacker" })).status).toBe(200);
+    expect(mocks.session).toHaveBeenCalledOnce();
+    expect(mocks.connection).toHaveBeenCalledOnce();
+    expect(mocks.owned).toHaveBeenCalledOnce();
+    expect(mocks.status).toHaveBeenCalledExactlyOnceWith("owner", "job");
+    expect(mocks.paid).not.toHaveBeenCalled();
+  });
   it("allows only an explicitly confirmed, same-origin, owned Outlook discard even after forward rollback", async () => {
     vi.stubEnv("MICROSOFT_PRODUCTION_CLEANUP_ENABLED", "false"); vi.stubEnv("STRIPE_SECRET_KEY", "");
     expect((await call("gmail", "discard")).status).toBe(404);

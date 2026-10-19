@@ -1,8 +1,12 @@
 # Postgres concurrency and recovery proof
 
 Run explicitly with `npm run test:postgres`. This suite is excluded from the normal
-unit test glob. It loads the existing development database using Next's environment
-precedence (`.env.local` before `.env`) without printing connection configuration.
+unit test glob. It requires an explicit `TEST_DATABASE_URL` for a separate,
+disposable Postgres database, loaded using Next's environment precedence
+(`.env.local` before `.env`) without printing connection configuration. It never
+falls back to the application's `DATABASE_URL` and rejects matching targets,
+including supported pooler aliases. Provision/migrate the isolated database
+separately before running. Cleanup does not refund metered database operations.
 It does not apply migrations or alter existing users, configuration files or secrets.
 
 The test process supplies disposable encryption keys only for synthetic records.
@@ -13,7 +17,7 @@ cascades remove dependent scan/job records. Teardown runs on ordinary test failu
 as well as success; a hard-killed test process cannot guarantee hooks execute.
 Do not terminate a run while its cleanup hook is running. If the test process is
 externally killed, investigate only users under that run's `pg-proof-<UUID>` prefix;
-never use a broad delete against the development database.
+never use a broad delete against any application database.
 
 ## Real versus substituted boundaries
 

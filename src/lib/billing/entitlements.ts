@@ -2,7 +2,7 @@ import "server-only";
 import type { BillingAccount } from "@prisma/client";
 import { prisma } from "@/lib/server/db";
 import { BillingError, getBillingConfig } from "@/lib/billing/config";
-import { creditOwner, creditSnapshot } from "@/lib/billing/credits";
+import { creditOwner, creditSnapshotFromAccount } from "@/lib/billing/credits";
 import { billingOperation } from "@/lib/billing/operations";
 import { StripeBillingService } from "@/lib/billing/service";
 import { createStripeClient } from "@/lib/billing/stripe";
@@ -21,7 +21,7 @@ export async function getUserEntitlement(userId: string): Promise<Entitlement> {
   if (!config) return { ...empty, state: "inactive", paidAccess: false, periodEnd: null };
   const owner = await creditOwner(prisma, userId);
   const account = await new StripeBillingService(prisma, createStripeClient(), config).reconcile(owner);
-  return deriveEntitlement(account, config.livemode, await creditSnapshot(prisma, owner));
+  return deriveEntitlement(account, config.livemode, await creditSnapshotFromAccount(prisma, owner, account));
 }
 
 export class EntitlementDeniedError extends BillingError {

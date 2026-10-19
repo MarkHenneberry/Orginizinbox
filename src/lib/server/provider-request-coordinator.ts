@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/server/db";
+import { contentionBackoff } from "@/lib/server/contention-backoff";
 
 export function createProviderRequestCoordinator(
   providerConnectionId: string,
@@ -38,7 +39,8 @@ export function createProviderRequestCoordinator(
     const owner = `provider-request:${randomUUID()}`;
     await ensureSlots();
 
-    for (let attempt = 0; attempt < 200; attempt += 1) {
+    const deadline = now().getTime() + 12_000;
+    for (let attempt = 0; attempt < 200 && (attempt === 0 || now().getTime() < deadline); attempt += 1) {
       if (!input.fenceAfterClaimOnly) await input.beforeRequest?.();
       const claimedAt = now();
       for (let slot = 0; slot < limit; slot += 1) {
@@ -66,7 +68,7 @@ export function createProviderRequestCoordinator(
         }
       }
       if (input.fenceAfterClaimOnly) await input.beforeRequest?.();
-      await sleep(20 + Math.floor(random() * 40));
+      await sleep(Math.min(contentionBackoff(attempt, random), Math.max(0, deadline - now().getTime())));
     }
     throw new Error("Provider request concurrency limit is busy.");
   };

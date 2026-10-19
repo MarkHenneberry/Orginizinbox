@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { EmailProviderName, PrismaClient, ProviderConnection } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
+import { contentionBackoff } from "@/lib/server/contention-backoff";
 
 export type ProviderRefreshResult = {
   accessToken: string;
@@ -28,8 +29,10 @@ export async function refreshProviderConnectionSingleFlight(input: {
   const sleep = input.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const random = input.random ?? Math.random;
   const initialVersion = input.connection.tokenVersion;
+  const waitDeadline = now().getTime() + 35_000;
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (attempt > 0 && now().getTime() >= waitDeadline) break;
     const current = await client.providerConnection.findFirst({
       where: {
         id: input.connection.id,
@@ -46,6 +49,10 @@ export async function refreshProviderConnectionSingleFlight(input: {
       current.tokenExpiresAt.getTime() <= now().getTime() + input.refreshSkewMs;
     if ((!input.force && !refreshNeeded) || (input.force && current.tokenVersion > initialVersion)) return current;
 
+    if (current.refreshLeaseOwner && current.refreshLeaseExpiresAt && current.refreshLeaseExpiresAt > now()) {
+      await sleep(contentionBackoff(attempt, random));
+      continue;
+    }
     const owner = `token-refresh:${randomUUID()}`;
     const claimedAt = now();
     const claim = await client.providerConnection.updateMany({
@@ -66,7 +73,7 @@ export async function refreshProviderConnectionSingleFlight(input: {
       }
     });
     if (claim.count !== 1) {
-      await sleep(25 + Math.floor(random() * 50));
+      await sleep(contentionBackoff(attempt, random));
       continue;
     }
 

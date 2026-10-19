@@ -1,11 +1,18 @@
-import { productionCleanupBoundary } from "@/lib/billing/cleanup-boundary";
+import { authorizeProductionCleanupRequest } from "@/lib/billing/cleanup-boundary";
 import { productionCleanupJobView } from "@/lib/server/production-cleanup-response";
 import { ProductionCleanupError } from "@/lib/server/production-cleanup";
+import { observeDatabaseRoute } from "@/lib/server/database-usage";
 
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
 
 export async function POST(request: Request, context: { params: Promise<{ provider: string; action: string }> }) {
+  const params = await context.params;
+  return observeDatabaseRoute(params.action === "status" ? "cleanup_status" : "cleanup_action",
+    () => handleCleanupRequest(request, { params: Promise.resolve(params) }));
+}
+
+async function handleCleanupRequest(request: Request, context: { params: Promise<{ provider: string; action: string }> }) {
   if (process.env.NODE_ENV !== "production") return new Response(null, { status: 404, headers });
   const { provider, action } = await context.params;
   if ((provider !== "gmail" && provider !== "microsoft") ||
@@ -20,9 +27,9 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     if ((action === "confirm" || action === "undo" || action === "discard") && body.confirmed !== true) {
       return Response.json({ error: "Explicit confirmation is required." }, { status: 400, headers });
     }
-    const denied = await productionCleanupBoundary(request, { provider,
+    const authorized = await authorizeProductionCleanupRequest(request, { provider,
       access: action === "undo" || action === "status" || action === "discard" ? "recovery" : "forward", jobId: action === "start" ? undefined : jobId });
-    if (denied) return denied;
+    if (authorized instanceof Response) return authorized;
     if (action === "start" && (typeof body.requestedCount !== "number" || !Number.isInteger(body.requestedCount) ||
         (provider === "gmail" ? ![250, 500].includes(body.requestedCount) : body.requestedCount < 1 || body.requestedCount > 500))) {
       return Response.json({ error: "Choose a supported cleanup size." }, { status: 400, headers });
@@ -34,7 +41,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       job = action === "start" ? await service.startGmailScalableCleanup(input)
         : action === "confirm" ? await service.confirmGmailScalableCleanup(jobId!)
         : action === "undo" ? await service.undoGmailScalableCleanup(jobId!)
-        : await service.getGmailScalableCleanupStatus(jobId!);
+        : await service.getAuthorizedGmailScalableCleanupStatus(authorized.userId, jobId!);
     } else {
       const service = await import("@/lib/server/outlook-cleanup");
       if (action === "discard") {
@@ -47,7 +54,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       job = action === "start" ? await service.startOutlookCleanup(input)
         : action === "confirm" ? await service.confirmOutlookCleanup(jobId!)
         : action === "undo" ? await service.undoOutlookCleanup(jobId!)
-        : await service.getOutlookCleanupStatus(jobId!);
+        : await service.getAuthorizedOutlookCleanupStatus(authorized.userId, jobId!);
     }
     if (!job) return Response.json({ error: "Cleanup state is unavailable or expired." }, { status: 410, headers });
     return Response.json({ job: productionCleanupJobView(job) }, { headers });

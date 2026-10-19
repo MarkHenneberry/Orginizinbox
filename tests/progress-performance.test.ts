@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startAdaptivePolling, pollingInterval } from "@/lib/adaptive-polling";
 import { createDurableWriteGate } from "@/lib/server/durable-write-gate";
+import { watchCleanupAvailability, notifyCleanupAvailabilityChanged } from "@/lib/cleanup-availability-events";
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -40,21 +41,74 @@ describe("redundant durable write coalescing", () => {
 });
 
 describe("single-flight adaptive status polling", () => {
-  it("refreshes availability every 15 seconds and immediately on window focus", async () => {
+  it("uses the SSR availability snapshot and makes zero requests over an idle day, then refreshes on throttled focus/action", async () => {
     vi.useFakeTimers();
     const window = new EventTarget();
+    const document = Object.assign(new EventTarget(), { visibilityState: "visible" });
     vi.stubGlobal("window", window);
-    const poll = vi.fn(async () => true);
-    const stop = startAdaptivePolling(poll, undefined, 15_000);
-    await vi.advanceTimersByTimeAsync(14_999);
-    expect(poll).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(poll).toHaveBeenCalledTimes(2);
+    vi.stubGlobal("document", document);
+    const poll = vi.fn(async () => {});
+    const stop = watchCleanupAvailability(poll, vi.fn());
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    expect(poll).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
     window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    window.dispatchEvent(new Event("focus"));
+    expect(poll).toHaveBeenCalledOnce();
+    notifyCleanupAvailabilityChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(poll).toHaveBeenCalledTimes(2);
+    document.visibilityState = "hidden";
+    notifyCleanupAvailabilityChanged();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(poll).toHaveBeenCalledTimes(2);
+    document.visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
     expect(poll).toHaveBeenCalledTimes(3);
     stop();
+    notifyCleanupAvailabilityChanged();
+    expect(poll).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it("pauses active status polling while hidden and resumes once visible, then stops on terminal state", async () => {
+    vi.useFakeTimers();
+    const document = Object.assign(new EventTarget(), { visibilityState: "hidden" });
+    vi.stubGlobal("document", document);
+    const poll = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+    startAdaptivePolling(poll);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(poll).not.toHaveBeenCalled();
+    document.visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(poll).toHaveBeenCalledOnce();
+    document.visibilityState = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(poll).toHaveBeenCalledOnce();
+    document.visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(poll).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("coalesces availability changes behind an in-flight request without overlap or timers", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
+    let complete!: () => void;
+    const poll = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; })).mockResolvedValue(undefined);
+    const stop = watchCleanupAvailability(poll, vi.fn());
+    notifyCleanupAvailabilityChanged();
+    notifyCleanupAvailabilityChanged();
+    notifyCleanupAvailabilityChanged();
+    expect(poll).toHaveBeenCalledOnce();
+    complete(); await vi.advanceTimersByTimeAsync(0);
+    expect(poll).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    stop();
   });
   it("never overlaps slow polls, including focus wake-ups, and aborts on teardown", async () => {
     vi.useFakeTimers();

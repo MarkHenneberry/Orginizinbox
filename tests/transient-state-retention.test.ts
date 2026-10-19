@@ -89,6 +89,17 @@ afterEach(() => {
 });
 
 describe("provider-neutral physical retention", () => {
+  it("skips backlog/count queries during empty user activity but retains global Cron diagnostics", async () => {
+    const { client, scanState, cleanupJobState } = database();
+    await purgeExpiredUserTransientState("owner", client, now);
+    expect(scanState.findMany).toHaveBeenCalledOnce();
+    expect(cleanupJobState.findMany).toHaveBeenCalledOnce();
+    expect(scanState.count).not.toHaveBeenCalled();
+    expect(cleanupJobState.count).not.toHaveBeenCalled();
+    await purgeExpiredTransientState(client, now);
+    expect(scanState.count).toHaveBeenCalledTimes(2);
+    expect(cleanupJobState.count).toHaveBeenCalledTimes(2);
+  });
   it("purges only the authenticated user's expired unlocked state, rechecking concurrent renewal", async () => {
     const records = [row("expired", { userId: "owner", expiresAt: now }), row("locked", { userId: "owner", lockExpiresAt: after }),
       row("fresh", { userId: "owner", expiresAt: after }), row("other"), row("renewed", { userId: "owner" })];

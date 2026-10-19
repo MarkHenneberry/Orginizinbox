@@ -68,12 +68,14 @@ describe("server-resolved cleanup presentation", () => {
     expect(mismatch).not.toContain("Current Sender"); expect(mismatch).not.toContain("Move 5 to Deleted Items");
     expect(mismatch).toContain("Sender details are no longer available");
   });
-  it.each(["gmail", "microsoft"])("uses scoped ownership and backend forward authorization for %s", async (provider) => {
+  it.each(["gmail", "microsoft"])("uses scoped ownership and one presentation entitlement for %s", async (provider) => {
     mocks.connection.mockResolvedValue({ mode: "connected", userId: "owner", provider, providerConnectionId: "connection" });
     expect(await getProductionCleanupUiState()).toMatchObject({ access: "available", provider, hasJob: false });
     expect(mocks.find.mock.calls[0][0].where).toMatchObject({ userId: "owner", expiresAt: { gt: expect.any(Date) },
       job: { status: { not: "cancelled" }, scan: { provider, providerConnectionId: "connection" } } });
-    expect(mocks.access).toHaveBeenCalledWith({ userId: "owner", provider, providerConnectionId: "connection", access: "forward" });
+    expect(mocks.entitlement).toHaveBeenCalledExactlyOnceWith("owner");
+    expect(mocks.connection).toHaveBeenCalledOnce();
+    expect(mocks.access).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
   it.each(["free", "inactive", "active"])("maps %s from durable credit state", async (state) => {

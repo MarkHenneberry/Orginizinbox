@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { sanitizeReportForClient } from "@/lib/domain/report-sanitizer";
 import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { getCurrentProviderConnection } from "@/lib/server/provider-connection-state";
@@ -39,7 +40,7 @@ export type AppHomeState =
       };
     };
 
-export async function getAppHomeState(): Promise<AppHomeState> {
+export const getAppHomeState = cache(async (): Promise<AppHomeState> => {
   const connection = await getCurrentProviderConnection();
   if (connection.mode === "unavailable") return { mode: "unavailable", provider: connection.provider };
   if (connection.mode === "fixture") {
@@ -80,7 +81,7 @@ export async function getAppHomeState(): Promise<AppHomeState> {
     accountEmail: connection.accountEmail,
     reportExpired: await hasExpiredLiveScan(connection.userId, connection.provider)
   };
-}
+});
 
 export type PublicCtaIntent = "generic" | "gmail" | "outlook";
 

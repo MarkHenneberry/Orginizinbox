@@ -1,10 +1,12 @@
 import { workflow } from "@workflow/vitest";
 import { loadEnv } from "vite";
 import { defineConfig } from "vitest/config";
+import { isolatedTestDatabase } from "./scripts/test-database-config";
 
 for (const [key, value] of Object.entries(loadEnv("test", process.cwd(), ""))) {
   process.env[key] ??= value;
 }
+process.env.DATABASE_URL = isolatedTestDatabase(process.env);
 
 export default defineConfig({
   plugins: [workflow()],

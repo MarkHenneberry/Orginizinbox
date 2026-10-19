@@ -20,6 +20,7 @@ async function sweep(input: {
   remove: (ids: string[]) => Promise<number>;
   remaining: () => Promise<number>;
   deferred: () => Promise<number>;
+  diagnostics: boolean;
 }): Promise<SweepResult> {
   let deleted = 0;
   try {
@@ -29,7 +30,8 @@ async function sweep(input: {
       deleted += await input.remove(ids);
       if (ids.length < batchSize) break;
     }
-    return { deleted, remaining: await input.remaining(), deferred: await input.deferred(), status: "success" };
+    return { deleted, remaining: input.diagnostics ? await input.remaining() : null,
+      deferred: input.diagnostics ? await input.deferred() : null, status: "success" };
   } catch {
     // Database errors can contain query parameters; never return/log the exception.
     return { deleted, remaining: null, deferred: null, status: "failed" };
@@ -62,6 +64,7 @@ async function purge(
   try { await client.inboxLinkIntent?.deleteMany({ where: { ...(userId === undefined ? {} : { sourceUserId: userId }), expiresAt: { lte: now } } }); }
   catch { linksPurged = false; }
   const scans = await sweep({
+    diagnostics: userId === undefined,
     find: async () => (await client.scanState.findMany({
       where, select: { scanId: true }, orderBy: { expiresAt: "asc" }, take: batchSize
     })).map((row) => row.scanId),
@@ -70,6 +73,7 @@ async function purge(
     deferred: () => client.scanState.count({ where: deferredWhere })
   });
   const cleanup = await sweep({
+    diagnostics: userId === undefined,
     find: async () => (await client.cleanupJobState.findMany({
       where, select: { jobId: true }, orderBy: { expiresAt: "asc" }, take: batchSize
     })).map((row) => row.jobId),

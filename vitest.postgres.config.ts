@@ -1,10 +1,11 @@
 import nextEnv from "@next/env";
 import { defineConfig } from "vitest/config";
+import { isolatedTestDatabase } from "./scripts/test-database-config";
 
 // Vitest sets NODE_ENV=test before loading config; Next otherwise skips .env.local.
 Object.assign(process.env, { NODE_ENV: "development" });
 nextEnv.loadEnvConfig(process.cwd(), true, { info() {}, error() {} });
-if (!process.env.DATABASE_URL) throw new Error("Development DATABASE_URL is required for Postgres integration tests.");
+process.env.DATABASE_URL = isolatedTestDatabase(process.env);
 Object.assign(process.env, {
   NODE_ENV: "test", ORGANIZINBOX_FIXTURE_MODE: "false",
   TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 74).toString("base64"),

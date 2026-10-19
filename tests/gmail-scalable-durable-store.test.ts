@@ -87,8 +87,14 @@ describe("durable scalable cleanup Workflow boundary", () => {
     };
     const store = new PrismaGmailScalableCleanupStore(repository, codec);
     const job = storedJob("credit-job", "owner");
-    Object.assign(job, { creditBilling: true }); job.payload.confirmedAt = Date.now();
+    Object.assign(job, { creditBilling: true });
+    delete job.payload.confirmedAt;
     await store.create(job);
+    // Production confirmation reserves in its CAS transaction, before Workflow dispatch.
+    await store.compareAndSet("owner", "credit-job", 1, current => {
+      current.payload.confirmedAt = Date.now(); return current;
+    });
+    expect(financial.jobs.get("credit-job")?.requested).toBe(1);
     const provider = new FakeDurableProvider();
     const executor = new GmailScalableProviderWorkflowExecutor(async () => provider);
     await new GmailScalableWorkflowCoordinator(store, executor).advance("credit-job", "cleanup");

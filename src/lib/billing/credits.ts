@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma } from "@prisma/client";
+import type { BillingAccount, Prisma } from "@prisma/client";
 import { BillingError } from "@/lib/billing/config";
 
 type Database = Pick<Prisma.TransactionClient, "user" | "billingAccount" | "creditJobAccounting" | "creditEntry">;
@@ -12,6 +12,11 @@ export async function creditOwner(db: Pick<Database, "user">, userId: string) {
 export async function creditSnapshot(db: Database, userId: string) {
   const owner = await creditOwner(db, userId);
   const account = await db.billingAccount.findUnique({ where: { userId: owner } });
+  return creditSnapshotFromAccount(db, owner, account);
+}
+
+// Reuse only a server-resolved owner/account from the same request, never client data.
+export async function creditSnapshotFromAccount(db: Pick<Database, "creditJobAccounting">, owner: string, account: BillingAccount | null) {
   const holds = await db.creditJobAccounting.findMany({
     where: { userId: owner, closed: false, activeStateJobId: { not: null } }, select: { requested: true, moved: true }
   });
@@ -21,6 +26,10 @@ export async function creditSnapshot(db: Database, userId: string) {
 }
 
 export type VerifiedCreditProgress = { requested: number; moved: number; restored: number; closed: boolean };
+export function creditProgressChanged(before: VerifiedCreditProgress | undefined, after: VerifiedCreditProgress | undefined) {
+  return after !== undefined && (!before || before.requested !== after.requested || before.moved !== after.moved ||
+    before.restored !== after.restored || before.closed !== after.closed);
+}
 export function validateCreditProgress(progress: VerifiedCreditProgress) {
   if (![progress.requested, progress.moved, progress.restored].every(Number.isSafeInteger) ||
       progress.requested < 1 || progress.moved < 0 || progress.restored < 0 ||

@@ -10,6 +10,7 @@ import {
 } from "@/lib/domain/outlook-cleanup";
 import {
   PrismaCleanupJobStore,
+  decodeCleanupJobStateRow,
   type DurableCleanupStore
 } from "@/lib/server/cleanup-job-store";
 import type { MicrosoftCleanupSafetyContext } from "@/lib/providers/microsoft/provider";
@@ -83,13 +84,12 @@ export async function getOutlookCleanupForPresentation(userId: string, providerC
   const rows = await prisma.cleanupJobState.findMany({ where: {
     userId, expiresAt: { gt: new Date() },
     job: { status: { not: "cancelled" }, scan: { provider: "microsoft", providerConnectionId } }
-  }, orderBy: { updatedAt: "desc" }, select: { jobId: true, job: { select: { scanId: true } } } });
-  const store = createPrismaOutlookCleanupStore();
+  }, orderBy: { updatedAt: "desc" }, include: { job: { select: { scanId: true } } } });
   let prepared: OutlookCleanupStoredJob | undefined;
   for (const row of rows) {
-    const job = await store.get(userId, row.jobId);
-    if (!job) continue;
-    if (job.provider !== "microsoft" || job.payload.providerConnectionId !== providerConnectionId || job.payload.scanId !== row.job.scanId) {
+    if (row.expiresAt.getTime() <= Date.now()) continue;
+    const job = decodeCleanupJobStateRow<OutlookCleanupStoredJob>(row);
+    if (job.userId !== userId || job.provider !== "microsoft" || job.payload.providerConnectionId !== providerConnectionId || job.payload.scanId !== row.job.scanId) {
       throw new Error("Cleanup ownership could not be verified.");
     }
     if (!isOutlookPreMutationJob(job)) return job;
