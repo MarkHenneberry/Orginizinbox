@@ -89,10 +89,10 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 it("carries the same trace through real preparation worker re-entry without changing checkpoints or exact selection", async () => {
   const log = vi.spyOn(console, "info").mockImplementation(() => {});
-  job.view.status = "created"; job.view.requested = 40; job.view.approved = 0;
+  job.view.status = "created"; job.view.requested = 120; job.view.approved = 0;
   job.payload.targets = [];
   job.payload.selectedSenders = [{ groupIndex: 0, senderKey: "bulk@example.test" }];
-  job.payload.verificationCandidates = Array.from({ length: 40 }, (_, index) => ({ messageId: `private-${index}`, groupIndex: 0 }));
+  job.payload.verificationCandidates = Array.from({ length: 120 }, (_, index) => ({ messageId: `private-${index}`, groupIndex: 0 }));
   const baseline = structuredClone(job);
   let trace: VerificationTrace = newVerificationTrace();
   trace.scheduledAt = Date.now();

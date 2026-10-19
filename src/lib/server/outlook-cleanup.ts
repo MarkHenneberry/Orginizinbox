@@ -41,6 +41,7 @@ import {
 import { getSession } from "@/lib/server/session";
 import { startProviderCleanupWorkflow } from "@/lib/server/provider-cleanup-workflow-start";
 import { createProviderRequestCoordinator } from "@/lib/server/provider-request-coordinator";
+import { outlookVerificationBatchesPerStep, outlookVerificationStepBudgetMs } from "@/lib/domain/outlook-verification-chunk";
 import { currentVerificationTrace, measureVerification, measureVerificationSync, verificationWorkflowSeed,
   withVerificationTrace, recordWorkflowArrival, verificationCompleted, logCompletedVerification, type VerificationTrace } from "@/lib/server/outlook-verification-timing";
 
@@ -354,7 +355,7 @@ async function advanceOutlookCleanupUnit(jobId: string, operation: "prepare" | "
     };
 
     const result = operation === "prepare"
-      ? (await prepareOutlookJob(job, provider, save, 1), { outcome: job.view.status === "resolving" ? "continue" as const : "stop" as const })
+      ? (await prepareOutlookJob(job, provider, save, outlookVerificationBatchesPerStep, outlookVerificationStepBudgetMs), { outcome: job.view.status === "resolving" ? "continue" as const : "stop" as const })
       : operation === "cleanup"
         ? await executeOutlookMoves(job, provider, save, async () => {
             await markLiveReportStale(job!.userId, "microsoft");
@@ -395,7 +396,8 @@ export async function prepareOutlookJob(
   job: OutlookCleanupStoredJob,
   provider: OutlookCleanupProviderPort,
   save: () => Promise<void>,
-  maxBatches = Number.POSITIVE_INFINITY
+  maxBatches = Number.POSITIVE_INFINITY,
+  maxDurationMs = Number.POSITIVE_INFINITY
 ) {
   if (job.payload.verificationCandidates) {
     if (!["created", "resolving"].includes(job.view.status)) return;
@@ -416,7 +418,8 @@ export async function prepareOutlookJob(
       const participated = new Set(job.payload.participatedConversationIds);
       const seen = new Set(job.payload.targets.map(target => target.originalMessageId));
       let batches = 0;
-      while (job.payload.targets.length < job.view.requested && (job.payload.verificationCursor ?? 0) < job.payload.verificationCandidates.length && batches < maxBatches) {
+      while (job.payload.targets.length < job.view.requested && (job.payload.verificationCursor ?? 0) < job.payload.verificationCandidates.length &&
+          batches < maxBatches && performance.now() - started < maxDurationMs) {
         const candidates = job.payload.verificationCandidates.slice(job.payload.verificationCursor ?? 0,
           (job.payload.verificationCursor ?? 0) + Math.min(20, job.view.requested - job.payload.targets.length));
         const batchBefore = provider.getScanMetrics?.();

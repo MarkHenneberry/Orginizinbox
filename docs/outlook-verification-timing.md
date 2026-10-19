@@ -12,8 +12,12 @@ It includes folder/participation preparation, Graph calls and some persistence.
 It excludes per-step job claiming/loading, forward authorization/entitlement,
 credential resolution, final save after the timer, aggregate job updates, lease
 release, Workflow handoffs, and browser request/poll/render overhead. It is not pure
-Graph transport time. Production advances one at-most-20-message verification batch
-per Workflow step; 500 approvals normally need 25 steps (more if exclusions occur).
+Graph transport time. Production now advances up to five sequential at-most-20-message
+verification batches per Workflow step, yielding between batches after a 15-second
+preparation budget. 500 clean approvals normally need five steps, not 25; exclusions
+or slow calls may require more. Each batch retains its encrypted cursor/decision
+checkpoint. See [chunking analysis](outlook-verification-chunks.md) for the baseline,
+operation model and recovery limits.
 
 The successful Outlook start handler does not navigate or call `router.refresh`.
 It sets local job/review state; active status polls replace that state until ready.
@@ -47,6 +51,7 @@ Important summary fields: serverTotalMs, bootstrapMs, workerMs, workflowStartupM
 workflowGapMs, graphDurationMs, databaseMs, persistenceMs, credentialMs,
 tokenRefreshMs, authorizationMs, creditEntitlementMs, headerNormalizationMs,
 decryptDeserializeMs, encryptSerializeMs, safetyEvaluationMs, wallResidualMs.
+The summary also reports verificationBatchesPerStep and verificationStepBudgetMs.
 Stages also cover request receipt, session resolution, scoped purge, report retrieval,
 candidate building, job creation, safety context, participation, aggregation, response
 generation, repository reads/writes and provider request coordination.

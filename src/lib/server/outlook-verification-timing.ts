@@ -1,6 +1,7 @@
 import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { outlookVerificationBatchesPerStep, outlookVerificationStepBudgetMs } from "@/lib/domain/outlook-verification-chunk";
 
 export type VerificationStage = "request_received" | "session_resolution" | "authorization" | "retention_purge" | "credit_entitlement" |
   "connection_readiness" | "report_retrieval" | "database_read" | "database_write" | "decrypt_deserialize" |
@@ -76,6 +77,7 @@ export function logVerificationSummary(trace: VerificationTrace, input: {
   const serverTotalMs = Math.max(0, Date.now() - trace.receivedAt);
   safeLog("Outlook verification end-to-end", {
     correlationId: trace.correlationId, ...input, reused: trace.reused === true, steps: trace.step, serverTotalMs,
+    verificationBatchesPerStep: outlookVerificationBatchesPerStep, verificationStepBudgetMs: outlookVerificationStepBudgetMs,
     graphDurationMs: Math.round(t.targeted_graph ?? 0),
     workflowStartupMs: Math.round(t.workflow_startup ?? 0), workflowGapMs: Math.round(t.workflow_gap ?? 0),
     workerMs: Math.round(t.worker_unit ?? 0), bootstrapMs: Math.round(trace.bootstrapMs),
