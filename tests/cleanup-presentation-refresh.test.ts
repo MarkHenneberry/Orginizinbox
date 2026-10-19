@@ -28,6 +28,7 @@ vi.mock("@/components/product/useCleanupAvailability", () => ({ useCleanupAvaila
 vi.mock("@/lib/adaptive-polling", () => ({ startAdaptivePolling: mocks.poll }));
 import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
 import { OperationStatus } from "@/components/product/OperationStatus";
+import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { AppHeader } from "@/components/product/AppHeader";
 import { BillingActions } from "@/components/product/BillingActions";
 import type { OutlookCleanupUiJob } from "@/lib/domain/cleanup-ui";
@@ -164,25 +165,62 @@ it.each(["resolving", "running", "undoing"] as const)("reattached %s uses a loca
   expect(text(render(timer, () => tree(operation)))).toContain("Elapsed: 3s");
 });
 
-it("Change selection waits for authoritative discard before clearing Outlook selection and ignores stale polling", async () => {
-  const initial = { ...job("resolving"), canChangeSelection: true };
+it.each(["ready", "resolving"] as const)("Change selection returns %s jobs directly to zero selection only after authoritative discard", async status => {
+  const group = props().groups.find(group => group.eligible)!;
+  const initial = { ...job(status), canChangeSelection: true, groupIndices: [group.index], senderGroups: [group] };
   const client = scope(); let current: React.ReactNode;
   const renderClient = () => current = render(client, () => GmailCleanupClient(props(initial)));
   renderClient();
-  const poll = mocks.poll.mock.calls[0][0] as (signal: AbortSignal) => Promise<boolean>;
+  const poll = mocks.poll.mock.calls[0]?.[0] as ((signal: AbortSignal) => Promise<boolean>) | undefined;
   const change = elements(tree(workspace(current))).find(e => e.type === "button" && text(e.props.children) === "Change selection")!;
   let accept!: (response: Response) => void;
   vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { accept = resolve; }));
   const pending = (change.props.onClick as () => Promise<void>)(); renderClient();
   expect(workspace(current)).toBeDefined();
+  expect(workspace(current).props.job).toBe(initial);
+  expect(mocks.replace).not.toHaveBeenCalled();
+  expect(mocks.refresh).not.toHaveBeenCalled();
   expect(fetch).toHaveBeenCalledWith("/api/app/cleanup/microsoft/discard", expect.objectContaining({ method: "POST", body: JSON.stringify({ jobId: "job", confirmed: true }) }));
   accept(Response.json({ discarded: true })); await pending; renderClient();
-  expect(mocks.replace).toHaveBeenCalledWith("/app/cleanup?selection=fresh");
-  expect(text(current)).toContain("Select one or more sender groups to check");
-  expect(elements(current).filter(e => e.type === "input" && e.props.type === "checkbox" && e.props.checked)).toHaveLength(0);
-  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: job("ready") } }));
-  expect(await poll(new AbortController().signal)).toBe(false); renderClient();
+  expect(mocks.replace).not.toHaveBeenCalled();
+  expect(mocks.refresh).not.toHaveBeenCalled();
   expect(workspace(current)).toBeUndefined();
+  expect(elements(current).some(e => e.type === CleanupAccessNotice && e.props.access !== "available")).toBe(false);
+  expect(text(current)).toContain("Select one or more sender groups to check");
+  expect(text(current)).toContain(group.displayName);
+  expect(elements(current).filter(e => e.type === "input" && e.props.type === "checkbox" && e.props.checked)).toHaveLength(0);
+  expect(elements(current).find(e => e.type === "button" && text(e.props.children) === "Check 5 messages")?.props.disabled).toBe(true);
+  if (poll) {
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: job("ready") } }));
+    expect(await poll(new AbortController().signal)).toBe(false); renderClient();
+    expect(workspace(current)).toBeUndefined();
+  }
+});
+
+it.each([409, 200])("failed discard (%i) keeps the ready job and shows an error without navigation", async status => {
+  const initial = { ...job("ready"), canChangeSelection: true };
+  const client = scope();
+  const renderClient = () => render(client, () => GmailCleanupClient(props(initial)));
+  const current = renderClient();
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ discarded: false, error: "Selection could not be changed." }, { status }));
+  await (workspace(current).props.onChangeSelection as () => Promise<void>)();
+  const updated = renderClient();
+  expect(workspace(updated).props.job).toBe(initial);
+  expect(workspace(updated).props.error).toBe("Selection could not be changed.");
+  expect(text(updated)).not.toContain("Select one or more sender groups to check");
+  expect(mocks.replace).not.toHaveBeenCalled();
+  expect(mocks.refresh).not.toHaveBeenCalled();
+});
+
+it.each(["running", "complete", "partial", "uncertain", "undoing", "undo_complete"] as const)("%s recovery/mutation jobs cannot Change selection", async status => {
+  const initial = { ...job(status, 3), canChangeSelection: false };
+  const client = scope();
+  const renderClient = () => render(client, () => GmailCleanupClient(props(initial)));
+  const current = renderClient();
+  expect(text(tree(workspace(current)))).not.toContain("Change selection");
+  await (workspace(current).props.onChangeSelection as () => Promise<void>)();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(workspace(renderClient()).props.job).toBe(initial);
 });
 
 it("successful purchase reconciliation retains its explicit server refresh", async () => {

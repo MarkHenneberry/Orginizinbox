@@ -51,6 +51,15 @@ it.each(["created", "resolving", "ready"] as const)("fresh entry ignores an old 
   expect(h.jobs.has("prepared")).toBe(true);
   expect(h.rows.mock.calls[0][0].where).toMatchObject({ userId: "owner", job: { scan: { provider: "microsoft", providerConnectionId: "connection" } } });
 });
+it("reload after discard excludes cancelled jobs and opens fresh with zero selected groups", async () => {
+  const stored = await getOutlookCleanupForPresentation("owner", "connection");
+  expect(h.rows.mock.calls[0][0].where.job.status).toEqual({ not: "cancelled" });
+  expect(stored).toBeUndefined();
+  const html = render("microsoft", stored);
+  expect(html).toContain("Select one or more sender groups to check");
+  expect(html).not.toContain("checked=\"\"");
+  expect(html).not.toContain("Change selection");
+});
 it.each(["running", "complete", "partial", "uncertain", "undoing", "undo_complete"] as const)("an older %s job takes precedence over a new prepared job even on fresh entry", async status => {
   h.jobs.set("prepared", job("prepared")); const recovery = job("recovery", status); h.jobs.set("recovery", recovery);
   h.rows.mockResolvedValue(["prepared", "recovery"].map(id => ({ jobId: id, job: { scanId: `scan-${id}` } })));

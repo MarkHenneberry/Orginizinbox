@@ -421,8 +421,6 @@ export function GmailCleanupClient({
       if (outlookJob) {
         discardedOutlookJobs.current.add(outlookJob.id);
         setSelectedGroupIndices(new Set());
-        router.replace("/app/cleanup?selection=fresh");
-        router.refresh();
       }
     } catch (startOverError) {
       setError(startOverError instanceof Error ? startOverError.message : "We couldn't start over. Try again.");
