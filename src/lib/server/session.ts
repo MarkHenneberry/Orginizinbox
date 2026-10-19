@@ -1,4 +1,5 @@
 import "server-only";
+import { measureVerification } from "@/lib/server/outlook-verification-timing";
 import { cache } from "react";
 import { cookies } from "next/headers.js";
 import { randomBytes } from "node:crypto";
@@ -97,7 +98,7 @@ export const getSession = cache(async (): Promise<SessionPayload | null> => {
   if (!session) return null;
   const age = Date.now() - session.createdAt;
   if (age < 0 || age >= sessionTtlSeconds * 1000) return null;
-  const connection = await prisma.providerConnection.findFirst({
+  const connection = await measureVerification("database_read", () => prisma.providerConnection.findFirst({
     where: {
       id: session.providerConnectionId,
       userId: session.userId,
@@ -106,7 +107,7 @@ export const getSession = cache(async (): Promise<SessionPayload | null> => {
       encryptedAccessToken: { not: null }
     },
     select: { id: true }
-  });
+  }));
   return connection ? session : null;
 });
 

@@ -1,4 +1,5 @@
 import "server-only";
+import { measureVerification } from "@/lib/server/outlook-verification-timing";
 import type { ProviderConnection } from "@prisma/client";
 import { prisma } from "@/lib/server/db";
 import { runtimeConfig } from "@/lib/config";
@@ -38,7 +39,7 @@ export function createCleanupRequestFence(
     try { assertProductionCleanupInfrastructure(connection.provider, access); }
     catch { throw stoppedProviderWork(); }
     const now = new Date();
-    const count = await prisma.cleanupJobState.count({
+    const count = await measureVerification("database_read", () => prisma.cleanupJobState.count({
       where: {
         jobId, userId: connection.userId, expiresAt: { gt: now },
         lockExpiresAt: { gt: now },
@@ -55,7 +56,7 @@ export function createCleanupRequestFence(
           }
         }
       }
-    });
+    }));
     if (count !== 1) throw stoppedProviderWork();
   };
 }

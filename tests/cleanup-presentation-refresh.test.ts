@@ -73,6 +73,31 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it("posts one correlated ready-render sample after a fresh Outlook check without router transitions or extra polling", async () => {
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => setTimeout(() => callback(performance.now()), 16));
+  vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+  const client = scope(); let current: React.ReactNode;
+  const renderClient = () => current = render(client, () => GmailCleanupClient(props()));
+  renderClient();
+  const sender = elements(current).find(e => e.type === "input" && e.props.type === "checkbox" && !e.props.disabled)!;
+  (sender.props.onChange as () => void)(); renderClient();
+  const check = elements(current).find(e => e.type === "button" && text(e.props.children) === "Check 5 messages")!;
+  const correlationId = "11111111-1111-4111-8111-111111111111";
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: job("resolving") } }, { headers: { "X-Outlook-Verification-Id": correlationId } }));
+  await (check.props.onClick as () => Promise<void>)(); renderClient();
+  const poll = mocks.poll.mock.calls.at(-1)![0] as (signal: AbortSignal) => Promise<boolean>;
+  mono += 60_000;
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: job("ready") } }, { headers: { "X-Outlook-Ready-Checkpoint-Age-Ms": "1000" } }));
+  expect(await poll(new AbortController().signal)).toBe(false); renderClient();
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+  await vi.advanceTimersByTimeAsync(33);
+  renderClient(); await vi.advanceTimersByTimeAsync(100);
+  const samples = vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/app/cleanup/verification-timing");
+  expect(samples).toHaveLength(1);
+  expect(JSON.parse(samples[0][1]!.body as string)).toMatchObject({ correlationId, clientTotalMs: 60_000, pollRequests: 1 });
+  expect(mocks.refresh).not.toHaveBeenCalled(); expect(mocks.replace).not.toHaveBeenCalled();
+});
+
 it.each([5, 3])("refreshes the authoritative header once after %i verified moves, not Undo or deletion", async moved => {
   const client = scope();
   const renderClient = () => render(client, () => GmailCleanupClient(props(job("running"))));

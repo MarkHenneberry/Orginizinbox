@@ -2,6 +2,7 @@
 
 import { startAdaptivePolling } from "@/lib/adaptive-polling";
 import { notifyCleanupAvailabilityChanged } from "@/lib/cleanup-availability-events";
+import { createOutlookVerificationClientTiming } from "@/lib/outlook-verification-client-timing";
 import { CleanupAccessNotice } from "@/components/product/CleanupAccessNotice";
 import { CleanupCreditContext } from "@/components/product/CleanupCreditContext";
 import { useCleanupAvailability } from "@/components/product/useCleanupAvailability";
@@ -119,6 +120,7 @@ export function GmailCleanupClient({
   const activeOperationRef = useRef<ActiveCleanupOperation | null>(null);
   const discardedOutlookJobs = useRef(new Set<string>());
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  const verificationTiming = useRef<ReturnType<typeof createOutlookVerificationClientTiming> | null>(null);
 
   const scalablePollingActive = scalableJob ? shouldPollGmailScalableJob(scalableJob) : false;
   const scalableRunning = scalablePollingActive;
@@ -288,10 +290,11 @@ export function GmailCleanupClient({
   useEffect(() => {
     if (!outlookJobId || !outlookPollingActive) return;
     return startAdaptivePolling(async (signal) => {
+      const requestStarted = performance.now();
       const response = await fetch(cleanupEndpoint("microsoft", "status", developmentMode), {
         signal,
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...verificationTiming.current?.headers() },
         body: JSON.stringify({ jobId: outlookJobId })
       });
       if (!developmentMode && response.status === 410) {
@@ -301,11 +304,26 @@ export function GmailCleanupClient({
       if (!response.ok) throw new Error("Status unavailable");
       const body = await cleanupResponse(response, developmentMode) as { job?: OutlookCleanupJobView };
       if (signal.aborted || discardedOutlookJobs.current.has(outlookJobId)) return false;
+      verificationTiming.current?.response(response, requestStarted, body.job?.status);
       setPollError(null);
       if (body.job) setOutlookJob(body.job);
       return body.job ? shouldPollOutlookCleanup(body.job) : true;
     }, () => setPollError("Status could not be refreshed. Retrying..."));
   }, [outlookJobId, outlookPollingActive, developmentMode]);
+
+  useEffect(() => {
+    if (provider !== "microsoft" || outlookJob?.status !== "ready" || !reviewStarted || !verificationTiming.current?.hasTrace()) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        const sample = verificationTiming.current?.visible();
+        if (sample) void fetch("/api/app/cleanup/verification-timing", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sample), keepalive: true
+        }).catch(() => {});
+      });
+    });
+    return () => { cancelAnimationFrame(first); cancelAnimationFrame(second); };
+  }, [provider, outlookJob?.status, reviewStarted]);
 
   useEffect(() => {
     if (!reviewStarted) return;
@@ -336,12 +354,14 @@ export function GmailCleanupClient({
     }
     const operation = benchmarkOnly ? "benchmark" : "resolution";
     if (!beginOperation(operation)) return;
+    if (provider === "microsoft" && !developmentMode) verificationTiming.current = createOutlookVerificationClientTiming();
     const groupIndices = [...selectedGroupIndices];
     setError(null);
     setFinalStep(false);
     try {
       const scalable = cleanupRequestMode === "scalable";
       const outlook = cleanupRequestMode === "outlook";
+      const requestStarted = performance.now();
       const response = await fetch(
         cleanupEndpoint(provider, outlook || scalable ? "start" : "resolve", developmentMode, scalable),
         {
@@ -350,6 +370,7 @@ export function GmailCleanupClient({
         body: JSON.stringify({ groupIndices, requestedCount, ...(developmentMode ? { benchmarkOnly } : {}) })
       });
       const body = await cleanupResponse(response, developmentMode);
+      if (outlook) verificationTiming.current?.response(response, requestStarted, body.job?.status, true);
       if (!response.ok || !body.job) throw new Error(body.error ?? "We couldn't check these messages. Try again.");
       if (outlook) {
         setOutlookJob(body.job as OutlookCleanupJobView);

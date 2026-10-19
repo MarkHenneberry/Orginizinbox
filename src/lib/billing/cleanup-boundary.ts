@@ -4,6 +4,7 @@ import { purgeUserTransientStateForActivity } from "@/lib/server/user-transient-
 import { BillingError, requireBillingConfig } from "@/lib/billing/config";
 import { EntitlementDeniedError, requirePaidCleanupEntitlement } from "@/lib/billing/entitlements";
 import { ProductionCleanupError, requireProductionCleanupAccess, type CleanupProvider, type CleanupAccess } from "@/lib/server/production-cleanup";
+import { measureVerification } from "@/lib/server/outlook-verification-timing";
 
 type CleanupOperation = {
   provider: CleanupProvider; access: CleanupAccess; jobId?: string;
@@ -19,9 +20,9 @@ export async function authorizeProductionCleanupRequest(request: Request, operat
     if (request.headers.get("origin") !== origin || new URL(request.url).origin !== origin) {
       return Response.json({ error: "Forbidden." }, { status: 403, headers });
     }
-    const session = await getSession();
+    const session = await measureVerification("session_resolution", () => getSession());
     if (!session?.userId) return Response.json({ error: "Sign in before starting cleanup.", href: "/connect" }, { status: 401, headers });
-    if (operation?.access === "forward") await purgeUserTransientStateForActivity(session.userId);
+    if (operation?.access === "forward") await measureVerification("retention_purge", () => purgeUserTransientStateForActivity(session.userId));
     // Old callers cannot implicitly choose a production provider or recovery action.
     if (!operation) {
       await requirePaidCleanupEntitlement(session.userId);

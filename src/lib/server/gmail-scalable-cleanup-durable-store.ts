@@ -1,4 +1,5 @@
 import "server-only";
+import { measureVerification, measureVerificationSync } from "@/lib/server/outlook-verification-timing";
 import { accountVerifiedProgress, creditProgressChanged, type VerifiedCreditProgress } from "@/lib/billing/credits";
 import type { OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store";
 import { expiredUnlockedStateWhere } from "@/lib/domain/transient-retention";
@@ -105,13 +106,13 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
   }
 
   async getByJobId(jobId: string, now = new Date()) {
-    const row = await this.repository.find(jobId);
+    const row = await measureVerification("database_read", () => this.repository.find(jobId));
     if (!row) return undefined;
     if (row.expiresAt.getTime() <= now.getTime()) {
       await this.repository.deleteExpired(now, jobId);
       return undefined;
     }
-    return decodeAndValidate(row, this.codec);
+    return measureVerificationSync("decrypt_deserialize", () => decodeAndValidate(row, this.codec));
   }
 
   async compareAndSet(
@@ -122,28 +123,29 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
     now = new Date(),
     lockOwner?: string
   ) {
-    const row = await this.repository.find(jobId);
+    const row = await measureVerification("database_read", () => this.repository.find(jobId));
     if (!row || row.userId !== userId || row.version !== expectedVersion) return undefined;
     if (row.expiresAt.getTime() <= now.getTime()) {
       await this.repository.deleteExpired(now, jobId);
       return undefined;
     }
-    const current = decodeAndValidate(row, this.codec);
+    const current = measureVerificationSync("decrypt_deserialize", () => decodeAndValidate(row, this.codec));
     const next = normalizeJob(update(cloneJob(current)), expectedVersion + 1);
     if (next.userId !== userId || next.view.id !== jobId) {
       throw new CleanupStateIntegrityError("Cleanup state identity cannot change.");
     }
     if (next.view.expiresAt <= now.getTime()) return undefined;
-    const replaced = await this.repository.replaceIfVersion({
+    const encryptedPayload = measureVerificationSync("encrypt_serialize", () => this.codec.encode(next));
+    const replaced = await measureVerification("database_write", () => this.repository.replaceIfVersion({
       jobId,
       userId,
       expectedVersion,
       now,
       lockOwner,
-      encryptedPayload: this.codec.encode(next),
+      encryptedPayload,
       expiresAt: new Date(next.view.expiresAt),
       creditProgress: creditProgressChanged(verifiedCreditProgress(current), verifiedCreditProgress(next)) ? verifiedCreditProgress(next) : undefined
-    });
+    }));
     return replaced ? cloneJob(next) : undefined;
   }
 
@@ -154,12 +156,12 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
     ttlMs = runtimeConfig.cleanupStateLockTtlSeconds * 1_000
   ) {
     if (!owner) throw new Error("Cleanup state lock owner is required.");
-    const claimed = await this.repository.claim({
+    const claimed = await measureVerification("database_write", () => this.repository.claim({
       jobId,
       owner,
       now,
       lockExpiresAt: new Date(now.getTime() + ttlMs)
-    });
+    }));
     return claimed ? this.getByJobId(jobId, now) : undefined;
   }
 
@@ -178,7 +180,7 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
   }
 
   releaseLock(jobId: string, owner: string) {
-    return this.repository.releaseLock(jobId, owner);
+    return measureVerification("database_write", () => this.repository.releaseLock(jobId, owner));
   }
 
   delete(userId: string, jobId: string) {

@@ -5,6 +5,7 @@ import { resolveProductionProviders } from "@/lib/server/production-config";
 import { hasRequiredGmailImapScope } from "@/lib/providers/gmail/scopes";
 import { hasRequiredMicrosoftMailScope } from "@/lib/providers/microsoft/scopes";
 import { requirePaidCleanupEntitlement } from "@/lib/billing/entitlements";
+import { measureVerification } from "@/lib/server/outlook-verification-timing";
 
 export type CleanupProvider = "gmail" | "microsoft";
 export type CleanupAccess = "forward" | "recovery";
@@ -42,10 +43,10 @@ export async function requireProductionCleanupAccess(input: {
 }) {
   if (process.env.NODE_ENV !== "production") return;
   assertProductionCleanupInfrastructure(input.provider, input.access);
-  if (input.access === "forward") await requirePaidCleanupEntitlement(input.userId, input.jobId);
-  const connection = await prisma.providerConnection.findFirst({ where: {
+  if (input.access === "forward") await measureVerification("credit_entitlement", () => requirePaidCleanupEntitlement(input.userId, input.jobId));
+  const connection = await measureVerification("database_read", () => prisma.providerConnection.findFirst({ where: {
     id: input.providerConnectionId, userId: input.userId, provider: input.provider, disconnectedAt: null
-  } });
+  } }));
   const scopeValid = input.provider === "gmail" ? hasRequiredGmailImapScope(connection?.scope ?? undefined)
     : hasRequiredMicrosoftMailScope(connection?.scope);
   if (!connection?.encryptedAccessToken || !connection.encryptedRefreshToken || !scopeValid ||
@@ -56,12 +57,12 @@ export async function requireProductionCleanupAccess(input: {
     throw new ProductionCleanupError("An existing cleanup job is required.", 400, "JOB_REQUIRED");
   }
   if (input.jobId) {
-    const owned = await prisma.cleanupJobState.count({ where: {
+    const owned = await measureVerification("database_read", () => prisma.cleanupJobState.count({ where: {
       jobId: input.jobId, userId: input.userId, expiresAt: { gt: new Date() },
       job: { status: { not: "cancelled" }, scan: {
         userId: input.userId, provider: input.provider, providerConnectionId: connection.id
       } }
-    } });
+    } }));
     if (owned !== 1) throw new ProductionCleanupError("Cleanup recovery state is unavailable or expired.", 410, "JOB_UNAVAILABLE");
   }
 }

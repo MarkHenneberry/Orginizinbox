@@ -1,4 +1,5 @@
 import "server-only";
+import { measureVerification } from "@/lib/server/outlook-verification-timing";
 import { runtimeConfig } from "@/lib/config";
 import { randomUUID } from "node:crypto";
 import {
@@ -19,22 +20,22 @@ const refreshSkewMs = 60_000;
 
 export async function getActiveMicrosoftConnection(userId: string, providerConnectionId?: string) {
   if (process.env.NODE_ENV === "production" && !runtimeConfig.microsoftAvailable) return null;
-  let connection = await prisma.providerConnection.findFirst({
+  let connection = await measureVerification("database_read", () => prisma.providerConnection.findFirst({
     where: {
       ...(providerConnectionId ? { id: providerConnectionId } : {}),
       userId,
       provider: "microsoft",
       disconnectedAt: null
     }
-  });
+  }));
   if (!connection?.encryptedAccessToken || !connection.encryptedRefreshToken) return null;
   if (!hasRequiredMicrosoftMailScope(connection.scope)) throw new MicrosoftScopeNotGrantedError();
 
   if (connection.tokenExpiresAt && connection.tokenExpiresAt.getTime() <= Date.now() + refreshSkewMs) {
     try {
-      connection = await refreshProviderConnectionSingleFlight({
+      connection = await measureVerification("token_refresh", () => refreshProviderConnectionSingleFlight({
         userId,
-        connection,
+        connection: connection!,
         provider: "microsoft",
         refreshSkewMs,
         async refresh(refreshToken) {
@@ -50,7 +51,7 @@ export async function getActiveMicrosoftConnection(userId: string, providerConne
             scope: refreshed.scope ?? connection!.scope
           };
         }
-      });
+      }));
     } catch {
       throw new MicrosoftReconnectRequiredError();
     }

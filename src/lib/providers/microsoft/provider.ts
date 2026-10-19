@@ -1,4 +1,5 @@
 import { deriveSubjectProtection } from "@/lib/domain/subject-protection";
+import { measureVerificationSync } from "@/lib/server/outlook-verification-timing";
 import type { NormalizedMailboxRecord } from "@/lib/domain/types";
 import { microsoftRequestedScopes } from "@/lib/providers/microsoft/scopes";
 import {
@@ -454,7 +455,7 @@ export class MicrosoftProvider implements MailboxProcessor {
     const responses = targetedVerification
       ? await this.graph.readBatchJson(requests, "header_enrichment")
       : await this.graph.batchJson(requests, "cleanup_safety_recheck", { mutation: false });
-    return responses.map((response, index) => {
+    return measureVerificationSync("header_normalization", () => responses.map((response, index) => {
       if (response.status === 404) return undefined;
       if (response.status !== 200) {
         if (targetedVerification) return undefined;
@@ -478,7 +479,7 @@ export class MicrosoftProvider implements MailboxProcessor {
       } finally {
         if (response.body && typeof response.body === "object") (response.body as GraphMessage).internetMessageHeaders = undefined;
       }
-    });
+    }));
   }
 
   async moveCleanupMessage(

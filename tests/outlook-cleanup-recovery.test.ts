@@ -41,6 +41,7 @@ vi.mock("@/lib/config", async (original) => {
 });
 
 import { advanceOutlookCleanupJob, undoOutlookCleanup } from "@/lib/server/outlook-cleanup";
+import { newVerificationTrace, type VerificationTrace } from "@/lib/server/outlook-verification-timing";
 
 let job: OutlookCleanupStoredJob;
 beforeEach(() => {
@@ -85,6 +86,33 @@ beforeEach(() => {
     inputs.map(({ messageId }) => ({ outcome: "success", messageId: `moved-${messageId}` })));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+it("carries the same trace through real preparation worker re-entry without changing checkpoints or exact selection", async () => {
+  const log = vi.spyOn(console, "info").mockImplementation(() => {});
+  job.view.status = "created"; job.view.requested = 40; job.view.approved = 0;
+  job.payload.targets = [];
+  job.payload.selectedSenders = [{ groupIndex: 0, senderKey: "bulk@example.test" }];
+  job.payload.verificationCandidates = Array.from({ length: 40 }, (_, index) => ({ messageId: `private-${index}`, groupIndex: 0 }));
+  const baseline = structuredClone(job);
+  let trace: VerificationTrace = newVerificationTrace();
+  trace.scheduledAt = Date.now();
+  for (let step = 0; step < 2; step++) {
+    const result = await advanceOutlookCleanupJob("same-job", "prepare", JSON.parse(JSON.stringify(trace)));
+    expect(result.outcome).toBe(step === 0 ? "continue" : "stop");
+    if (!result.verificationTrace) throw new Error("Missing verification trace");
+    trace = result.verificationTrace;
+  }
+  expect(job.view.status).toBe("ready");
+  expect(job.payload.targets.map(target => target.originalMessageId)).toEqual(baseline.payload.verificationCandidates!.map(target => target.messageId));
+  const tracedWrites = mocks.compareAndSet.mock.calls.length;
+  expect(log.mock.calls.filter(call => call[0] === "Outlook verification end-to-end")).toHaveLength(1);
+  expect(JSON.stringify(log.mock.calls)).not.toMatch(/private-|bulk@|same-job|connection|folder/);
+  expect(trace.step).toBe(2); expect(mocks.move).not.toHaveBeenCalled();
+  job = baseline; mocks.compareAndSet.mockClear();
+  await advanceOutlookCleanupJob("same-job", "prepare");
+  await advanceOutlookCleanupJob("same-job", "prepare");
+  expect(mocks.compareAndSet).toHaveBeenCalledTimes(tracedWrites);
+});
 
 describe("credit accounting through actual Outlook worker recovery", () => {
   it("charges only verified targets and never refunds recovery credits across worker re-entry", async () => {

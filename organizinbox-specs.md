@@ -32,6 +32,8 @@ The temporary `page_sizes` benchmark is removed after successful same-sample mea
 
 # 0. Specification Maintenance Rule
 
+Outlook targeted-verification measurement uses a random, non-authorizing correlation ID and aggregate-only stage timings from the start request through durable Workflow preparation and the browser's ready-result render. Timing context may travel in Workflow arguments/results, never in new database writes. Instrument authorization, encrypted-state I/O/codec, candidate building, scheduling/step gaps, credential resolution, Graph verification, safety evaluation, persistence and result delivery separately. Nested spans are not additive; retain a wall-time residual and identify overlapping/subset metrics. Browser durations use its monotonic clock. A same-origin authenticated, strictly allowlisted telemetry POST may report one bounded client-ready sample, explicitly untrusted and never used for authorization. No mailbox/user/job identities, payloads, headers, Subjects, credentials or raw errors enter these logs. No verification batching, retries, protections, credit or cleanup semantics change.
+
 This specification is the living source of truth for Organizinbox.
 
 Whenever a future development decision materially changes, replaces, or contradicts something currently stated in this document:

@@ -41,6 +41,8 @@ import {
 import { getSession } from "@/lib/server/session";
 import { startProviderCleanupWorkflow } from "@/lib/server/provider-cleanup-workflow-start";
 import { createProviderRequestCoordinator } from "@/lib/server/provider-request-coordinator";
+import { currentVerificationTrace, measureVerification, measureVerificationSync, verificationWorkflowSeed,
+  withVerificationTrace, recordWorkflowArrival, verificationCompleted, logCompletedVerification, type VerificationTrace } from "@/lib/server/outlook-verification-timing";
 
 export class OutlookCleanupError extends Error {
   constructor(message: string, readonly statusCode: number) {
@@ -64,7 +66,7 @@ export { getOutlookCleanupBatchSize } from "@/lib/domain/outlook-cleanup";
 export async function startOutlookCleanup(input: { groupIndices: unknown; requestedCount: unknown }) {
   const requested = assertGate(input.requestedCount);
   const session = await requireSession();
-  const liveScan = await getLiveScan(session.userId, "microsoft");
+  const liveScan = await measureVerification("report_retrieval", () => getLiveScan(session.userId, "microsoft"));
   if (
     !isLiveReportUsable(liveScan) ||
     liveScan.progress.provider !== "microsoft" ||
@@ -72,7 +74,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
     !liveScan.participatedConversationIds || !liveScan.outlookBase
   ) throw new OutlookCleanupError("Run a fresh Outlook scan before cleanup.", 409);
 
-  const groups = buildOutlookCleanupSenderGroups(liveScan.report.senders);
+  const groups = measureVerificationSync("candidate_building", () => buildOutlookCleanupSenderGroups(liveScan.report.senders));
   const groupIndices = parseGroupIndices(input.groupIndices, groups.length);
   const selectedGroups = groupIndices.map((index) => groups[index]);
   if (selectedGroups.some((group) => !group?.eligible)) {
@@ -83,7 +85,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
     throw new OutlookCleanupError("The selected groups do not contain that many potential cleanup messages.", 409);
   }
 
-  const connection = await getActiveMicrosoftConnection(session.userId, session.providerConnectionId);
+  const connection = await measureVerification("credentials", () => getActiveMicrosoftConnection(session.userId, session.providerConnectionId));
   if (!connection) throw new OutlookCleanupError("Reconnect Microsoft before cleanup.", 401);
   const acceptanceKey = sha256Base64Url(JSON.stringify([
     liveScan.progress.scanId,
@@ -133,10 +135,10 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
       expiresAt: cleanupStateExpiryFor({ now, undoAvailable: false, terminal: false })
     },
     payload: {
-      senderGroups: buildOutlookCleanupSenderGroups(sanitizeReportForClient(liveScan.report, false).senders)
-        .filter(group => groupIndices.includes(group.index)),
-      verificationCandidates: outlookCandidatePool(liveScan.outlookBase, liveScan.participatedConversationIds,
-        selectedGroups.map(group => ({ groupIndex: group.index, senderKey: liveScan.report.senders[group.index].senderKey }))),
+      senderGroups: measureVerificationSync("candidate_building", () => buildOutlookCleanupSenderGroups(sanitizeReportForClient(liveScan.report, false).senders)
+        .filter(group => groupIndices.includes(group.index))),
+      verificationCandidates: measureVerificationSync("candidate_building", () => outlookCandidatePool(liveScan.outlookBase!, liveScan.participatedConversationIds!,
+        selectedGroups.map(group => ({ groupIndex: group.index, senderKey: liveScan.report.senders[group.index].senderKey })))),
       verificationCursor: 0,
       scanId: liveScan.progress.scanId,
       providerConnectionId: connection.connection.id,
@@ -150,9 +152,9 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
   };
 
   const store = createPrismaOutlookCleanupStore();
-  const prepared = prepareCleanupJobState(job);
+  const prepared = measureVerificationSync("encrypt_serialize", () => prepareCleanupJobState(job));
   try {
-    await retrySerializableTransaction(() => prisma.$transaction(async (transaction) => {
+    await measureVerification("job_creation", () => measureVerification("database_write", () => retrySerializableTransaction(() => prisma.$transaction(async (transaction) => {
       await transaction.scan.upsert({
         where: { id: liveScan.progress.scanId },
         update: liveScan.progress.status === "running" ? {} : { status: "completed", completedAt: new Date(now) },
@@ -170,7 +172,7 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
         data: { id: jobId, scanId: liveScan.progress.scanId, acceptanceKey, status: "pending" }
       });
       await transaction.cleanupJobState.create({ data: prepared.data });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }))));
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     const existingRow = await prisma.cleanupJob.findUnique({
@@ -182,11 +184,19 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
     if (!existing || existing.provider !== "microsoft") {
       throw new OutlookCleanupError("The accepted cleanup job is not available yet. Try again.", 409);
     }
-    await startProviderCleanupWorkflow(existing.view.id, "prepare");
+    const trace = currentVerificationTrace();
+    if (trace) trace.reused = true;
+    await scheduleVerification(existing.view.id);
     return serializeOutlookCleanupJob(existing);
   }
-  await startProviderCleanupWorkflow(jobId, "prepare");
+  await scheduleVerification(jobId);
   return serializeOutlookCleanupJob(prepared.job);
+}
+
+function scheduleVerification(jobId: string) {
+  const seed = verificationWorkflowSeed();
+  return measureVerification("workflow_invocation", () => seed
+    ? startProviderCleanupWorkflow(jobId, "prepare", seed) : startProviderCleanupWorkflow(jobId, "prepare"));
 }
 
 export async function getOutlookCleanupStatus(jobId: string) {
@@ -283,10 +293,23 @@ export async function undoOutlookCleanup(jobId: string) {
   return serializeOutlookCleanupJob(updated);
 }
 
-export async function advanceOutlookCleanupJob(jobId: string, operation: "prepare" | "cleanup" | "undo") {
+export async function advanceOutlookCleanupJob(jobId: string, operation: "prepare" | "cleanup" | "undo", trace?: VerificationTrace): Promise<{
+  outcome: "stop" | "continue"; verificationTrace?: VerificationTrace;
+}> {
+  if (operation !== "prepare" || !trace) return advanceOutlookCleanupUnit(jobId, operation);
+  return withVerificationTrace(trace, async () => {
+    recordWorkflowArrival(trace);
+    const result = await measureVerification("worker_unit", () => advanceOutlookCleanupUnit(jobId, operation));
+    trace.lastStepEndedAt = Date.now();
+    logCompletedVerification();
+    return { ...result, verificationTrace: structuredClone(trace) };
+  });
+}
+
+async function advanceOutlookCleanupUnit(jobId: string, operation: "prepare" | "cleanup" | "undo") {
   const store = createPrismaOutlookCleanupStore();
   const owner = randomUUID();
-  let job = await store.claim(jobId, owner, new Date(), 10 * 60 * 1000);
+  let job = await measureVerification("lease_claim", () => store.claim(jobId, owner, new Date(), 10 * 60 * 1000));
   if (!job || job.provider !== "microsoft") return { outcome: "stop" as const };
   const renewLease = createDurableWriteGate(30_000, Date.now, false);
   try {
@@ -294,12 +317,12 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
     // Re-entry may only need to verify a previously dispatched batch. maxBatches=1
     // below prevents that recovery unit from proceeding to another forward batch.
     const verificationOnly = operation === "cleanup" && Boolean(job.payload.activeMoveBatchIndexes?.length);
-    await requireProductionCleanupAccess({ userId: job.userId, providerConnectionId: job.payload.providerConnectionId,
-      provider: "microsoft", access: operation === "undo" || verificationOnly ? "recovery" : "forward", jobId });
-    const active = await getActiveMicrosoftConnection(job.userId, job.payload.providerConnectionId);
+    await measureVerification("authorization", () => requireProductionCleanupAccess({ userId: job!.userId, providerConnectionId: job!.payload.providerConnectionId,
+      provider: "microsoft", access: operation === "undo" || verificationOnly ? "recovery" : "forward", jobId }));
+    const active = await measureVerification("credentials", () => getActiveMicrosoftConnection(job!.userId, job!.payload.providerConnectionId));
     if (!active) return await failJob(job, owner);
     const provider = new MicrosoftProvider(active.accessToken, {
-      refreshAccessToken: () => forceRefreshMicrosoftConnection(job!.userId, job!.payload.providerConnectionId),
+      refreshAccessToken: () => measureVerification("token_refresh", () => forceRefreshMicrosoftConnection(job!.userId, job!.payload.providerConnectionId)),
       requestCoordinator: createProviderRequestCoordinator(active.connection.id, {
         // Authorization above covers this unit; allow its verification to finish during rollback.
         beforeRequest: createCleanupRequestFence(active.connection, jobId, owner, undefined, "recovery")
@@ -319,7 +342,7 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
       syncMetrics();
       job!.view.updatedAt = Date.now();
       const currentJob = job!;
-      const next = await store.compareAndSet(currentJob.userId, jobId, currentJob.version, () => currentJob, new Date(), owner);
+      const next = await measureVerification("job_persistence", () => store.compareAndSet(currentJob.userId, jobId, currentJob.version, () => currentJob, new Date(), owner));
       if (!next) throw new OutlookCleanupError("Outlook cleanup state changed during execution.", 409);
       currentJob.version = next.version;
       job = currentJob;
@@ -338,7 +361,8 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
           }, 1)
         : await executeOutlookUndo(job, provider, save, 1);
     syncMetrics();
-    await updateAggregateCleanupRow(job);
+    await measureVerification("aggregate_update", () => measureVerification("database_write", () => updateAggregateCleanupRow(job!)));
+    if (operation === "prepare") traceVerificationCompletion(job);
     return result;
   } catch {
     if (job) {
@@ -352,11 +376,19 @@ export async function advanceOutlookCleanupJob(jobId: string, operation: "prepar
         return job!;
       }, new Date(), owner).catch(() => undefined);
       if (committed) await updateAggregateCleanupRow(committed).catch(() => undefined);
+      if (committed && operation === "prepare") traceVerificationCompletion(committed);
     }
     return { outcome: "stop" as const };
   } finally {
-    await store.releaseLock(jobId, owner).catch(() => false);
+    await measureVerification("lease_release", () => store.releaseLock(jobId, owner)).catch(() => false);
   }
+}
+
+function traceVerificationCompletion(job: OutlookCleanupStoredJob) {
+  if (!currentVerificationTrace() || (job.view.status !== "ready" && job.view.status !== "failed")) return;
+  verificationCompleted({ requestedCount: job.view.requested, candidatesChecked: job.view.verification?.candidatesChecked ?? 0,
+    graphBatchRequests: job.view.verification?.batchRequests ?? 0, verificationDurationMs: job.view.verification?.verificationDurationMs ?? 0,
+    status: job.view.status });
 }
 
 export async function prepareOutlookJob(
@@ -375,8 +407,8 @@ export async function prepareOutlookJob(
     const before = provider.getScanMetrics?.();
     try {
       if (!job.payload.verificationContext) {
-        job.payload.verificationContext = await provider.getCleanupSafetyContext();
-        const participated = await provider.scanParticipatedConversationIds({ batchSize: 100 });
+        job.payload.verificationContext = await measureVerification("safety_context", () => provider.getCleanupSafetyContext());
+        const participated = await measureVerification("participation_index", () => provider.scanParticipatedConversationIds({ batchSize: 100 }));
         job.payload.participatedConversationIds = [...new Set([...job.payload.participatedConversationIds, ...participated])];
         await save();
       }
@@ -390,14 +422,14 @@ export async function prepareOutlookJob(
         const batchBefore = provider.getScanMetrics?.();
         let messages;
         try {
-          messages = await provider.getCleanupMessages(candidates.map(candidate => candidate.messageId), job.payload.verificationContext, true);
+          messages = await measureVerification("targeted_graph", () => provider.getCleanupMessages(candidates.map(candidate => candidate.messageId), job.payload.verificationContext, true));
         } finally {
           const batchAfter = provider.getScanMetrics?.();
           stats.batchRequests += batchBefore && batchAfter ? batchAfter.requests - batchBefore.requests : 1;
           stats.exactHeaderRequests += batchBefore?.subrequests !== undefined && batchAfter?.subrequests !== undefined
             ? batchAfter.subrequests - batchBefore.subrequests : candidates.length;
         }
-        for (const [index, candidate] of candidates.entries()) {
+        measureVerificationSync("safety_evaluation", () => { for (const [index, candidate] of candidates.entries()) {
           const current = messages[index];
           stats.candidatesChecked++;
           if (!current || current.record.providerMessageId !== candidate.messageId || current.record.provider !== "microsoft" ||
@@ -408,7 +440,7 @@ export async function prepareOutlookJob(
           }
           seen.add(candidate.messageId);
           job.payload.targets.push({ originalMessageId: candidate.messageId, groupIndex: candidate.groupIndex, state: "frozen" });
-        }
+        } });
         job.payload.verificationCursor = (job.payload.verificationCursor ?? 0) + candidates.length;
         stats.approved = job.payload.targets.length;
         job.view.approved = stats.approved;
@@ -417,7 +449,7 @@ export async function prepareOutlookJob(
       }
       if (job.payload.targets.length === job.view.requested || (job.payload.verificationCursor ?? 0) >= job.payload.verificationCandidates.length) {
         job.view.status = job.payload.targets.length ? "ready" : "failed";
-        job.view.totalBatches = getOutlookCleanupTotalBatches(job.view.requested, job.payload.targets.length);
+        job.view.totalBatches = measureVerificationSync("result_aggregation", () => getOutlookCleanupTotalBatches(job.view.requested, job.payload.targets.length));
         job.view.totalChunks = Math.ceil(job.payload.targets.length / outlookCleanupChunkSize);
       }
     } finally {
@@ -432,6 +464,7 @@ export async function prepareOutlookJob(
     await save();
     const verificationComplete = job.view.status === "ready" || job.view.status === "failed";
     console.info(verificationComplete ? "Outlook targeted verification complete" : "Outlook targeted verification progress", {
+      ...(currentVerificationTrace() ? { correlationId: currentVerificationTrace()!.correlationId } : {}),
       requestedCount: job.view.requested, ...stats,
       ...(verificationComplete ? { totalVerificationDurationMs: stats.verificationDurationMs } : {})
     });
@@ -901,6 +934,7 @@ async function failJob(job: OutlookCleanupStoredJob, owner: string) {
   job.view.undoStatus = job.view.uncertain > 0 ? "uncertain" : job.view.undoAvailable ? "available" : "not_available";
   await store.compareAndSet(job.userId, job.view.id, job.version, () => job, new Date(), owner);
   await updateAggregateCleanupRow(job);
+  traceVerificationCompletion(job);
   return { outcome: "stop" as const };
 }
 
@@ -942,9 +976,9 @@ function assertGate(requestedCount: unknown) {
 }
 
 async function requireSession(access: CleanupAccess = "forward", jobId?: string) {
-  const session = await getSession();
+  const session = await measureVerification("session_resolution", () => getSession());
   if (!session?.userId) throw new OutlookCleanupError("Connect Microsoft before cleanup.", 401);
-  await requireProductionCleanupAccess({ userId: session.userId, providerConnectionId: session.providerConnectionId,
-    provider: "microsoft", access, jobId });
+  await measureVerification("authorization", () => requireProductionCleanupAccess({ userId: session.userId, providerConnectionId: session.providerConnectionId,
+    provider: "microsoft", access, jobId }));
   return session;
 }

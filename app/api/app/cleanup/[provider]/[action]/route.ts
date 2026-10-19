@@ -2,12 +2,25 @@ import { authorizeProductionCleanupRequest } from "@/lib/billing/cleanup-boundar
 import { productionCleanupJobView } from "@/lib/server/production-cleanup-response";
 import { ProductionCleanupError } from "@/lib/server/production-cleanup";
 import { observeDatabaseRoute } from "@/lib/server/database-usage";
+import { measureVerification, measureVerificationSync, newVerificationTrace, validVerificationId,
+  verificationIdHeader, withVerificationTrace, currentVerificationTrace } from "@/lib/server/outlook-verification-timing";
 
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
 
 export async function POST(request: Request, context: { params: Promise<{ provider: string; action: string }> }) {
   const params = await context.params;
+  if (process.env.NODE_ENV === "production" && params.provider === "microsoft" &&
+      (params.action === "start" || (params.action === "status" && validVerificationId(request.headers.get(verificationIdHeader))))) {
+    const trace = params.action === "start" ? newVerificationTrace() : newVerificationTrace(request.headers.get(verificationIdHeader)!);
+    return withVerificationTrace(trace, () => measureVerification("request_total", async () => {
+      measureVerificationSync("request_received", () => undefined);
+      const response = await observeDatabaseRoute(params.action === "status" ? "cleanup_status" : "cleanup_action",
+        () => handleCleanupRequest(request, { params: Promise.resolve(params) }));
+      response.headers.set(verificationIdHeader, trace.correlationId);
+      return response;
+    }), params.action === "status" ? "status" : undefined);
+  }
   return observeDatabaseRoute(params.action === "status" ? "cleanup_status" : "cleanup_action",
     () => handleCleanupRequest(request, { params: Promise.resolve(params) }));
 }
@@ -27,8 +40,8 @@ async function handleCleanupRequest(request: Request, context: { params: Promise
     if ((action === "confirm" || action === "undo" || action === "discard") && body.confirmed !== true) {
       return Response.json({ error: "Explicit confirmation is required." }, { status: 400, headers });
     }
-    const authorized = await authorizeProductionCleanupRequest(request, { provider,
-      access: action === "undo" || action === "status" || action === "discard" ? "recovery" : "forward", jobId: action === "start" ? undefined : jobId });
+    const authorized = await measureVerification("authorization", () => authorizeProductionCleanupRequest(request, { provider,
+      access: action === "undo" || action === "status" || action === "discard" ? "recovery" : "forward", jobId: action === "start" ? undefined : jobId }));
     if (authorized instanceof Response) return authorized;
     if (action === "start" && (typeof body.requestedCount !== "number" || !Number.isInteger(body.requestedCount) ||
         (provider === "gmail" ? ![250, 500].includes(body.requestedCount) : body.requestedCount < 1 || body.requestedCount > 500))) {
@@ -57,7 +70,14 @@ async function handleCleanupRequest(request: Request, context: { params: Promise
         : await service.getAuthorizedOutlookCleanupStatus(authorized.userId, jobId!);
     }
     if (!job) return Response.json({ error: "Cleanup state is unavailable or expired." }, { status: 410, headers });
-    return Response.json({ job: productionCleanupJobView(job) }, { headers });
+    return measureVerificationSync("response_generation", () => {
+      const response = Response.json({ job: productionCleanupJobView(job) }, { headers });
+      if (provider === "microsoft" && action === "status" && currentVerificationTrace() && job.status === "ready") {
+        // Upper bound: updatedAt precedes the final persistence commit, not its completion.
+        response.headers.set("X-Outlook-Ready-Checkpoint-Age-Ms", String(Math.max(0, Date.now() - job.updatedAt)));
+      }
+      return response;
+    });
   } catch (error) {
     if (error instanceof ProductionCleanupError) return Response.json({ error: error.message, code: error.code }, { status: error.status, headers });
     return Response.json({ error: "Cleanup could not continue. Check its status before trying again." }, { status: 503, headers });

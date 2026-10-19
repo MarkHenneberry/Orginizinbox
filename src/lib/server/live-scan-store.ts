@@ -1,4 +1,5 @@
 import "server-only";
+import { measureVerification, measureVerificationSync } from "@/lib/server/outlook-verification-timing";
 import { stoppedProviderWork } from "@/lib/server/provider-work-fence";
 import { scanStateTtlMs } from "@/lib/domain/transient-retention";
 import { Prisma, type EmailProviderName, type PrismaClient, type ScanState } from "@prisma/client";
@@ -171,9 +172,9 @@ export class DurableLiveScanStore {
   }
 
   async get(userId: string, provider?: LiveScanProvider, now = new Date()) {
-    const row = await this.repository.find(userId, provider);
+    const row = await measureVerification("database_read", () => this.repository.find(userId, provider));
     if (!row || row.expiresAt.getTime() <= now.getTime()) return undefined;
-    return decodeAndValidate(row);
+    return measureVerificationSync("decrypt_deserialize", () => decodeAndValidate(row));
   }
 
   async getByScanId(scanId: string, now = new Date()) {

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/server/db";
 import { contentionBackoff } from "@/lib/server/contention-backoff";
+import { measureVerification } from "@/lib/server/outlook-verification-timing";
 
 export function createProviderRequestCoordinator(
   providerConnectionId: string,
@@ -37,14 +38,14 @@ export function createProviderRequestCoordinator(
 
   return async function coordinate<T>(request: () => Promise<T>) {
     const owner = `provider-request:${randomUUID()}`;
-    await ensureSlots();
+    await measureVerification("provider_coordination", () => measureVerification("database_write", ensureSlots));
 
     const deadline = now().getTime() + 12_000;
     for (let attempt = 0; attempt < 200 && (attempt === 0 || now().getTime() < deadline); attempt += 1) {
-      if (!input.fenceAfterClaimOnly) await input.beforeRequest?.();
+      if (!input.fenceAfterClaimOnly) await measureVerification("provider_coordination", async () => input.beforeRequest?.());
       const claimedAt = now();
       for (let slot = 0; slot < limit; slot += 1) {
-        const claimed = await client.providerRequestLease.updateMany({
+        const claimed = await measureVerification("provider_coordination", () => measureVerification("database_write", () => client.providerRequestLease.updateMany({
           where: {
             providerConnectionId,
             slot,
@@ -55,20 +56,20 @@ export function createProviderRequestCoordinator(
             ]
           },
           data: { leaseOwner: owner, leaseExpiresAt: new Date(claimedAt.getTime() + 60_000) }
-        });
+        })));
         if (claimed.count !== 1) continue;
         try {
-          await input.beforeRequest?.();
+          await measureVerification("provider_coordination", async () => input.beforeRequest?.());
           return await request();
         } finally {
-          await client.providerRequestLease.updateMany({
+          await measureVerification("provider_coordination", () => measureVerification("database_write", () => client.providerRequestLease.updateMany({
             where: { providerConnectionId, slot, leaseOwner: owner },
             data: { leaseOwner: null, leaseExpiresAt: null }
-          });
+          })));
         }
       }
-      if (input.fenceAfterClaimOnly) await input.beforeRequest?.();
-      await sleep(Math.min(contentionBackoff(attempt, random), Math.max(0, deadline - now().getTime())));
+      if (input.fenceAfterClaimOnly) await measureVerification("provider_coordination", async () => input.beforeRequest?.());
+      await measureVerification("provider_coordination", () => sleep(Math.min(contentionBackoff(attempt, random), Math.max(0, deadline - now().getTime()))));
     }
     throw new Error("Provider request concurrency limit is busy.");
   };
