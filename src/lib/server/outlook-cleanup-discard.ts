@@ -1,7 +1,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/server/db";
-import { createCleanupJobStateCodec } from "@/lib/server/cleanup-job-store";
+import { decodeCleanupJobStateRow, hydrateCleanupJobStateRow } from "@/lib/server/cleanup-job-store";
 import { isOutlookPreMutationJob, type OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store";
 import { retrySerializableTransaction } from "@/lib/server/retry-serializable-transaction";
 
@@ -13,7 +13,7 @@ export async function discardUnconfirmedOutlookCleanup(userId: string, providerC
       job: { status: { not: "cancelled" }, scan: { userId, provider: "microsoft", providerConnectionId } }
     }, include: { job: { select: { scanId: true } } } });
     if (!row) return false;
-    const job = createCleanupJobStateCodec<OutlookCleanupStoredJob>().decode(row.encryptedPayload);
+    const job = decodeCleanupJobStateRow<OutlookCleanupStoredJob>(await hydrateCleanupJobStateRow(row, tx));
     if (job.userId !== userId || job.view.id !== jobId || job.version !== row.version || job.provider !== "microsoft" ||
         job.payload.providerConnectionId !== providerConnectionId || job.payload.scanId !== row.job.scanId || !isOutlookPreMutationJob(job)) return false;
     const accounting = await tx.creditJobAccounting.findUnique({ where: { jobId } });
@@ -28,5 +28,5 @@ export async function discardUnconfirmedOutlookCleanup(userId: string, providerC
     } });
     // CreditJobAccounting.activeStateJobId is set null by the existing FK, with no credit entry.
     return true;
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 15_000 }));
 }

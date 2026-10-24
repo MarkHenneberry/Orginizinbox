@@ -23,7 +23,7 @@ export type OutlookCleanupUiJob = Pick<OutlookCleanupJobView,
   "recoverableCount" | "createdAt" | "updatedAt" | "expiresAt" |
   "canChangeSelection" | "senderGroups" |
   "totalBatches" | "batchesCompleted" | "undoTotalBatches" | "undoBatchesCompleted"
-> & { verification?: Pick<NonNullable<OutlookCleanupJobView["verification"]>, "candidatesChecked" | "approved" | "excluded"> };
+> & { verification?: Pick<NonNullable<OutlookCleanupJobView["verification"]>, "candidatesTotal" | "candidatesChecked" | "approved" | "excluded"> };
 
 export function isDevelopmentGmailJob(job: GmailCleanupUiJob): job is GmailScalableJobView {
   return "quotaConsumedUnits" in job;

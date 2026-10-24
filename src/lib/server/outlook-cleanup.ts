@@ -12,6 +12,7 @@ import {
   getOutlookCleanupBatchSize,
   getOutlookCleanupTotalBatches,
   isOutlookCleanupDevelopmentEnabled,
+  isOutlookCleanupCount,
   outlookCleanupChunkSize
 } from "@/lib/domain/outlook-cleanup";
 import { assessMessage } from "@/lib/domain/recommendations";
@@ -23,7 +24,7 @@ import { MicrosoftProvider } from "@/lib/providers/microsoft/provider";
 import { sha256Base64Url } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
 import { retrySerializableTransaction } from "@/lib/server/retry-serializable-transaction";
-import { cleanupStateExpiryFor, prepareCleanupJobState } from "@/lib/server/cleanup-job-store";
+import { cleanupStateExpiryFor, prepareCleanupJobState, createPreparedCleanupJobState } from "@/lib/server/cleanup-job-store";
 import { getLiveScan, markLiveReportStale } from "@/lib/server/live-scan-store";
 import {
   forceRefreshMicrosoftConnection,
@@ -172,8 +173,8 @@ export async function startOutlookCleanup(input: { groupIndices: unknown; reques
       await transaction.cleanupJob.create({
         data: { id: jobId, scanId: liveScan.progress.scanId, acceptanceKey, status: "pending" }
       });
-      await transaction.cleanupJobState.create({ data: prepared.data });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }))));
+      await createPreparedCleanupJobState(transaction, prepared);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 15_000 }))));
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     const existingRow = await prisma.cleanupJob.findUnique({
@@ -405,6 +406,7 @@ export async function prepareOutlookJob(
     job.view.status = "resolving";
     const stats = job.view.verification ??= { candidatesChecked: 0, approved: 0, excluded: 0,
       exactHeaderRequests: 0, batchRequests: 0, retries: 0, throttles: 0, responseBodyJsonMs: 0, verificationDurationMs: 0 };
+    stats.candidatesTotal = job.payload.verificationCandidates.length;
     const started = performance.now();
     const before = provider.getScanMetrics?.();
     try {
@@ -961,8 +963,8 @@ function isOutlookCleanupEnabled() {
 
 function assertGate(requestedCount: unknown) {
   if (process.env.NODE_ENV === "production") {
-    if (typeof requestedCount !== "number" || !Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 500) {
-      throw new OutlookCleanupError("Choose between 1 and 500 messages.", 400);
+    if (!isOutlookCleanupCount(requestedCount)) {
+      throw new OutlookCleanupError("Choose a positive whole number of recommended messages.", 400);
     }
     return requestedCount;
   }

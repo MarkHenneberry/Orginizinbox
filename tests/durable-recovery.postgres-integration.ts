@@ -106,6 +106,51 @@ async function outlookJob(c: ProviderConnection, count = 10) {
 }
 
 describe.sequential("actual Postgres durability and isolation", () => {
+  it("stores 10k Outlook targets in bounded chunks with atomic credits, replacement and cascading retirement", async () => {
+    const c = await connection(await newUser(), "microsoft"), accepted = await outlookJob(c, 5);
+    await prisma.billingAccount.create({ data: { userId: c.userId, creditBalance: 20000 } });
+    const store = createPrismaOutlookCleanupStore();
+    const original = (await store.get(c.userId, accepted.id))!;
+    const ids = Array.from({ length: 10000 }, (_, index) => `synthetic-chunk-${index}`.padEnd(160, "x"));
+    const ready = (await store.compareAndSet(c.userId, accepted.id, original.version, job => ({
+      ...job, creditBilling: true as const,
+      view: { ...job.view, status: "ready", requested: ids.length, approved: ids.length },
+      payload: { ...job.payload,
+        verificationCandidates: ids.map(messageId => ({ messageId, groupIndex: 0 })),
+        targets: ids.map(originalMessageId => ({ originalMessageId, groupIndex: 0, state: "frozen" as const })) }
+    })))!;
+    expect(await prisma.cleanupJobStateChunk.count({ where: { jobId: accepted.id } })).toBeGreaterThan(100);
+    const header = await prisma.cleanupJobState.findUniqueOrThrow({ where: { jobId: accepted.id } });
+    expect(Buffer.byteLength(header.encryptedPayload)).toBeLessThan(512 * 1024);
+    const replacement = new PrismaCleanupJobStore<typeof ready>(new PrismaCleanupJobStateRepository(second));
+    expect((await replacement.get(c.userId, accepted.id))?.payload.targets.map(t => t.originalMessageId)).toEqual(ids);
+    const funded = (await store.compareAndSet(c.userId, accepted.id, ready.version, job => {
+      job.payload.confirmedAt = Date.now(); job.view.status = "running"; return job;
+    }))!;
+    const markTwentyMoved = (job: typeof ready) => {
+      for (const target of job.payload.targets.slice(0, 20)) Object.assign(target, {
+        state: "moved_verified", movedMessageId: `returned-${target.originalMessageId}`, originalFolderId: "synthetic-original-folder"
+      });
+      return job;
+    };
+    const writes = await Promise.allSettled([
+      store.compareAndSet(c.userId, accepted.id, funded.version, markTwentyMoved),
+      replacement.compareAndSet(c.userId, accepted.id, funded.version, markTwentyMoved)
+    ]);
+    expect(writes.filter(result => result.status === "fulfilled" && result.value)).toHaveLength(1);
+    expect(await creditSnapshot(prisma, c.userId)).toMatchObject({ balance: 19980, reserved: 9980 });
+    const moved = (await replacement.get(c.userId, accepted.id))!;
+    expect(moved.payload.targets.slice(0, 20).every(t => t.originalFolderId === "synthetic-original-folder" && t.movedMessageId === `returned-${t.originalMessageId}`)).toBe(true);
+    await replacement.compareAndSet(c.userId, accepted.id, moved.version, job => {
+      for (const target of job.payload.targets.slice(0, 20)) Object.assign(target, { state: "restored_verified", restoredMessageId: `restored-${target.movedMessageId}` });
+      return job;
+    });
+    expect((await creditSnapshot(prisma, c.userId)).balance).toBe(19980);
+    expect(await replacement.delete(c.userId, accepted.id)).toBe(true);
+    expect(await prisma.cleanupJobStateChunk.count({ where: { jobId: accepted.id } })).toBe(0);
+    expect(await prisma.creditJobAccounting.findUnique({ where: { jobId: accepted.id } })).toMatchObject({ activeStateJobId: null, moved: 20, restored: 20 });
+    expect(await creditSnapshot(prisma, c.userId)).toMatchObject({ balance: 19980, reserved: 0 });
+  });
   it("cancels only pre-mutation Outlook state, releases unused reservation FK and fences an active read-only worker", async () => {
     const c = await connection(await newUser(), "microsoft");
     const accepted = await outlookJob(c, 5);

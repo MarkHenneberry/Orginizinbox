@@ -10,6 +10,7 @@ import {
 } from "@/lib/domain/outlook-cleanup";
 import {
   PrismaCleanupJobStore,
+  hydrateCleanupJobStateRow,
   decodeCleanupJobStateRow,
   type DurableCleanupStore
 } from "@/lib/server/cleanup-job-store";
@@ -81,21 +82,28 @@ export function isOutlookPreMutationJob(job: OutlookCleanupStoredJob) {
 }
 
 export async function getOutlookCleanupForPresentation(userId: string, providerConnectionId: string, freshSelection = false) {
-  const rows = await prisma.cleanupJobState.findMany({ where: {
-    userId, expiresAt: { gt: new Date() },
-    job: { status: { not: "cancelled" }, scan: { provider: "microsoft", providerConnectionId } }
-  }, orderBy: { updatedAt: "desc" }, include: { job: { select: { scanId: true } } } });
-  let prepared: OutlookCleanupStoredJob | undefined;
-  for (const row of rows) {
-    if (row.expiresAt.getTime() <= Date.now()) continue;
-    const job = decodeCleanupJobStateRow<OutlookCleanupStoredJob>(row);
-    if (job.userId !== userId || job.provider !== "microsoft" || job.payload.providerConnectionId !== providerConnectionId || job.payload.scanId !== row.job.scanId) {
-      throw new Error("Cleanup ownership could not be verified.");
+  // One snapshot preserves older recovery precedence while both parent/child reads are paged.
+  return prisma.$transaction(async tx => {
+    let prepared: OutlookCleanupStoredJob | undefined;
+    const pageSize = 4;
+    for (let skip = 0; ; skip += pageSize) {
+      const rows = await tx.cleanupJobState.findMany({ where: {
+        userId, expiresAt: { gt: new Date() },
+        job: { status: { not: "cancelled" }, scan: { provider: "microsoft", providerConnectionId } }
+      }, orderBy: [{ updatedAt: "desc" }, { jobId: "desc" }], take: pageSize, skip, include: { job: { select: { scanId: true } } } });
+      for (const row of rows) {
+        if (row.expiresAt.getTime() <= Date.now()) continue;
+        const job = decodeCleanupJobStateRow<OutlookCleanupStoredJob>(await hydrateCleanupJobStateRow(row, tx));
+        if (job.userId !== userId || job.provider !== "microsoft" || job.payload.providerConnectionId !== providerConnectionId || job.payload.scanId !== row.job.scanId) {
+          throw new Error("Cleanup ownership could not be verified.");
+        }
+        if (!isOutlookPreMutationJob(job)) return job;
+        if (!freshSelection) prepared ??= job;
+      }
+      if (rows.length < pageSize) break;
     }
-    if (!isOutlookPreMutationJob(job)) return job;
-    if (!freshSelection) prepared ??= job;
-  }
-  return prepared;
+    return prepared;
+  }, { isolationLevel: "RepeatableRead", timeout: 15_000 });
 }
 
 export function getOutlookCleanupLedgers(job: OutlookCleanupStoredJob) {

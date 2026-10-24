@@ -132,7 +132,7 @@ describe("provider multi-user coordination", () => {
     expect(schema).toContain("@@id([userId, provider])");
     expect(`${gmailAcceptance}\n${outlookAcceptance}`).not.toMatch(/take:\s*10[\s\S]+acceptanceKey/);
     expect(gmailAcceptance).toMatch(/cleanupJob\.create[\s\S]+cleanupJobState\.create/);
-    expect(outlookAcceptance).toMatch(/cleanupJob\.create[\s\S]+cleanupJobState\.create/);
+    expect(outlookAcceptance).toMatch(/cleanupJob\.create[\s\S]+createPreparedCleanupJobState\(transaction, prepared\)/);
     expect(googleOAuth).toContain("userId_provider");
     expect(microsoftOAuth).toContain("userId_provider");
   });

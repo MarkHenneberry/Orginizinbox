@@ -9,9 +9,7 @@ import { buildOutlookCleanupSenderGroups } from "@/lib/domain/outlook-report";
 import { ContextBackAction } from "@/components/product/ContextBackAction";
 import { GmailCleanupClient } from "@/components/product/GmailCleanupClient";
 import {
-  isOutlookCleanupDevelopmentEnabled,
-  outlookCleanupCountOptions,
-  outlookCleanupMaximum
+  isOutlookCleanupDevelopmentEnabled
 } from "@/lib/domain/outlook-cleanup";
 import { runtimeConfig } from "@/lib/config";
 import { gmailScalableCleanupDevCounts } from "@/lib/domain/gmail-cleanup-request-mode";
@@ -44,7 +42,7 @@ export default async function CleanupPage({ searchParams }: { searchParams?: Pro
             availableCredits={credits?.available ?? null}
             key={`${state.provider}:${state.gmailJob?.id ?? state.outlookJob?.id ?? "selection"}`}
             bulkUndoProofEnabled={false} cleanupEnabled={true} legacyCleanupMaximum={0}
-            scalableCleanupEnabled={state.provider === "gmail"} countOptions={state.provider === "gmail" ? [250, 500] : [5, 25, 100, 500]}
+            scalableCleanupEnabled={state.provider === "gmail"} countOptions={state.provider === "gmail" ? [250, 500] : []}
             developmentMode={false} fixtureMode={false} productionAccess={state.access}
             groups={report ? state.provider === "microsoft" ? buildOutlookCleanupSenderGroups(report.senders) : publicCleanupGroupsFromReport(report.senders) : []}
             initialScalableJob={state.gmailJob} initialOutlookJob={state.outlookJob}
@@ -70,7 +68,7 @@ export default async function CleanupPage({ searchParams }: { searchParams?: Pro
   if (outlook && !outlookCleanupEnabled) redirect("/app/report");
   const scalableCleanupEnabled = !outlook && runtimeConfig.gmailScalableCleanupDevEnabled;
   const countOptions = outlook
-    ? [...outlookCleanupCountOptions]
+    ? []
     : [...availableCleanupCounts(), ...(scalableCleanupEnabled ? gmailScalableCleanupDevCounts : [])];
   const initialScalableJob = !outlook && scalableCleanupEnabled ? await getCurrentGmailScalableCleanup() : undefined;
   const initialOutlookJob = outlookCleanupEnabled ? await getCurrentOutlookCleanup(freshSelection) : undefined;
@@ -93,7 +91,7 @@ export default async function CleanupPage({ searchParams }: { searchParams?: Pro
             runtimeConfig.gmailBulkUndoHistoryShadowEnabled
           }
           cleanupEnabled={outlook ? outlookCleanupEnabled : runtimeConfig.gmailCleanupEnabled}
-          legacyCleanupMaximum={outlook ? outlookCleanupMaximum : Math.min(runtimeConfig.gmailCleanupMaxMessages, gmailCleanupHardMaximum)}
+          legacyCleanupMaximum={outlook ? 0 : Math.min(runtimeConfig.gmailCleanupMaxMessages, gmailCleanupHardMaximum)}
           scalableCleanupEnabled={scalableCleanupEnabled}
           countOptions={countOptions}
           developmentMode={true}

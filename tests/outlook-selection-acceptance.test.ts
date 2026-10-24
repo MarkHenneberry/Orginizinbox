@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOutlookBaseState, snapshotOutlookBase } from "@/lib/domain/outlook-report";
 import { decryptCleanupState } from "@/lib/server/crypto";
 import { startOutlookCleanup } from "@/lib/server/outlook-cleanup";
@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({ live: vi.fn(), state: vi.fn(), job: vi.fn(), sched
 vi.mock("@/lib/config", () => ({ env: { TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 3).toString("base64"), CLEANUP_STATE_ENCRYPTION_KEY: Buffer.alloc(32, 4).toString("base64") },
   runtimeConfig: { fixtureMode: false, microsoftOAuthDevEnabled: true, outlookCleanupDevEnabled: true, cleanupStateActiveTtlSeconds: 1800 } }));
 vi.mock("@/lib/server/session", () => ({ getSession: async () => ({ userId: "owner", providerConnectionId: "connection" }) }));
+vi.mock("@/lib/server/production-cleanup", () => ({ requireProductionCleanupAccess: async () => undefined }));
 vi.mock("@/lib/server/microsoft-connection", () => ({ getActiveMicrosoftConnection: async () => ({ accessToken: "fixture", connection: { id: "connection" } }) }));
 vi.mock("@/lib/server/live-scan-store", () => ({ getLiveScan: h.live }));
 vi.mock("@/lib/server/provider-cleanup-workflow-start", () => ({ startProviderCleanupWorkflow: h.schedule }));
@@ -21,6 +22,22 @@ beforeEach(() => {
     senderAddress: i < 30 ? "selected@example.test" : i < 60 ? "unselected@example.test" : "third@example.test", receivedAt: new Date("2020-01-01"), isRead: false })), Date.now());
   h.live.mockResolvedValue({ progress: { scanId: "opaque-scan", status: "completed", provider: "microsoft" },
     report: snapshotOutlookBase(base, new Set()), outlookBase: base, participatedConversationIds: new Set() });
+});
+afterEach(() => vi.unstubAllEnvs());
+it.each(["production", "development"])("accepts All recommended above 500 only against the current server-owned selected pool in %s", async mode => {
+  vi.stubEnv("NODE_ENV", mode);
+  const base = createOutlookBaseState(Array.from({ length: 1600 }, (_, i) => ({ provider: "microsoft", providerMessageId: `private-id-${i}`,
+    senderAddress: i < 1379 ? "selected@example.test" : "unselected@example.test", receivedAt: new Date("2020-01-01"), isRead: false })), Date.now());
+  const report = snapshotOutlookBase(base, new Set());
+  h.live.mockResolvedValue({ progress: { scanId: "opaque-scan", status: "completed", provider: "microsoft" }, report, outlookBase: base, participatedConversationIds: new Set() });
+  const index = report.senders.findIndex(sender => sender.senderKey === "selected@example.test");
+  await expect(startOutlookCleanup({ groupIndices: [index], requestedCount: 1380 })).rejects.toThrow("do not contain that many");
+  const response = await startOutlookCleanup({ groupIndices: [index], requestedCount: 1379 });
+  expect(response.requested).toBe(1379);
+  const stored = JSON.parse(decryptCleanupState(h.state.mock.calls[0][0].data.encryptedPayload)) as OutlookCleanupStoredJob;
+  expect(stored.payload.verificationCandidates).toHaveLength(1379);
+  expect(stored.payload.targets).toEqual([]); expect(stored.payload.confirmedAt).toBeUndefined();
+  expect(stored.payload.verificationCandidates!.every(candidate => Number(candidate.messageId.replace("private-id-", "")) < 1379)).toBe(true);
 });
 it("accepts only server-resolved selected-group IDs, ignores injected identities/approval, and exposes aggregate state only", async () => {
   const live = await h.live();

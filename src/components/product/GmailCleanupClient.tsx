@@ -45,7 +45,8 @@ import {
 import { getGmailCleanupRequestMode } from "@/lib/domain/gmail-cleanup-request-mode";
 import {
   formatOutlookCleanupDiagnostic,
-  outlookCleanupMaximum,
+  isOutlookCleanupCount,
+  outlookCleanupSelectionOptions,
   shouldPollOutlookCleanup,
   type OutlookCleanupJobView as DevelopmentOutlookJob
 } from "@/lib/domain/outlook-cleanup";
@@ -103,7 +104,8 @@ export function GmailCleanupClient({
   );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<CleanupSortKey>("ready");
-  const [requestedCount, setRequestedCount] = useState(initialScalableJob?.requestedCount ?? initialOutlookJob?.requested ?? countOptions.at(-1) ?? 0);
+  const [gmailRequestedCount, setRequestedCount] = useState(initialScalableJob?.requestedCount ?? countOptions.at(-1) ?? 0);
+  const [outlookPercent, setOutlookPercent] = useState(100);
   const [job, setJob] = useState<GmailCleanupJobView | null>(null);
   const [scalableJob, setScalableJob] = useState<GmailScalableJobView | null>(initialScalableJob ?? null);
   const [outlookJob, setOutlookJob] = useState<OutlookCleanupJobView | null>(initialOutlookJob ?? null);
@@ -144,6 +146,9 @@ export function GmailCleanupClient({
   const visibleGroups = useMemo(() => filterAndSortCleanupGroups(groups, search, sortKey), [groups, search, sortKey]);
   const selectedGroups = groups.filter((group) => selectedGroupIndices.has(group.index));
   const selectedReadyCount = selectedGroups.reduce((total, group) => total + group.cleanupCandidateCount, 0);
+  const outlookOptions = outlookCleanupSelectionOptions(selectedReadyCount);
+  const outlookOption = outlookOptions.find(option => option.percent === outlookPercent) ?? outlookOptions.at(-1);
+  const requestedCount = provider === "microsoft" ? outlookOption?.count ?? 0 : gmailRequestedCount;
   const selectedReviewCount = selectedGroups.reduce((total, group) => total + group.reviewMessages, 0);
   const selectedProtectedCount = selectedGroups.reduce((total, group) => total + group.protectedMessages, 0);
   const groupsByIndex = useMemo(() => new Map((outlookJob?.senderGroups ?? groups).map((group) => [group.index, group])), [groups, outlookJob?.senderGroups]);
@@ -166,7 +171,7 @@ export function GmailCleanupClient({
   const allVisibleEligibleSelected =
     visibleEligibleIndices.length > 0 && visibleEligibleIndices.every((index) => selectedGroupIndices.has(index));
   const cleanupRequestMode = provider === "microsoft"
-    ? Number.isInteger(requestedCount) && requestedCount >= 1 && requestedCount <= outlookCleanupMaximum
+    ? isOutlookCleanupCount(requestedCount)
       ? "outlook"
       : "invalid"
     : getGmailCleanupRequestMode({
@@ -698,15 +703,19 @@ export function GmailCleanupClient({
             <label className="mt-5 block text-sm font-bold text-[var(--navy)]" htmlFor="cleanup-count">Messages to check</label>
             <select
               className="focus-ring mt-2 w-full rounded-md border border-[var(--line)] bg-white px-3 py-2"
-              disabled={(!cleanupEnabled && !scalableCleanupEnabled) || fixtureMode || reportStale || busy}
+              disabled={(!cleanupEnabled && !scalableCleanupEnabled) || fixtureMode || reportStale || busy || (provider === "microsoft" && !outlookOptions.length)}
               id="cleanup-count"
               onChange={(event) => {
-                setRequestedCount(Number(event.target.value));
+                if (provider === "microsoft") setOutlookPercent(Number(event.target.value));
+                else setRequestedCount(Number(event.target.value));
                 resetPreview();
               }}
-              value={requestedCount}
+              value={provider === "microsoft" ? outlookOption?.percent ?? "" : requestedCount}
             >
-              {countOptions.map((count) => <option key={count} value={count}>{count} messages</option>)}
+              {provider === "microsoft" ? outlookOptions.length
+                ? outlookOptions.map(option => <option key={option.percent} value={option.percent}>{option.label}</option>)
+                : <option value="">Select sender groups first</option>
+                : countOptions.map((count) => <option key={count} value={count}>{count} messages</option>)}
             </select>
 
             {requestedCount > selectedReadyCount ? <Notice text={provider === "microsoft" ? "Select enough sender groups to reach this potential total." : "Select enough eligible senders to reach this suggested total."} /> : null}
@@ -717,7 +726,7 @@ export function GmailCleanupClient({
             {displayError ? <Notice text={displayError} /> : null}
 
             <button className="btn btn-primary focus-ring mt-5 w-full" disabled={disabled} onClick={() => resolvePreview(false)} type="button">
-              {activeOperation === "resolution" ? "Checking messages..." : `Check ${requestedCount.toLocaleString()} messages`}
+              {activeOperation === "resolution" ? "Checking messages..." : provider === "microsoft" && !requestedCount ? "Check selection" : `Check ${requestedCount.toLocaleString()} messages`}
             </button>
             {developmentMode && requestedCount === 100 ? (
               <button className="btn btn-secondary focus-ring mt-2 w-full" disabled={disabled} onClick={() => resolvePreview(true)} type="button">
@@ -939,6 +948,13 @@ function OutlookCleanupWorkspace({
                   ? `Moving up to ${approvedCount.toLocaleString()} messages to Deleted Items...`
                   : "Checking selected messages..."}
             />
+            {(job.status === "created" || job.status === "resolving") && job.verification?.candidatesTotal ? (
+              <div className="mt-4 border-t border-[var(--line)] pt-4" aria-live="polite">
+                <progress aria-label="Outlook verification progress" className="h-2 w-full"
+                  max={job.verification.candidatesTotal} value={job.verification.candidatesChecked} />
+                <p className="m-0 mt-2 text-sm">{job.verification.candidatesChecked.toLocaleString()} of {job.verification.candidatesTotal.toLocaleString()} candidates checked ({Math.floor(100 * job.verification.candidatesChecked / job.verification.candidatesTotal)}%)</p>
+              </div>
+            ) : null}
             {job.status === "running" ? (
               <div className="mt-4 border-t border-[var(--line)] pt-4">
                 <progress aria-label="Outlook cleanup progress" className="h-2 w-full" max={job.totalBatches} value={job.batchesCompleted} />

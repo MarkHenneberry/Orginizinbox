@@ -424,7 +424,7 @@ describe("Prisma scalable cleanup transient store", () => {
     expect(stateModel).toContain("encryptedPayload String");
     expect(stateModel).not.toMatch(/Gmail|Imap|UidValidity|History|Subject|Header|MessageId/);
     expect(aggregateModel).not.toMatch(/Gmail|Imap|UidValidity|History|Subject|Header|MessageId/);
-    expect(schema.match(/model CleanupJobState/g)).toHaveLength(1);
+    expect(schema.match(/model CleanupJobState\s*\{/g)).toHaveLength(1);
   });
 });
 

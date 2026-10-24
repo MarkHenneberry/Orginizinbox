@@ -81,7 +81,7 @@ it("posts one correlated ready-render sample after a fresh Outlook check without
   renderClient();
   const sender = elements(current).find(e => e.type === "input" && e.props.type === "checkbox" && !e.props.disabled)!;
   (sender.props.onChange as () => void)(); renderClient();
-  const check = elements(current).find(e => e.type === "button" && text(e.props.children) === "Check 5 messages")!;
+  const check = elements(current).find(e => e.type === "button" && text(e.props.children).startsWith("Check "))!;
   const correlationId = "11111111-1111-4111-8111-111111111111";
   vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: job("resolving") } }, { headers: { "X-Outlook-Verification-Id": correlationId } }));
   await (check.props.onClick as () => Promise<void>)(); renderClient();
@@ -135,7 +135,7 @@ it.each([300_000, -300_000])("uses separate monotonic Check/Move/Undo origins wi
   renderClient();
   const sender = elements(current).find(e => e.type === "input" && e.props.type === "checkbox" && !e.props.disabled)!;
   (sender.props.onChange as () => void)(); renderClient();
-  const check = elements(current).find(e => e.type === "button" && text(e.props.children) === "Check 5 messages")!;
+  const check = elements(current).find(e => e.type === "button" && text(e.props.children).startsWith("Check "))!;
   expect(check.props.disabled).toBe(false);
   let accept!: (response: Response) => void;
   vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { accept = resolve; }));
@@ -214,7 +214,7 @@ it.each(["ready", "resolving"] as const)("Change selection returns %s jobs direc
   expect(text(current)).toContain("Select one or more sender groups to check");
   expect(text(current)).toContain(group.displayName);
   expect(elements(current).filter(e => e.type === "input" && e.props.type === "checkbox" && e.props.checked)).toHaveLength(0);
-  expect(elements(current).find(e => e.type === "button" && text(e.props.children) === "Check 5 messages")?.props.disabled).toBe(true);
+  expect(elements(current).find(e => e.type === "button" && text(e.props.children) === "Check selection")?.props.disabled).toBe(true);
   if (poll) {
     vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: job("ready") } }));
     expect(await poll(new AbortController().signal)).toBe(false); renderClient();
@@ -255,4 +255,45 @@ it("successful purchase reconciliation retains its explicit server refresh", asy
   await (check.props.onClick as () => Promise<void>)();
   expect(fetch).toHaveBeenCalledWith("/api/billing/reconcile", expect.objectContaining({ method: "POST" }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
+});
+
+it("recomputes Outlook relative amounts from selected Potential cleanup only and posts All recommended as an exact count", async () => {
+  const base = props().groups.find(group => group.eligible)!;
+  const groups = [
+    { ...base, index: 0, displayName: "First sender", cleanupCandidateCount: 1379, reviewMessages: 400, protectedMessages: 200 },
+    { ...base, index: 1, displayName: "Second sender", cleanupCandidateCount: 8621, reviewMessages: 600, protectedMessages: 300 }
+  ];
+  const client = scope(); let current: React.ReactNode;
+  const renderClient = () => current = render(client, () => GmailCleanupClient({ ...props(), groups }));
+  const chooseGroup = (index: number) => {
+    const box = elements(current).find(e => e.type === "input" && e.props["aria-label"] === `Select ${groups[index].displayName}`)!;
+    (box.props.onChange as () => void)(); renderClient();
+  };
+  const select = () => elements(current).find(e => e.type === "select" && e.props.id === "cleanup-count")!;
+  const check = () => elements(current).find(e => e.type === "button" && text(e.props.children).startsWith("Check "))!;
+  renderClient(); expect(select().props.disabled).toBe(true); expect(mocks.poll).not.toHaveBeenCalled();
+  chooseGroup(0);
+  expect(text(select())).toContain("All recommended (1,379)");
+  expect(text(select())).toContain("350 messages (~25%)");
+  expect(text(check())).toBe("Check 1,379 messages");
+  (select().props.onChange as (event: unknown) => void)({ target: { value: "25" } }); renderClient();
+  expect(text(check())).toBe("Check 350 messages");
+  chooseGroup(1);
+  expect(text(select())).toContain("All recommended (10,000)");
+  expect(text(check())).toBe("Check 2,500 messages");
+  (select().props.onChange as (event: unknown) => void)({ target: { value: "100" } }); renderClient();
+  expect(text(check())).toBe("Check 10,000 messages");
+  expect(mocks.poll).not.toHaveBeenCalled();
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: { ...job("resolving"), requested: 10000, approved: 3400,
+    verification: { candidatesTotal: 10000, candidatesChecked: 3400, approved: 3400, excluded: 0 } } } }));
+  await (check().props.onClick as () => Promise<void>)(); renderClient();
+  expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)).toEqual({ groupIndices: [0, 1], requestedCount: 10000 });
+  expect(text(tree(workspace(current)))).toContain("3,400 of 10,000 candidates checked (34%)");
+  const progress = elements(tree(workspace(current))).find(e => e.type === "progress")!;
+  expect(progress.props).toMatchObject({ max: 10000, value: 3400 });
+  const poll = mocks.poll.mock.calls.at(-1)![0] as (signal: AbortSignal) => Promise<boolean>;
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: { ...job("ready"), requested: 10000, approved: 10000 } } }));
+  expect(await poll(new AbortController().signal)).toBe(false); renderClient();
+  const polls = mocks.poll.mock.calls.length;
+  renderClient(); expect(mocks.poll).toHaveBeenCalledTimes(polls);
 });

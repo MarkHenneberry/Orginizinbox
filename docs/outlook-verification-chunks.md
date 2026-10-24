@@ -111,11 +111,13 @@ estimates, not additive measurements of all nested spans. Approximately 30-35 se
 backend is plausible with similar provider/DB latency; slower calls or time-budget
 yields can exceed it. The implementation has no measured new production latency yet.
 
-Repeat the existing fresh 500-message read-only test: discard an unconfirmed old
+The selector now uses [relative amounts and All recommended](outlook-all-recommended.md),
+not a fixed 500 option. Repeat a fresh read-only test: discard an unconfirmed old
 selection first where allowed, choose the same sender, click Check once, keep the
 tab visible, and do not confirm moves. Filter by the new trace ID. Expect configured
-batches/step 5, budget 15000, normally steps 5, Graph batches 25, requested/checked/
-approved 500 when unchanged eligibility permits. Compare actual workflowGapMs,
+batches/step 5 and budget 15000; for an exact 500-candidate selection this normally
+means steps 5 and Graph batches 25, with requested/checked/approved 500 when eligibility permits.
+For other relative amounts use the scaling table in the linked document. Compare actual workflowGapMs,
 workerMs, databaseMs/persistenceMs, serverTotalMs and the client-ready sample.
 
 Tests use the real worker/Workflow loop, actual encrypted codec and Prisma store

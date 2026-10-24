@@ -9,7 +9,10 @@ import { getFixtureInboxReport } from "@/lib/fixtures/inbox";
 import { buildCleanupSenderGroups } from "@/lib/providers/gmail/cleanup-candidates";
 
 const h = vi.hoisted(() => ({ rows: vi.fn(), find: vi.fn(), jobs: new Map<string, unknown>() }));
-vi.mock("@/lib/server/db", () => ({ prisma: { cleanupJobState: { findMany: h.rows, findUnique: h.find } } }));
+vi.mock("@/lib/server/db", () => ({ prisma: {
+  cleanupJobState: { findMany: h.rows, findUnique: h.find },
+  $transaction: async (run: (tx: unknown) => Promise<unknown>) => run({ cleanupJobState: { findMany: h.rows, findUnique: h.find } })
+} }));
 vi.mock("@/lib/server/crypto", () => ({ encryptCleanupState: (value: string) => value, decryptCleanupState: (value: string) => value }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }) }));
 const group = buildCleanupSenderGroups(getFixtureInboxReport().senders).find(group => group.eligible)!;
@@ -42,7 +45,8 @@ it("starts Outlook with zero selected senders and a disabled check action while 
   expect([...createDefaultCleanupSelection([group], "gmail")]).toEqual([group.index]);
   const html = render("microsoft");
   expect(html).not.toContain("checked=\"\""); expect(html).toContain("Select one or more sender groups to check");
-  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Check 500 messages/);
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Check selection/);
+  expect(html).toContain("Select sender groups first");
   expect(render("gmail")).toContain("checked=\"\"");
 });
 it.each(["created", "resolving", "ready"] as const)("fresh entry ignores an old %s preparation without deleting it", async status => {

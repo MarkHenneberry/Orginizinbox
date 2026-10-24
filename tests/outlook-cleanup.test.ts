@@ -5,9 +5,7 @@ import {
   formatOutlookCleanupDiagnostic,
   getOutlookCleanupBatchSize,
   getOutlookCleanupTotalBatches,
-  isOutlookCleanupDevelopmentEnabled,
-  outlookCleanupCountOptions,
-  outlookCleanupMaximum
+  isOutlookCleanupDevelopmentEnabled
 } from "@/lib/domain/outlook-cleanup";
 import {
   decryptCleanupStateWithKey,
@@ -28,6 +26,42 @@ import {
 } from "@/lib/server/outlook-cleanup-store";
 
 describe("Outlook durable cleanup", () => {
+  it("round-trips large encrypted recovery state and measures byte costs without exposing mailbox-shaped values", () => {
+    const codec = createCleanupJobStateCodec<OutlookCleanupStoredJob>({
+      encrypt: value => encryptCleanupStateWithKey(value, Buffer.alloc(32, 7)),
+      decrypt: value => decryptCleanupStateWithKey(value, Buffer.alloc(32, 7))
+    });
+    const measurements = [];
+    for (const count of [1000, 5000, 10000]) {
+      const job = storedJob(count, "created");
+      const id = (index: number, prefix: string) => `${prefix}${index}`.padEnd(160, "x");
+      job.payload.verificationCandidates = Array.from({ length: count }, (_, index) => ({ messageId: id(index, "original"), groupIndex: 0 }));
+      const measure = () => {
+        const started = performance.now();
+        const ciphertext = codec.encode(job);
+        const encodedMs = performance.now() - started;
+        const readStarted = performance.now();
+        const recovered = codec.decode(ciphertext);
+        return { encryptedBytes: Buffer.byteLength(ciphertext), plaintextBytes: Buffer.byteLength(JSON.stringify(job)),
+          encodeMs: Math.round(encodedMs), decodeMs: Math.round(performance.now() - readStarted), recovered };
+      };
+      const base = measure();
+      job.payload.targets = job.payload.verificationCandidates.map(candidate => ({ originalMessageId: candidate.messageId,
+        groupIndex: 0, state: "restored_verified", originalFolderId: id(0, "folder"), movedMessageId: id(Number(candidate.messageId.match(/\d+/)?.[0]), "moved"),
+        restoredMessageId: id(Number(candidate.messageId.match(/\d+/)?.[0]), "restored") }));
+      const recovery = measure();
+      expect(recovery.recovered.payload.targets).toEqual(job.payload.targets);
+      expect(recovery.encryptedBytes).toBeGreaterThan(recovery.plaintextBytes);
+      job.permanentDeletion = { status: "running", targets: job.payload.targets.map((target, index) => ({
+        key: String(index), messageId: target.movedMessageId!, folderId: id(0, "deleted"), state: "pending" })) };
+      const deletion = measure();
+      expect(deletion.recovered.permanentDeletion?.targets).toHaveLength(count);
+      measurements.push({ messages: count, baseEncryptedBytes: base.encryptedBytes,
+        recoveryEncryptedBytes: recovery.encryptedBytes, deletionEncryptedBytes: deletion.encryptedBytes,
+        recoveryEncodeMs: recovery.encodeMs, recoveryDecodeMs: recovery.decodeMs });
+    }
+    process.stdout.write(`Synthetic Outlook state sizes (160-character IDs): ${JSON.stringify(measurements)}\n`);
+  });
   it.each(["ready", "failed"] as const)("labels intermediate verification as progress and %s verification as cumulative complete", async terminal => {
     const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
     let clock = 0;
@@ -166,9 +200,7 @@ describe("Outlook durable cleanup", () => {
     expect(checkpoints.filter((snapshot) => snapshot.payload.targets.some((target) => target.state === "move_dispatched"))).toHaveLength(25);
   });
 
-  it("is development-only and caps requests at 500", () => {
-    expect(outlookCleanupMaximum).toBe(500);
-    expect(outlookCleanupCountOptions).toEqual([5, 25, 100, 500]);
+  it("keeps the development gate and accepts safe counts without a fixed product maximum", () => {
     expect([1, 25, 26, 100, 101, 500].map(getOutlookCleanupBatchSize)).toEqual([5, 5, 10, 10, 20, 20]);
     expect(assertOutlookCleanupDevelopmentRequest({
       enabled: true,
@@ -176,14 +208,17 @@ describe("Outlook durable cleanup", () => {
       nodeEnv: "development",
       requestedCount: 500
     })).toBe(500);
-    for (const requestedCount of [0, 501, 1_000]) {
+    for (const requestedCount of [0, -1, 1.5, "500", Number.MAX_SAFE_INTEGER + 1, Infinity, NaN]) {
       expect(() => assertOutlookCleanupDevelopmentRequest({
         enabled: true,
         fixtureMode: false,
         nodeEnv: "development",
         requestedCount
-      })).toThrow(/between 1 and 500/);
+      })).toThrow(/positive whole number/);
     }
+    for (const requestedCount of [501, 1_000, 1_379, 10_000]) expect(assertOutlookCleanupDevelopmentRequest({
+      enabled: true, fixtureMode: false, nodeEnv: "development", requestedCount
+    })).toBe(requestedCount);
     expect(() => assertOutlookCleanupDevelopmentRequest({
       enabled: true,
       fixtureMode: false,
@@ -526,8 +561,9 @@ describe("Outlook durable cleanup", () => {
     });
   });
 
-  it("processes and restores 500 exact targets across 25 adaptive batches", async () => {
-    const job = frozenJob(500);
+  it.each([500, 1379, 10000])("processes and restores %i exact targets across bounded adaptive batches", async requested => {
+    const job = frozenJob(requested);
+    const batches = Math.ceil(requested / 20), chunks = Math.ceil(requested / 100);
     const recheck = vi.fn(async (messageIds: readonly string[]) => messageIds.map((messageId) => ({
       record: record(messageId),
       parentFolderId: `original-folder-${messageId}`
@@ -547,19 +583,19 @@ describe("Outlook durable cleanup", () => {
 
     await executeOutlookMoves(job, provider, async () => undefined);
 
-    expect(recheck).toHaveBeenCalledTimes(25);
-    expect(move).toHaveBeenCalledTimes(25);
-    expect(verify).toHaveBeenCalledTimes(25);
+    expect(recheck).toHaveBeenCalledTimes(batches);
+    expect(move).toHaveBeenCalledTimes(batches);
+    expect(verify).toHaveBeenCalledTimes(batches);
     expect(job.view).toMatchObject({
       status: "complete",
-      checked: 500,
-      approved: 500,
-      movedVerified: 500,
-      chunksCompleted: 5,
-      totalChunks: 5,
+      checked: requested,
+      approved: requested,
+      movedVerified: requested,
+      chunksCompleted: chunks,
+      totalChunks: chunks,
       effectiveBatchSize: 20,
-      batchesCompleted: 25,
-      totalBatches: 25,
+      batchesCompleted: batches,
+      totalBatches: batches,
       uncertain: 0,
       undoAvailable: true
     });
@@ -569,20 +605,20 @@ describe("Outlook durable cleanup", () => {
     job.view.undoAvailable = false;
     await executeOutlookUndo(job, provider, async () => undefined);
 
-    expect(move).toHaveBeenCalledTimes(50);
-    expect(verify).toHaveBeenCalledTimes(50);
+    expect(move).toHaveBeenCalledTimes(2 * batches);
+    expect(verify).toHaveBeenCalledTimes(2 * batches);
     expect(job.view).toMatchObject({
       status: "undo_complete",
-      restoredVerified: 500,
-      undoBatchesCompleted: 25,
-      undoTotalBatches: 25,
+      restoredVerified: requested,
+      undoBatchesCompleted: batches,
+      undoTotalBatches: batches,
       uncertain: 0
     });
     expect(job.payload.targets.every((target) => target.state === "restored_verified")).toBe(true);
   });
 
-  it("continues automatically one persisted batch at a time", async () => {
-    const job = frozenJob(500);
+  it.each([500, 10000])("continues %i automatically one persisted batch at a time", async requested => {
+    let job = frozenJob(requested);
     const move = vi.fn(async (inputs: readonly { messageId: string }[]) =>
       inputs.map(({ messageId }) => ({ outcome: "success" as const, messageId: `moved-${messageId}` }))
     );
@@ -599,6 +635,11 @@ describe("Outlook durable cleanup", () => {
         1
       );
       outcome = result.outcome;
+      if (workflowSteps === 200) {
+        expect(job.view.movedVerified).toBe(4000);
+        const key = Buffer.alloc(32, 9);
+        job = JSON.parse(decryptCleanupStateWithKey(encryptCleanupStateWithKey(JSON.stringify(job), key), key)) as OutlookCleanupStoredJob;
+      }
       if (workflowSteps === 5) {
         expect(job.view).toMatchObject({
           status: "running",
@@ -610,10 +651,11 @@ describe("Outlook durable cleanup", () => {
       }
     }
 
-    expect(workflowSteps).toBe(25);
-    expect(move).toHaveBeenCalledTimes(25);
+    expect(workflowSteps).toBe(Math.ceil(requested / 20));
+    expect(move).toHaveBeenCalledTimes(Math.ceil(requested / 20));
+    expect(new Set(move.mock.calls.flatMap(call => call[0].map(input => input.messageId))).size).toBe(requested);
     expect(job.view.status).toBe("complete");
-    expect(job.view.batchesCompleted).toBe(25);
+    expect(job.view.batchesCompleted).toBe(Math.ceil(requested / 20));
   });
 
   it("resumes read-only verification from a durably recorded move response", async () => {

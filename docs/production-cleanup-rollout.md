@@ -33,7 +33,7 @@ Same-origin authenticated POST only; provider is `gmail` or `microsoft`:
 
 | Endpoint suffix under `/api/app/cleanup/<provider>/` | JSON body |
 | --- | --- |
-| `start` | `{ "groupIndices": [0], "requestedCount": 250 }` for Gmail; Outlook accepts 1-500. Gmail retains the proven durable 250/500 sizes only. Use eligible groups from the actual current report, not blindly index 0. |
+| `start` | `{ "groupIndices": [0], "requestedCount": 250 }` for Gmail; Outlook accepts a positive safe-integer count up to the current selected groups' server-resolved Potential cleanup total. All recommended sends that exact numeric total, not a special unlimited sentinel. Gmail retains the proven durable 250/500 sizes only. Use eligible groups from the actual current report, not blindly index 0. |
 | `confirm` | `{ "jobId": "<opaque job ID from start>", "confirmed": true }` |
 | `status` | `{ "jobId": "<same opaque job ID>" }` |
 | `undo` | `{ "jobId": "<same opaque job ID>", "confirmed": true }` |

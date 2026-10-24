@@ -18,7 +18,7 @@ export function gmailCleanupUiJob(job: GmailScalableJobView): GmailCleanupUiJob 
 export function outlookCleanupUiJob(job: OutlookCleanupJobView): OutlookCleanupUiJob {
   return { provider: "microsoft", id: job.id, status: job.status, requested: job.requested, approved: job.approved,
     canChangeSelection: job.canChangeSelection, senderGroups: job.senderGroups,
-    verification: job.verification ? { candidatesChecked: job.verification.candidatesChecked, approved: job.verification.approved, excluded: job.verification.excluded } : undefined,
+    verification: job.verification ? { candidatesTotal: job.verification.candidatesTotal, candidatesChecked: job.verification.candidatesChecked, approved: job.verification.approved, excluded: job.verification.excluded } : undefined,
     excludedBySafety: job.excludedBySafety, movedVerified: job.movedVerified, restoredVerified: job.restoredVerified,
     failed: job.failed, uncertain: job.uncertain, checked: job.checked, groupIndices: job.groupIndices,
     undoAvailable: job.undoAvailable, undoMode: job.undoMode, undoStatus: job.undoStatus, recoverableCount: job.recoverableCount,

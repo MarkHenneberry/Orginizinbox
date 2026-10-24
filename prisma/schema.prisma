@@ -169,9 +169,19 @@ model CleanupJobState {
   job              CleanupJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   creditAccounting CreditJobAccounting?
+  chunks           CleanupJobStateChunk[]
 
   @@index([userId, expiresAt])
   @@index([expiresAt])
+}
+
+model CleanupJobStateChunk {
+  jobId            String
+  slot             String
+  encryptedPayload String @db.Text
+  state            CleanupJobState @relation(fields: [jobId], references: [jobId], onDelete: Cascade)
+
+  @@id([jobId, slot])
 }
 
 model Purchase {

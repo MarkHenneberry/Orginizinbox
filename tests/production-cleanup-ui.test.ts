@@ -43,12 +43,12 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals();
 describe("shared production cleanup presentation", () => {
   it.each(["gmail", "microsoft"] as const)("shows %s selection only with server-resolved access and no debug sizes", (provider) => {
     const html = render(provider, "available");
-    expect(html).toContain("Check 500 messages");
+    expect(html).toContain(provider === "gmail" ? "Check 500 messages" : "Check selection");
     expect(html).toContain("Select sender groups");
     expect(html).not.toMatch(/benchmark|development|diagnostic|proof/i);
     if (provider === "microsoft") {
-      for (const count of [5, 25, 100, 500]) expect(html).toContain(`value="${count}"`);
-      expect(html).not.toContain('value="1000"');
+      expect(html).toContain("Select sender groups first");
+      expect(html).not.toContain('value="500"');
     } else expect(html).not.toMatch(/value="(?:5|10|25|100)"/);
     expect(fetch).not.toHaveBeenCalled();
   });

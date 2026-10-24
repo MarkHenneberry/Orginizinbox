@@ -3,7 +3,7 @@ import { measureVerification, measureVerificationSync } from "@/lib/server/outlo
 import { accountVerifiedProgress, creditProgressChanged, type VerifiedCreditProgress } from "@/lib/billing/credits";
 import type { OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store";
 import { expiredUnlockedStateWhere } from "@/lib/domain/transient-retention";
-import type { CleanupJobState, PrismaClient } from "@prisma/client";
+import type { CleanupJobState, PrismaClient, Prisma } from "@prisma/client";
 import { runtimeConfig } from "@/lib/config";
 import {
   decryptCleanupState,
@@ -11,6 +11,7 @@ import {
 } from "@/lib/server/crypto";
 import { prisma } from "@/lib/server/db";
 import type { GmailScalableStoredJob } from "@/lib/server/gmail-scalable-cleanup-store";
+import { encodeOutlookStorage, hydrateOutlookStorage, isChunkedCleanupState, type ChunkCache, type ChunkWrite, type StorageWrite } from "@/lib/server/outlook-state-chunks";
 
 export type CleanupJobStateRow = Pick<
   CleanupJobState,
@@ -23,7 +24,7 @@ export type CleanupJobStateRow = Pick<
   | "expiresAt"
   | "createdAt"
   | "updatedAt"
->;
+> & { hydratedJob?: DurableCleanupJobEnvelope };
 
 export type DurableCleanupJobEnvelope = {
   creditBilling?: true;
@@ -38,7 +39,8 @@ export type CleanupJobStateCodec<TJob extends DurableCleanupJobEnvelope = GmailS
 };
 
 export type CleanupJobStateRepository = {
-  create(row: Omit<CleanupJobStateRow, "createdAt" | "updatedAt">): Promise<CleanupJobStateRow>;
+  prepare?<T extends DurableCleanupJobEnvelope>(job: T, codec: CleanupJobStateCodec<T>): StorageWrite;
+  create(row: Omit<CleanupJobStateRow, "createdAt" | "updatedAt"> & { chunkWrite?: ChunkWrite }): Promise<CleanupJobStateRow>;
   find(jobId: string): Promise<CleanupJobStateRow | null>;
   replaceIfVersion(input: {
     jobId: string;
@@ -49,6 +51,7 @@ export type CleanupJobStateRepository = {
     encryptedPayload: string;
     expiresAt: Date;
     creditProgress?: VerifiedCreditProgress;
+    chunkWrite?: ChunkWrite;
   }): Promise<boolean>;
   claim(input: { jobId: string; owner: string; now: Date; lockExpiresAt: Date }): Promise<boolean>;
   refreshLock(input: { jobId: string; owner: string; now: Date; lockExpiresAt: Date }): Promise<boolean>;
@@ -88,10 +91,11 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
 
   async create(job: TJob) {
     const stored = normalizeJob(job, 1);
+    const storage = this.repository.prepare?.(stored, this.codec) ?? { encryptedPayload: this.codec.encode(stored) };
     await this.repository.create({
       jobId: stored.view.id,
       userId: stored.userId,
-      encryptedPayload: this.codec.encode(stored),
+      ...storage,
       version: stored.version,
       lockOwner: null,
       lockExpiresAt: null,
@@ -135,14 +139,14 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
       throw new CleanupStateIntegrityError("Cleanup state identity cannot change.");
     }
     if (next.view.expiresAt <= now.getTime()) return undefined;
-    const encryptedPayload = measureVerificationSync("encrypt_serialize", () => this.codec.encode(next));
+    const storage = measureVerificationSync("encrypt_serialize", () => this.repository.prepare?.(next, this.codec) ?? { encryptedPayload: this.codec.encode(next) });
     const replaced = await measureVerification("database_write", () => this.repository.replaceIfVersion({
       jobId,
       userId,
       expectedVersion,
       now,
       lockOwner,
-      encryptedPayload,
+      ...storage,
       expiresAt: new Date(next.view.expiresAt),
       creditProgress: creditProgressChanged(verifiedCreditProgress(current), verifiedCreditProgress(next)) ? verifiedCreditProgress(next) : undefined
     }));
@@ -199,14 +203,49 @@ export class PrismaCleanupJobStore<TJob extends DurableCleanupJobEnvelope> imple
 export class PrismaGmailScalableCleanupStore extends PrismaCleanupJobStore<GmailScalableStoredJob> {}
 
 export class PrismaCleanupJobStateRepository implements CleanupJobStateRepository {
+  private cache: ChunkCache = new Map();
+  private cacheJob?: string;
   constructor(private readonly client: PrismaClient) {}
 
-  create(row: Omit<CleanupJobStateRow, "createdAt" | "updatedAt">) {
-    return this.client.cleanupJobState.create({ data: row });
+  private useJob(jobId: string) {
+    if (this.cacheJob !== jobId) { this.cache.clear(); this.cacheJob = jobId; }
   }
 
-  find(jobId: string) {
-    return this.client.cleanupJobState.findUnique({ where: { jobId } });
+  prepare<T extends DurableCleanupJobEnvelope>(job: T, codec: CleanupJobStateCodec<T>) {
+    this.useJob(job.view.id);
+    return encodeOutlookStorage(job, codec, this.cache);
+  }
+
+  async create(row: Omit<CleanupJobStateRow, "createdAt" | "updatedAt"> & { chunkWrite?: ChunkWrite }) {
+    const { chunkWrite, ...rest } = row;
+    const data = { ...rest }; delete data.hydratedJob;
+    const result = chunkWrite ? await this.client.$transaction(async tx => {
+      const created = await tx.cleanupJobState.create({ data });
+      await writeCleanupStateChunks(tx, row.jobId, chunkWrite);
+      return created;
+    }, { isolationLevel: "Serializable", timeout: 15_000 }) : await this.client.cleanupJobState.create({ data });
+    this.useJob(row.jobId); this.cache = chunkWrite?.cache ?? new Map();
+    return result;
+  }
+
+  async find(jobId: string): Promise<CleanupJobStateRow | null> {
+    this.useJob(jobId);
+    const row = await this.client.cleanupJobState.findUnique({ where: { jobId } });
+    if (!row) return null;
+    if (row.expiresAt <= new Date()) return row;
+    const codec = createCleanupJobStateCodec<DurableCleanupJobEnvelope>();
+    const decoded = codec.decode(row.encryptedPayload);
+    if (!isChunkedCleanupState(decoded)) return { ...row, hydratedJob: decoded };
+    if (decoded.userId !== row.userId || decoded.view.id !== row.jobId || decoded.version !== row.version) throw new CleanupStateIntegrityError();
+    if (!decoded.outlookStorage || decoded.outlookStorage.format !== "outlook-chunks-v1" || !Array.isArray(decoded.outlookStorage.arrays)) throw new CleanupStateIntegrityError();
+    const complete = decoded.outlookStorage.arrays.every(array => array.pages.every(page => page.every(ref => this.cache.get(ref.slot)?.digest === ref.digest)));
+    if (complete) return { ...row, hydratedJob: await hydrateOutlookStorage(decoded, codec, this.client, this.cache) };
+    // Parent and all bounded child reads share one snapshot, never mixed versions.
+    return this.client.$transaction(async tx => {
+      const current = await tx.cleanupJobState.findUnique({ where: { jobId } });
+      if (!current) return null;
+      return hydrateCleanupJobStateRow(current, tx, this.cache);
+    }, { isolationLevel: "RepeatableRead", timeout: 15_000 });
   }
 
   async replaceIfVersion(input: {
@@ -218,6 +257,7 @@ export class PrismaCleanupJobStateRepository implements CleanupJobStateRepositor
     encryptedPayload: string;
     expiresAt: Date;
     creditProgress?: VerifiedCreditProgress;
+    chunkWrite?: ChunkWrite;
   }) {
     const result = await this.client.$transaction(async (transaction) => {
       const result = await transaction.cleanupJobState.updateMany({
@@ -236,13 +276,17 @@ export class PrismaCleanupJobStateRepository implements CleanupJobStateRepositor
           version: { increment: 1 }
         }
       });
+      if (result.count === 1 && input.chunkWrite) await writeCleanupStateChunks(transaction, input.jobId, input.chunkWrite);
       if (result.count === 1 && input.creditProgress) {
         await accountVerifiedProgress(transaction, input.userId, input.jobId, input.creditProgress);
       }
       return result;
     },
-      { isolationLevel: "Serializable" }
+      { isolationLevel: "Serializable", ...(input.chunkWrite ? { timeout: 15_000 } : {}) }
     );
+    if (result.count === 1) {
+      this.useJob(input.jobId); this.cache = input.chunkWrite?.cache ?? new Map();
+    }
     return result.count === 1;
   }
 
@@ -313,6 +357,31 @@ export function decodeCleanupJobStateRow<TJob extends DurableCleanupJobEnvelope>
   return decodeAndValidate(row, createCleanupJobStateCodec<TJob>());
 }
 
+export async function hydrateCleanupJobStateRow(row: CleanupJobStateRow, db: Prisma.TransactionClient, cache: ChunkCache = new Map()): Promise<CleanupJobStateRow> {
+  const codec = createCleanupJobStateCodec<DurableCleanupJobEnvelope>();
+  const job = codec.decode(row.encryptedPayload);
+  if (job.userId !== row.userId || job.view.id !== row.jobId || job.version !== row.version) throw new CleanupStateIntegrityError();
+  return { ...row, hydratedJob: await hydrateOutlookStorage(job, codec, db, cache) };
+}
+
+async function writeCleanupStateChunks(tx: Prisma.TransactionClient, jobId: string, write: ChunkWrite) {
+  const fresh = new Set(write.newSlots);
+  const inserts = write.rows.filter(row => fresh.has(row.slot));
+  // Bound each INSERT request too; initial state must not issue hundreds of round trips.
+  for (let index = 0; index < inserts.length; index += 8) await tx.cleanupJobStateChunk.createMany({ data: inserts.slice(index, index + 8).map(row => ({ jobId, ...row })) });
+  for (const row of write.rows.filter(row => !fresh.has(row.slot))) await tx.cleanupJobStateChunk.upsert({
+    where: { jobId_slot: { jobId, slot: row.slot } }, create: { jobId, ...row }, update: { encryptedPayload: row.encryptedPayload }
+  });
+  // No per-message rows; obsolete storage pages are removed in the same parent CAS.
+  if (write.removedSlots.length) await tx.cleanupJobStateChunk.deleteMany({ where: { jobId, slot: { in: write.removedSlots } } });
+}
+
+export async function createPreparedCleanupJobState<T extends DurableCleanupJobEnvelope>(tx: Prisma.TransactionClient, prepared: ReturnType<typeof prepareCleanupJobState<T>>) {
+  const row = await tx.cleanupJobState.create({ data: prepared.data });
+  if (prepared.chunkWrite) await writeCleanupStateChunks(tx, row.jobId, prepared.chunkWrite);
+  return row;
+}
+
 export function createCleanupJobStateCodec<TJob extends DurableCleanupJobEnvelope = GmailScalableStoredJob>(input?: {
   encrypt(value: string): string;
   decrypt(value: string): string;
@@ -337,12 +406,14 @@ export function prepareCleanupJobState<TJob extends DurableCleanupJobEnvelope>(
   codec: CleanupJobStateCodec<TJob> = createCleanupJobStateCodec<TJob>()
 ) {
   const stored = normalizeJob({ ...job, ...(process.env.NODE_ENV === "production" ? { creditBilling: true as const } : {}) }, 1);
+  const storage = encodeOutlookStorage(stored, codec);
   return {
     job: cloneJob(stored),
+    chunkWrite: storage.chunkWrite,
     data: {
       jobId: stored.view.id,
       userId: stored.userId,
-      encryptedPayload: codec.encode(stored),
+      encryptedPayload: storage.encryptedPayload,
       version: stored.version,
       lockOwner: null,
       lockExpiresAt: null,
@@ -397,7 +468,8 @@ export function deleteDurableGmailScalableCleanupStateForUser(
 }
 
 function decodeAndValidate<TJob extends DurableCleanupJobEnvelope>(row: CleanupJobStateRow, codec: CleanupJobStateCodec<TJob>) {
-  const job = codec.decode(row.encryptedPayload);
+  const job = (row.hydratedJob ?? codec.decode(row.encryptedPayload)) as TJob;
+  if (isChunkedCleanupState(job)) throw new CleanupStateIntegrityError();
   if (job.userId !== row.userId || job.view.id !== row.jobId || job.version !== row.version) {
     throw new CleanupStateIntegrityError("Cleanup state identity or version does not match its envelope.");
   }

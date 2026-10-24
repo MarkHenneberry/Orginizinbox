@@ -86,8 +86,8 @@ commit. Read the final persistence span alongside it; do not call it exact laten
 2. If the earlier unconfirmed ready selection is still loaded, use Change selection
    and wait for its authoritative successful discard. Never discard mutation/recovery
    work. This avoids benchmarking reused acceptance.
-3. Select only the same sender group (about 1,379 potential messages), request 500,
-   open browser Network, and click Check 500 messages exactly once. Keep the tab
+3. Select only the same sender group (about 1,379 potential messages), choose All
+   recommended (or a displayed relative amount), open browser Network, and click Check once. Keep the tab
    visible and do not navigate/reload or start other scans/checks.
 4. Note the random X-Outlook-Verification-Id response header on the start POST.
    Wait for the ready review/confirmation panel. **Do not confirm moving messages.**
@@ -95,7 +95,7 @@ commit. Read the final persistence span alongside it; do not call it exact laten
    or interrupted, the server trace still works but browser latency is unproven.
 5. Filter Vercel logs by this correlationId. Collect the start/status/worker timing
    records, existing complete metrics, end-to-end summary and client-ready sample.
-   Check `reused: false`, requested 500, approved/checked/excluded, steps, retries and
+   Check `reused: false`, the actual requested amount, approved/checked/excluded, steps, retries and
    actual Graph batch count. Exclusions may legitimately increase candidates/steps.
 6. Compare bootstrap, startup/gaps and worker costs first; then look at worker
    authorization/credentials, Graph, database/persistence and client-ready delay.

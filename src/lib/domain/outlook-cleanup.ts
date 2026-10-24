@@ -1,6 +1,26 @@
-export const outlookCleanupMaximum = 500;
-export const outlookCleanupCountOptions = [5, 25, 100, 500] as const;
 export const outlookCleanupChunkSize = 100;
+
+export function isOutlookCleanupCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function outlookCleanupSelectionOptions(total: number) {
+  if (!isOutlookCleanupCount(total)) return [];
+  const seen = new Set<number>();
+  const options: Array<{ percent: number; count: number; label: string }> = [];
+  for (const percent of [10, 25, 50]) {
+    const raw = total * (percent / 100);
+    const step = raw < 50 ? 5 : raw < 100 ? 10 : raw < 500 ? 25 : 50;
+    // Keep already tidy amounts such as 75 or 125 rather than rounding them again.
+    const rounded = raw % 5 === 0 ? raw : Math.round(raw / step) * step;
+    const count = Math.min(total, Math.max(1, rounded));
+    if (count === total || seen.has(count)) continue;
+    seen.add(count);
+    const percentage = Math.abs(100 * count / total - percent) <= 5 ? ` (~${percent}%)` : "";
+    options.push({ percent, count, label: `${count.toLocaleString("en-US")} ${count === 1 ? "message" : "messages"}${percentage}` });
+  }
+  return [...options, { percent: 100, count: total, label: `All recommended (${total.toLocaleString("en-US")})` }];
+}
 
 export function getOutlookCleanupBatchSize(requested: number) {
   if (requested <= 25) return 5;
@@ -48,6 +68,7 @@ export type OutlookCleanupJobView = {
   canChangeSelection?: boolean;
   senderGroups?: import("@/lib/providers/gmail/cleanup-candidates").CleanupSenderGroup[];
   verification?: {
+    candidatesTotal?: number;
     candidatesChecked: number; approved: number; excluded: number;
     exactHeaderRequests: number; batchRequests: number; retries: number; throttles: number;
     responseBodyJsonMs: number; verificationDurationMs: number;
@@ -124,12 +145,8 @@ export function assertOutlookCleanupDevelopmentRequest(input: {
   if (!input.enabled || input.fixtureMode || input.nodeEnv === "production") {
     throw new Error("Outlook cleanup is disabled.");
   }
-  if (
-    !Number.isInteger(input.requestedCount) ||
-    Number(input.requestedCount) < 1 ||
-    Number(input.requestedCount) > outlookCleanupMaximum
-  ) {
-    throw new Error(`Outlook cleanup accepts between 1 and ${outlookCleanupMaximum} messages.`);
+  if (!isOutlookCleanupCount(input.requestedCount)) {
+    throw new Error("Choose a positive whole number of recommended messages.");
   }
   return Number(input.requestedCount);
 }

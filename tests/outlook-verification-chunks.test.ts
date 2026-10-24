@@ -6,6 +6,8 @@ import type { OutlookCleanupStoredJob } from "@/lib/server/outlook-cleanup-store
 import { advanceOutlookCleanupJob, prepareOutlookJob } from "@/lib/server/outlook-cleanup";
 import { newVerificationTrace, type VerificationTrace } from "@/lib/server/outlook-verification-timing";
 import { providerCleanupWorkflow, runProviderCleanupStep } from "@/workflows/provider-cleanup";
+import { billingFixture } from "./fixtures/credit-billing";
+import { accountVerifiedProgress, creditSnapshot } from "@/lib/billing/credits";
 
 type Coordinate = <T>(request: () => Promise<T>) => Promise<T>;
 const h = vi.hoisted(() => ({
@@ -18,7 +20,10 @@ const h = vi.hoisted(() => ({
   contextHook: undefined as undefined | (() => void), protectedIds: new Set<string>(),
   authorize: vi.fn(), connection: vi.fn(), claims: vi.fn(), releases: vi.fn(), aggregate: vi.fn(),
   slots: vi.fn(), requestLeases: vi.fn(), fence: vi.fn(),
-  disconnected: false, active: 0, peakActive: 0, mono: 0
+  disconnected: false, active: 0, peakActive: 0, mono: 0, keepSnapshots: true, checkpointCount: 0,
+  moves: [] as Array<{ messageId: string; destinationFolderId: string; operation: string }>,
+  moveHook: undefined as undefined | (() => void), uncertainMove: false,
+  credit: undefined as ReturnType<typeof billingFixture> | undefined
 }));
 vi.mock("@/lib/server/outlook-cleanup-store", async original => ({
   ...await original<typeof import("@/lib/server/outlook-cleanup-store")>(), createPrismaOutlookCleanupStore: () => h.store!
@@ -27,6 +32,7 @@ vi.mock("@/lib/server/production-cleanup", async original => ({
   ...await original<typeof import("@/lib/server/production-cleanup")>(), requireProductionCleanupAccess: h.authorize
 }));
 vi.mock("@/lib/server/microsoft-connection", () => ({ getActiveMicrosoftConnection: h.connection, forceRefreshMicrosoftConnection: vi.fn() }));
+vi.mock("@/lib/server/live-scan-store", () => ({ markLiveReportStale: async () => undefined }));
 vi.mock("@/lib/server/db", () => ({ prisma: {
   cleanupJob: { updateMany: h.aggregate }, cleanupJobState: { count: h.fence },
   providerRequestLease: { upsert: h.slots, updateMany: h.requestLeases }
@@ -42,7 +48,7 @@ vi.mock("@/lib/providers/microsoft/provider", () => ({ MicrosoftProvider: class 
   }
   async scanParticipatedConversationIds() { return new Set<string>(); }
   async getCleanupMessages(ids: readonly string[], _context: unknown, targeted: boolean) {
-    expect(targeted).toBe(true); expect(ids.length).toBeLessThanOrEqual(20);
+    expect(targeted === true || targeted === undefined).toBe(true); expect(ids.length).toBeLessThanOrEqual(20);
     return this.coordinate(async () => {
       this.requests++; this.subrequests += ids.length; h.reads.push([...ids]);
       h.peakActive = Math.max(h.peakActive, ++h.active);
@@ -56,6 +62,22 @@ vi.mock("@/lib/providers/microsoft/provider", () => ({ MicrosoftProvider: class 
       } finally { h.active--; }
     });
   }
+  async moveCleanupMessages(inputs: Array<{ messageId: string; destinationFolderId: string }>, operation: string) {
+    expect(inputs.length).toBeLessThanOrEqual(20);
+    return this.coordinate(async () => {
+      this.requests++; this.subrequests += inputs.length;
+      h.moves.push(...inputs.map(input => ({ ...input, operation }))); h.moveHook?.();
+      return inputs.map((input, index) => h.uncertainMove && index === 0 ? { outcome: "uncertain" as const }
+        : { outcome: "success" as const, messageId: `${operation === "cleanup_move" ? "moved" : "restored"}-${input.messageId}` });
+    });
+  }
+  async verifyCleanupMessageLocations(inputs: Array<{ messageId: string; destinationFolderId: string }>) {
+    return this.coordinate(async () => {
+      this.requests++; this.subrequests += inputs.length;
+      return inputs.map(input => input.messageId.startsWith("restored-") ? input.destinationFolderId === "private-folder"
+        : input.messageId.startsWith("moved-") && input.destinationFolderId === "private-deleted");
+    });
+  }
 } }));
 
 const key = Buffer.alloc(32, 17);
@@ -67,7 +89,7 @@ function initial(requested = 500, poolSize = requested): OutlookCleanupStoredJob
   return { provider: "microsoft", userId: "owner", acceptanceKey: "frozen-selection", version: 1,
     view: { provider: "microsoft", id: "job", status: "created", requested, approved: 0, excludedBySafety: 0,
       movedVerified: 0, restoredVerified: 0, failed: 0, uncertain: 0, checked: 0,
-      chunksCompleted: 0, totalChunks: 5, batchesCompleted: 0, totalBatches: 25, currentChunk: 0, currentBatch: 0,
+      chunksCompleted: 0, totalChunks: Math.ceil(requested / 100), batchesCompleted: 0, totalBatches: Math.ceil(requested / 20), currentChunk: 0, currentBatch: 0,
       effectiveBatchSize: 20, undoBatchesCompleted: 0, undoTotalBatches: 0, graphRequests: 0, httpRoundTrips: 0,
       graphSubrequests: 0, retries: 0, timingMs: createEmptyOutlookCleanupTiming(), httpRoundTripsByPhase: createEmptyOutlookCleanupTiming(),
       groupIndices: [0], undoAvailable: false, undoStatus: "not_available", createdAt: Date.now(), updatedAt: Date.now(), expiresAt: Date.now() + 600_000 },
@@ -88,9 +110,14 @@ function install(job = initial()) {
       const row = h.row;
       if (!row || row.userId !== input.userId || row.version !== input.expectedVersion || row.expiresAt <= input.now ||
         (input.lockOwner && (row.lockOwner !== input.lockOwner || !row.lockExpiresAt || row.lockExpiresAt <= input.now))) return false;
-      expect(input.creditProgress).toBeUndefined(); // Preparation does not reserve or spend credits.
+      if (input.creditProgress) {
+        expect(h.credit).toBeDefined();
+        await accountVerifiedProgress(h.credit!.client, input.userId, input.jobId, input.creditProgress);
+      }
       row.encryptedPayload = input.encryptedPayload; row.version++; row.expiresAt = input.expiresAt;
-      h.snapshots.push(structuredClone(row)); h.afterCommitHook?.(codec.decode(row.encryptedPayload)); return true;
+      h.checkpointCount++;
+      if (h.keepSnapshots) h.snapshots.push(structuredClone(row));
+      h.afterCommitHook?.(codec.decode(row.encryptedPayload)); return true;
     },
     claim: async input => {
       h.claims(); const row = h.row;
@@ -108,7 +135,7 @@ function install(job = initial()) {
 }
 async function finish(trace?: VerificationTrace) {
   let steps = 0;
-  while (steps++ < 40) {
+  while (steps++ < 1000) {
     const result = await advanceOutlookCleanupJob("job", "prepare", trace);
     trace = result.verificationTrace;
     if (result.outcome === "stop") return { steps, trace };
@@ -118,7 +145,8 @@ async function finish(trace?: VerificationTrace) {
 beforeEach(() => {
   vi.clearAllMocks(); vi.spyOn(console, "info").mockImplementation(() => {});
   h.reads = []; h.completed = []; h.snapshots = []; h.readHook = undefined; h.checkpointHook = undefined; h.afterCommitHook = undefined; h.contextHook = undefined;
-  h.disconnected = false; h.protectedIds = new Set(); h.active = 0; h.peakActive = 0; h.mono = 0;
+  h.disconnected = false; h.protectedIds = new Set(); h.active = 0; h.peakActive = 0; h.mono = 0; h.keepSnapshots = true; h.checkpointCount = 0;
+  h.moves = []; h.moveHook = undefined; h.uncertainMove = false; h.credit = undefined;
   h.authorize.mockResolvedValue(undefined); h.connection.mockResolvedValue({ accessToken: "never-log-token", connection: {
     id: "connection", userId: "owner", provider: "microsoft", sessionGeneration: "generation" } });
   h.aggregate.mockResolvedValue({ count: 1 }); h.slots.mockResolvedValue({}); h.requestLeases.mockResolvedValue({ count: 1 });
@@ -154,6 +182,30 @@ it("handles a partial final chunk without fetching beyond the exact requested se
   expect(h.reads.map(batch => batch.length)).toEqual([20, 20, 20, 20, 20, 20, 15]);
   expect(load().payload.verificationCursor).toBe(135);
 });
+it.each([1379, 10000])("continues all %i exact candidates through the real Workflow loop with bounded work and aggregate progress", async requested => {
+  install(initial(requested)); h.keepSnapshots = false;
+  const cursors: number[] = [];
+  h.checkpointHook = job => {
+    if (job.payload.verificationCursor) cursors.push(job.payload.verificationCursor);
+    expect(job.view.verification?.candidatesTotal).toBe(requested);
+    expect(job.view.verification?.candidatesChecked).toBe(job.payload.verificationCursor);
+  };
+  const trace = newVerificationTrace(); trace.scheduledAt = Date.now();
+  const result = await providerCleanupWorkflow("job", "prepare", trace);
+  const batches = Math.ceil(requested / 20), steps = Math.ceil(batches / 5);
+  expect(result.verificationTrace?.step).toBe(steps);
+  expect(h.reads).toHaveLength(batches); expect(h.peakActive).toBe(1);
+  expect(h.reads.flat()).toEqual(initial(requested).payload.verificationCandidates!.map(candidate => candidate.messageId));
+  expect(h.checkpointCount).toBe(1 + batches + steps);
+  expect(h.authorize).toHaveBeenCalledTimes(steps); expect(h.slots).toHaveBeenCalledTimes(2 * steps);
+  expect(h.fence).toHaveBeenCalledTimes(2 * batches); expect(h.requestLeases).toHaveBeenCalledTimes(2 * batches);
+  expect(cursors).toEqual([...cursors].sort((a, b) => a - b));
+  expect(load().view).toMatchObject({ status: "ready", approved: requested,
+    verification: { candidatesChecked: requested, candidatesTotal: requested, excluded: 0 } });
+  expect(h.row!.encryptedPayload).not.toContain("private-message");
+  await runProviderCleanupStep("job", "prepare");
+  expect(h.reads).toHaveLength(batches);
+}, 120_000);
 it("matches single-batch eligibility with exact approved/excluded counts and selected-pool exhaustion", async () => {
   install(initial(500, 500)); h.protectedIds = new Set(Array.from({ length: 37 }, (_, index) => `private-message-${index}`));
   expect((await finish()).steps).toBe(5);
@@ -234,4 +286,63 @@ it("denies unauthorized preparation and prevents duplicate concurrent invocation
   await Promise.all([advanceOutlookCleanupJob("job", "prepare"), advanceOutlookCleanupJob("job", "prepare")]);
   expect(h.reads).toHaveLength(5); expect(load().view.approved).toBe(100);
   expect(h.peakActive).toBe(1);
+});
+
+it("moves and restores 1,379 through durable worker re-entry with exact IDs and no duplicate credit spending/refunds", async () => {
+  const requested = 1379;
+  const ready = initial(requested); ready.view.status = "ready"; ready.view.approved = requested;
+  ready.view.verification = { candidatesTotal: requested, candidatesChecked: requested, approved: requested, excluded: 0,
+    exactHeaderRequests: requested, batchRequests: 69, retries: 0, throttles: 0, responseBodyJsonMs: 0, verificationDurationMs: 0 };
+  ready.payload.targets = ready.payload.verificationCandidates!.map(candidate => ({ originalMessageId: candidate.messageId, groupIndex: 0, state: "frozen" }));
+  install(Object.assign(ready, { creditBilling: true })); h.keepSnapshots = false;
+  h.credit = billingFixture(10000);
+  await h.store!.compareAndSet("owner", "job", 1, job => {
+    job.view.status = "running"; job.payload.confirmedAt = Date.now(); return job;
+  });
+  expect(await creditSnapshot(h.credit!.client, "owner")).toMatchObject({ balance: 10000, reserved: requested });
+  for (let step = 0; step < 69; step++) {
+    const result = await runProviderCleanupStep("job", "cleanup");
+    expect(result.outcome).toBe(step === 68 ? "stop" : "continue");
+    if (step === 19) { // A process replacement after 400 proven moves reads only durable state.
+      expect(load().view.movedVerified).toBe(400);
+      const persisted = structuredClone(h.row); install(load()); h.row = persisted;
+    }
+  }
+  expect(load().view).toMatchObject({ status: "complete", movedVerified: requested, totalBatches: 69, batchesCompleted: 69 });
+  expect(new Set(h.moves.map(move => move.messageId)).size).toBe(requested);
+  expect(h.moves).toHaveLength(requested);
+  expect(h.credit.row.creditBalance).toBe(10000 - requested);
+  await runProviderCleanupStep("job", "cleanup"); expect(h.moves).toHaveLength(requested);
+  const moved = load();
+  await h.store!.compareAndSet("owner", "job", moved.version, job => {
+    job.view.status = "undoing"; job.view.undoStatus = "running"; return job;
+  });
+  await providerCleanupWorkflow("job", "undo");
+  const restores = h.moves.filter(move => move.operation === "cleanup_restore");
+  expect(restores.map(move => move.messageId)).toEqual(ready.payload.targets.map(target => `moved-${target.originalMessageId}`));
+  expect(restores.every(move => move.destinationFolderId === "private-folder")).toBe(true);
+  expect(load().view).toMatchObject({ status: "undo_complete", restoredVerified: requested, uncertain: 0 });
+  expect(h.credit.row.creditBalance).toBe(10000 - requested);
+  expect([...h.credit.entries.values()].reduce((sum, entry) => sum + entry.amount, 0)).toBe(-requested);
+  expect(h.row!.encryptedPayload).not.toMatch(/private-message|private-folder/);
+}, 120_000);
+
+it("stops a large job on an uncertain move and exposes only prior verified IDs to Recovery Undo", async () => {
+  const job = initial(1379); job.view.status = "running";
+  job.payload.targets = job.payload.verificationCandidates!.map(candidate => ({ originalMessageId: candidate.messageId, groupIndex: 0, state: "frozen" }));
+  install(job); h.keepSnapshots = false;
+  await runProviderCleanupStep("job", "cleanup");
+  expect(load().view.movedVerified).toBe(20);
+  h.uncertainMove = true;
+  await runProviderCleanupStep("job", "cleanup");
+  expect(load().view).toMatchObject({ status: "uncertain", movedVerified: 39, uncertain: 1, recoverableCount: 39 });
+  await runProviderCleanupStep("job", "cleanup"); expect(h.moves).toHaveLength(40);
+  h.uncertainMove = false;
+  const current = load();
+  await h.store!.compareAndSet("owner", "job", current.version, value => { value.view.status = "undoing"; return value; });
+  await providerCleanupWorkflow("job", "undo");
+  const restores = h.moves.filter(move => move.operation === "cleanup_restore");
+  expect(restores).toHaveLength(39);
+  expect(restores.some(move => move.messageId === "moved-private-message-20")).toBe(false);
+  expect(load().view).toMatchObject({ status: "uncertain", restoredVerified: 39, uncertain: 1 });
 });

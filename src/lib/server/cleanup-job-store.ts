@@ -9,6 +9,8 @@ export {
   clearDurableProviderCleanupStateForUser,
   createCleanupJobStateCodec,
   decodeCleanupJobStateRow,
+  hydrateCleanupJobStateRow,
+  createPreparedCleanupJobState,
   prepareCleanupJobState
 } from "@/lib/server/gmail-scalable-cleanup-durable-store";
 
