@@ -5,6 +5,7 @@ it.each([
   [1, [1]], [2, [1, 2]], [5, [1, 5]], [10, [1, 5, 10]],
   [80, [10, 20, 40, 80]], [300, [30, 75, 150, 300]],
   [500, [50, 125, 250, 500]], [501, [50, 125, 250, 501]],
+  [1096, [100, 275, 550, 1096]],
   [1379, [150, 350, 700, 1379]], [10000, [1000, 2500, 5000, 10000]]
 ])("rounds %i recommended into useful relative options with the full selection", (total, expected) => {
   const options = outlookCleanupSelectionOptions(total as number);

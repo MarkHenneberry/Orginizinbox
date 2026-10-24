@@ -34,6 +34,7 @@ import {
   createPrismaOutlookCleanupStore,
   getOutlookCleanupLedgers,
   getOutlookCleanupForPresentation,
+  isOutlookPreMutationJob,
   refreshOutlookRecovery,
   serializeOutlookCleanupJob,
   type OutlookCleanupStoredJob,
@@ -367,6 +368,18 @@ async function advanceOutlookCleanupUnit(jobId: string, operation: "prepare" | "
     if (operation === "prepare") traceVerificationCompletion(job);
     return result;
   } catch {
+    if (operation === "prepare" && job) {
+      const committed = await store.get(job.userId, jobId).catch(() => undefined);
+      // A lost response is not a failed checkpoint. Re-enter only read-only preparation;
+      // the next step must claim its lease and pass authorization again.
+      if (committed?.provider === "microsoft" && isOutlookPreMutationJob(committed) &&
+          committed.version === job.version + 1 &&
+          (committed.payload.verificationCursor ?? 0) === (job.payload.verificationCursor ?? 0) &&
+          committed.payload.targets.length === job.payload.targets.length) {
+        traceVerificationCompletion(committed);
+        return { outcome: committed.view.status === "ready" ? "stop" as const : "continue" as const };
+      }
+    }
     if (job) {
       markPendingOutlookTargetsUncertain(job);
       job.view.status = getOutlookCleanupLedgers(job).uncertain.length > 0 ? "uncertain" : "failed";

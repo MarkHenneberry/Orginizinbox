@@ -263,12 +263,34 @@ it("observes an advanced cursor after a committed checkpoint response is lost, w
   h.afterCommitHook = job => { if (!lost && job.payload.verificationCursor === 60) {
     lost = true; throw new Error("committed response lost");
   } };
-  await advanceOutlookCleanupJob("job", "prepare");
+  expect((await advanceOutlookCleanupJob("job", "prepare")).outcome).toBe("continue");
   expect(load().payload.verificationCursor).toBe(60); expect(load().view.status).toBe("resolving");
   h.afterCommitHook = undefined;
   await finish();
   expect(load().view).toMatchObject({ status: "ready", approved: 500, verification: { candidatesChecked: 500 } });
   expect(h.reads.flat()).toHaveLength(500); expect(new Set(h.reads.flat()).size).toBe(500);
+});
+it("continues the actual preparation Workflow after a lost committed checkpoint response, without replaying its reads", async () => {
+  let lost = false;
+  h.afterCommitHook = job => {
+    if (!lost && job.payload.verificationCursor === 100) { lost = true; throw new Error("committed response lost"); }
+  };
+  await providerCleanupWorkflow("job", "prepare");
+  expect(lost).toBe(true);
+  expect(load().view).toMatchObject({ status: "ready", approved: 500 });
+  expect(h.reads.flat()).toHaveLength(500);
+  expect(new Set(h.reads.flat()).size).toBe(500);
+  expect(h.moves).toHaveLength(0);
+  expect(h.peakActive).toBe(1);
+});
+it("keeps a durably ready preparation ready when its final checkpoint response is lost", async () => {
+  install(initial(100));
+  h.afterCommitHook = job => { if (job.view.status === "ready") throw new Error("ready response lost"); };
+  const result = await providerCleanupWorkflow("job", "prepare");
+  expect(result.outcome).toBe("stop");
+  expect(load().view).toMatchObject({ status: "ready", approved: 100 });
+  expect(h.reads.flat()).toHaveLength(100);
+  expect(h.moves).toHaveLength(0);
 });
 it.each(["disconnect", "expiry", "deleted_state"])("fences later Graph work inside a chunk after %s", async fault => {
   h.readHook = () => { if (h.reads.length === 3) {

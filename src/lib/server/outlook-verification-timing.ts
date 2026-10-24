@@ -2,6 +2,7 @@ import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { outlookVerificationBatchesPerStep, outlookVerificationStepBudgetMs } from "@/lib/domain/outlook-verification-chunk";
+import { persistenceErrorDiagnostic } from "@/lib/server/persistence-error-diagnostic";
 
 export type VerificationStage = "request_received" | "session_resolution" | "authorization" | "retention_purge" | "credit_entitlement" |
   "connection_readiness" | "report_retrieval" | "database_read" | "database_write" | "decrypt_deserialize" |
@@ -28,6 +29,18 @@ export function verificationCompleted(input: Completion) { const active = contex
 export function logCompletedVerification() { const active = context.getStore(); if (active?.completion) logVerificationSummary(active.trace, active.completion); }
 function safeLog(label: string, value: object) {
   try { console.info(label, value); } catch { /* Telemetry cannot change execution. */ }
+}
+export function logVerificationRequestFailure(reason: "invalid_count" | "request_failed", input: {
+  action: "start" | "status"; requestedCount?: unknown; error?: unknown;
+}) {
+  const trace = currentVerificationTrace();
+  safeLog("Outlook verification request failed", {
+    ...(trace ? { correlationId: trace.correlationId } : {}),
+    action: input.action, reason,
+    ...(typeof input.requestedCount === "number" && Number.isSafeInteger(input.requestedCount) && input.requestedCount > 0
+      ? { requestedCount: input.requestedCount } : {}),
+    ...(reason === "request_failed" ? persistenceErrorDiagnostic(input.error) : {})
+  });
 }
 function record(stage: VerificationStage, durationMs: number) {
   const active = context.getStore();

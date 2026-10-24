@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { currentVerificationTrace, logCompletedVerification, measureVerification, newVerificationTrace,
   recordWorkflowArrival, verificationCompleted, verificationWorkflowSeed, withVerificationTrace } from "@/lib/server/outlook-verification-timing";
 import { createOutlookVerificationClientTiming, outlookVerificationTimingHeader } from "@/lib/outlook-verification-client-timing";
+import { logVerificationRequestFailure } from "@/lib/server/outlook-verification-timing";
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 const correlationId = "11111111-1111-4111-8111-111111111111";
@@ -72,4 +73,18 @@ it("never reports a ready sample before readiness or without an accepted correla
   expect(timing.visible()).toBeUndefined();
   timing.response(new Response(), 0, "ready", true);
   expect(timing.visible()).toBeUndefined();
+});
+
+it("allowlists rejected-request diagnostics and cannot let logging failure change the response", async () => {
+  const log = vi.spyOn(console, "info").mockImplementation(() => {});
+  const privateValue = "private@example.test postgres://secret/private private-token";
+  await withVerificationTrace(newVerificationTrace(correlationId), async () => {
+    logVerificationRequestFailure("invalid_count", { action: "start", requestedCount: privateValue });
+    logVerificationRequestFailure("request_failed", { action: "status", error: { code: privateValue, message: privateValue } });
+  });
+  expect(log.mock.calls[0][1]).toEqual({ correlationId, action: "start", reason: "invalid_count" });
+  expect(log.mock.calls[1][1]).toEqual({ correlationId, action: "status", reason: "request_failed", errorName: "Unknown", errorClass: "unknown" });
+  expect(JSON.stringify(log.mock.calls)).not.toContain(privateValue);
+  log.mockImplementation(() => { throw new Error("unavailable logging"); });
+  expect(() => logVerificationRequestFailure("invalid_count", { action: "start" })).not.toThrow();
 });

@@ -297,3 +297,35 @@ it("recomputes Outlook relative amounts from selected Potential cleanup only and
   const polls = mocks.poll.mock.calls.length;
   renderClient(); expect(mocks.poll).toHaveBeenCalledTimes(polls);
 });
+
+it.each([
+  { status: 400, code: "INVALID_CLEANUP_COUNT", expected: "Choose an amount from the list" },
+  { status: 400, code: undefined, expected: "Cleanup could not continue" },
+  { status: 503, code: undefined, expected: "Cleanup could not continue" }
+])("keeps a rejected Outlook check visible and retryable without a phantom job ($status/$code)", async ({ status, code, expected }) => {
+  const base = props().groups.find(group => group.eligible)!;
+  const groups = [{ ...base, index: 0, cleanupCandidateCount: 1096 }];
+  const client = scope(); let current: React.ReactNode;
+  const renderClient = () => current = render(client, () => GmailCleanupClient({ ...props(), groups }));
+  renderClient();
+  const box = elements(current).find(e => e.type === "input" && e.props.type === "checkbox" && !e.props.disabled)!;
+  (box.props.onChange as () => void)(); renderClient();
+  const select = elements(current).find(e => e.type === "select" && e.props.id === "cleanup-count")!;
+  (select.props.onChange as (event: unknown) => void)({ target: { value: "50" } }); renderClient();
+  const check = () => elements(current).find(e => e.type === "button" && text(e.props.children).startsWith("Check "))!;
+  expect(text(check())).toBe("Check 550 messages");
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ code, error: "private raw provider/database response" }, { status }));
+  await (check().props.onClick as () => Promise<void>)(); renderClient();
+  expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).requestedCount).toBe(550);
+  const alert = elements(current).find(e => e.props.role === "alert")!;
+  expect(text(tree(alert))).toContain(expected);
+  expect(text(tree(alert))).not.toContain("private raw");
+  expect(check().props.disabled).toBe(false);
+  expect(workspace(current)).toBeUndefined();
+  expect(mocks.poll).not.toHaveBeenCalled();
+  expect(mocks.refresh).not.toHaveBeenCalled(); expect(mocks.replace).not.toHaveBeenCalled();
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ job: { ui: { ...job("resolving"), requested: 550 } } }));
+  await (check().props.onClick as () => Promise<void>)(); renderClient();
+  expect(workspace(current).props.job).toMatchObject({ requested: 550, status: "resolving" });
+  expect(mocks.poll).toHaveBeenCalledOnce();
+});

@@ -723,7 +723,7 @@ export function GmailCleanupClient({
             {!cleanupEnabled && !scalableCleanupEnabled ? <Notice text="Cleanup is not available right now." /> : null}
             {fixtureMode ? <Notice text="Connect Gmail and run a scan before cleanup." /> : null}
             {reportStale ? <Notice text="Your inbox has changed. Rescan before cleaning more email." /> : null}
-            {displayError ? <Notice text={displayError} /> : null}
+            {displayError ? <Notice text={displayError} role={provider === "microsoft" ? "alert" : undefined} /> : null}
 
             <button className="btn btn-primary focus-ring mt-5 w-full" disabled={disabled} onClick={() => resolvePreview(false)} type="button">
               {activeOperation === "resolution" ? "Checking messages..." : provider === "microsoft" && !requestedCount ? "Check selection" : `Check ${requestedCount.toLocaleString()} messages`}
@@ -980,7 +980,7 @@ function OutlookCleanupWorkspace({
             ) : null}
           </>
         ) : null}
-        {error ? <Notice text={error} /> : null}
+        {error ? <Notice text={error} role="alert" /> : null}
         {job.verification ? <dl className="mt-4 grid gap-2 text-sm" aria-live="polite">
           <Row label="Requested" value={job.requested.toLocaleString()} />
           <Row label="Candidates checked" value={job.verification.candidatesChecked.toLocaleString()} />
@@ -1736,8 +1736,8 @@ function CopyCleanupSummaryButton({ job }: { job: GmailCleanupJobView }) {
   return <button className="btn btn-secondary focus-ring mt-4 text-sm" onClick={copy} type="button"><span aria-live="polite">{status === "copied" ? "Copied" : status === "failed" ? "Copy failed" : "Copy cleanup summary"}</span></button>;
 }
 
-function Notice({ text }: { text: string }) {
-  return <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm font-bold text-[var(--navy)]">{text}</p>;
+function Notice({ text, role }: { text: string; role?: "alert" }) {
+  return <p role={role} className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm font-bold text-[var(--navy)]">{text}</p>;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -1755,6 +1755,8 @@ async function cleanupResponse(response: Response, development: boolean): Promis
     error: response.ok ? undefined : response.status === 402
       ? "Check your available cleanup credits on the Credits page before continuing."
       : response.status === 410 ? "This cleanup has expired. Its temporary restoration state is no longer available."
+      : response.status === 400 && body.code === "INVALID_CLEANUP_COUNT"
+        ? "We couldn't check this selection. Choose an amount from the list and try again. Nothing was moved."
       : "Cleanup could not continue. Check its status before trying again. You can manage your inbox and billing from Account."
   };
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
+import { Prisma } from "@prisma/client";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), paid: vi.fn(), connection: vi.fn(), owned: vi.fn(),
   start: vi.fn(), confirm: vi.fn(), undo: vi.fn(), status: vi.fn(), discard: vi.fn(), dispatch: vi.fn(), purge: vi.fn(),
@@ -64,6 +65,21 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("production cleanup rollout authorization", () => {
+  it.each([100, 500, 550, 1096, 1379, 10000])("routes %i Outlook messages through the existing authorized service without a legacy cap", async requestedCount => {
+    const response = await call("microsoft", "start", { requestedCount });
+    expect(response.status).toBe(200);
+    expect(mocks.start).toHaveBeenCalledExactlyOnceWith({ groupIndices: [0], requestedCount });
+    expect(mocks.paid).toHaveBeenCalledExactlyOnceWith("owner", undefined);
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([0, -1, 1.5, "500", null, Number.MAX_SAFE_INTEGER + 1])("rejects invalid Outlook counts before accepting a job (%s)", async requestedCount => {
+    const response = await call("microsoft", "start", { requestedCount });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "INVALID_CLEANUP_COUNT" });
+    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
   it.each(["gmail", "microsoft"])("authorizes %s status once and passes only server-owned identity to the reader", async provider => {
     expect((await call(provider, "status", { userId: "attacker" })).status).toBe(200);
     expect(mocks.session).toHaveBeenCalledOnce();
@@ -173,6 +189,19 @@ describe("production cleanup rollout authorization", () => {
     expect(result.status).toBe(503);
     expect(await result.text()).not.toContain("secret");
     expect(mocks.start).not.toHaveBeenCalled();
+  });
+  it.each(["P2021", "P2028", "P6003"])("logs a sanitized %s on Outlook start failure, not a generic quota assumption", async code => {
+    const sensitive = "private-mailbox private-token postgres://private:secret@private/db";
+    mocks.start.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError(sensitive, {
+      code, clientVersion: Prisma.prismaVersion.client, meta: { private: sensitive }
+    }));
+    const response = await call("microsoft", "start", { requestedCount: 550 });
+    expect(response.status).toBe(503);
+    const failure = vi.mocked(console.info).mock.calls.find(call => call[0] === "Outlook verification request failed");
+    expect(failure?.[1]).toMatchObject({ action: "start", reason: "request_failed", prismaCode: code });
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(sensitive);
+    expect(await response.text()).not.toContain(sensitive);
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
   it("requires origin/session and explicit confirmation and rejects diagnostic/unsupported actions", async () => {
     expect((await call("gmail", "start", {}, "https://attacker.test")).status).toBe(403);

@@ -2,8 +2,9 @@ import { authorizeProductionCleanupRequest } from "@/lib/billing/cleanup-boundar
 import { productionCleanupJobView } from "@/lib/server/production-cleanup-response";
 import { ProductionCleanupError } from "@/lib/server/production-cleanup";
 import { observeDatabaseRoute } from "@/lib/server/database-usage";
+import { isOutlookCleanupCount } from "@/lib/domain/outlook-cleanup";
 import { measureVerification, measureVerificationSync, newVerificationTrace, validVerificationId,
-  verificationIdHeader, withVerificationTrace, currentVerificationTrace } from "@/lib/server/outlook-verification-timing";
+  verificationIdHeader, withVerificationTrace, currentVerificationTrace, logVerificationRequestFailure } from "@/lib/server/outlook-verification-timing";
 
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
@@ -43,9 +44,12 @@ async function handleCleanupRequest(request: Request, context: { params: Promise
     const authorized = await measureVerification("authorization", () => authorizeProductionCleanupRequest(request, { provider,
       access: action === "undo" || action === "status" || action === "discard" ? "recovery" : "forward", jobId: action === "start" ? undefined : jobId }));
     if (authorized instanceof Response) return authorized;
-    if (action === "start" && (typeof body.requestedCount !== "number" || !Number.isInteger(body.requestedCount) ||
-        (provider === "gmail" ? ![250, 500].includes(body.requestedCount) : body.requestedCount < 1 || body.requestedCount > 500))) {
-      return Response.json({ error: "Choose a supported cleanup size." }, { status: 400, headers });
+    if (action === "start" && (provider === "gmail"
+      ? typeof body.requestedCount !== "number" || ![250, 500].includes(body.requestedCount)
+      : !isOutlookCleanupCount(body.requestedCount))) {
+      if (provider === "microsoft") logVerificationRequestFailure("invalid_count", { action, requestedCount: body.requestedCount });
+      return Response.json({ error: "Choose a supported cleanup size.",
+        ...(provider === "microsoft" ? { code: "INVALID_CLEANUP_COUNT" } : {}) }, { status: 400, headers });
     }
     const input = { groupIndices: body.groupIndices, requestedCount: body.requestedCount };
     let job;
@@ -80,6 +84,9 @@ async function handleCleanupRequest(request: Request, context: { params: Promise
     });
   } catch (error) {
     if (error instanceof ProductionCleanupError) return Response.json({ error: error.message, code: error.code }, { status: error.status, headers });
+    if (provider === "microsoft" && (action === "start" || action === "status")) {
+      logVerificationRequestFailure("request_failed", { action, error });
+    }
     return Response.json({ error: "Cleanup could not continue. Check its status before trying again." }, { status: 503, headers });
   }
 }
